@@ -32,29 +32,19 @@ export function KanbanBoard({ influencers, onUpdateStatus, onEdit, onDelete }: K
   const [activeId, setActiveId] = useState<string | null>(null);
 
   const sensors = useSensors(
-    useSensor(PointerSensor, {
-      activationConstraint: {
-        distance: 8,
-      },
-    }),
-    useSensor(KeyboardSensor, {
-      coordinateGetter: sortableKeyboardCoordinates,
-    })
+    useSensor(PointerSensor, { activationConstraint: { distance: 8 } }),
+    useSensor(KeyboardSensor, { coordinateGetter: sortableKeyboardCoordinates }),
   );
 
-  // 按状态分组红人
   const groupedInfluencers = useMemo(() => {
     const groups: Record<string, Influencer[]> = {};
-    KANBAN_COLUMNS.forEach(col => {
-      groups[col.id] = influencers.filter(i => i.status === col.id);
+    KANBAN_COLUMNS.forEach((column) => {
+      groups[column.id] = influencers.filter((influencer) => influencer.status === column.id);
     });
     return groups;
   }, [influencers]);
 
-  // 当前拖拽的红人
-  const activeInfluencer = activeId 
-    ? influencers.find(i => i.id === activeId) 
-    : null;
+  const activeInfluencer = activeId ? influencers.find((influencer) => influencer.id === activeId) : null;
 
   const handleDragStart = (event: DragStartEvent) => {
     setActiveId(event.active.id as string);
@@ -62,40 +52,34 @@ export function KanbanBoard({ influencers, onUpdateStatus, onEdit, onDelete }: K
 
   const handleDragEnd = (event: DragEndEvent) => {
     const { active, over } = event;
-    
+
     if (!over) {
       setActiveId(null);
       return;
     }
 
-    const activeInfluencer = influencers.find(i => i.id === active.id);
-    if (!activeInfluencer) {
+    const draggedInfluencer = influencers.find((influencer) => influencer.id === active.id);
+    if (!draggedInfluencer) {
       setActiveId(null);
       return;
     }
 
-    // 判断目标状态
     let targetStatus: Influencer['status'];
-    
-    // over.id 可能是列ID或另一个卡片的ID
-    const isColumn = KANBAN_COLUMNS.some(col => col.id === over.id);
-    
+    const isColumn = KANBAN_COLUMNS.some((column) => column.id === over.id);
+
     if (isColumn) {
       targetStatus = over.id as Influencer['status'];
     } else {
-      // 拖到另一个卡片上，获取那个卡片所在列
-      const overInfluencer = influencers.find(i => i.id === over.id);
-      if (overInfluencer) {
-        targetStatus = overInfluencer.status;
-      } else {
+      const overInfluencer = influencers.find((influencer) => influencer.id === over.id);
+      if (!overInfluencer) {
         setActiveId(null);
         return;
       }
+      targetStatus = overInfluencer.status;
     }
 
-    // 如果状态变化则更新
-    if (activeInfluencer.status !== targetStatus) {
-      onUpdateStatus(activeInfluencer.id, targetStatus);
+    if (draggedInfluencer.status !== targetStatus) {
+      onUpdateStatus(draggedInfluencer.id, targetStatus);
     }
 
     setActiveId(null);
@@ -113,7 +97,7 @@ export function KanbanBoard({ influencers, onUpdateStatus, onEdit, onDelete }: K
           <SortableContext
             key={column.id}
             id={column.id}
-            items={groupedInfluencers[column.id]?.map(i => i.id) || []}
+            items={groupedInfluencers[column.id]?.map((influencer) => influencer.id) || []}
             strategy={verticalListSortingStrategy}
           >
             <KanbanColumn
@@ -130,12 +114,7 @@ export function KanbanBoard({ influencers, onUpdateStatus, onEdit, onDelete }: K
       <DragOverlay>
         {activeInfluencer ? (
           <div className="w-[260px]">
-            <InfluencerCard
-              influencer={activeInfluencer}
-              onEdit={() => {}}
-              onDelete={() => {}}
-              isDragging
-            />
+            <InfluencerCard influencer={activeInfluencer} onEdit={() => {}} onDelete={() => {}} isDragging />
           </div>
         ) : null}
       </DragOverlay>

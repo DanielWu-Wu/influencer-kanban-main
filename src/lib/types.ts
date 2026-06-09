@@ -1,45 +1,31 @@
-// ============================================
-// 红人看板工作台 - 类型定义
-// ============================================
+export type InfluencerStatus =
+  | 'talent_pool'
+  | 'pending'
+  | 'contacted'
+  | 'interested'
+  | 'negotiating'
+  | 'confirmed'
+  | 'sampling'
+  | 'filming'
+  | 'published'
+  | 'archived';
 
-import { format, addDays, startOfWeek, endOfWeek, eachDayOfInterval } from 'date-fns';
-
-// 红人合作状态
-export type InfluencerStatus = 
-  | 'talent_pool'      // 红人库（待联系）
-  | 'pending'          // 待联系
-  | 'contacted'        // 已联系（等待回复）
-  | 'interested'       // 有意向
-  | 'negotiating'      // 洽谈中
-  | 'confirmed'       // 已确认合作
-  | 'sampling'         // 样品邮寄中
-  | 'filming'          // 拍摄中
-  | 'published'        // 已发布
-  | 'archived';        // 已归档
-
-// ==================== Todo 相关类型 ====================
-
-// Todo 优先级
 export type TodoPriority = 'low' | 'medium' | 'high' | 'urgent';
-
-// Todo 状态
 export type TodoStatus = 'pending' | 'completed';
 
-// Todo 项目
 export interface TodoItem {
   id: string;
-  title: string;           // 标题
-  description?: string;    // 描述
-  priority: TodoPriority;  // 优先级
-  status: TodoStatus;      // 状态
-  dueDate?: string;        // 截止日期
-  influencerId?: string;    // 关联的红人ID
-  tags: string[];          // 标签
+  title: string;
+  description?: string;
+  priority: TodoPriority;
+  status: TodoStatus;
+  dueDate?: string;
+  influencerId?: string;
+  tags: string[];
   createdAt: string;
-  completedAt?: string;    // 完成时间
+  completedAt?: string;
 }
 
-// 日历事件
 export interface CalendarEvent {
   id: string;
   title: string;
@@ -50,7 +36,6 @@ export interface CalendarEvent {
   description?: string;
 }
 
-// 日历日期（用于渲染）
 export interface CalendarDay {
   date: Date;
   isCurrentMonth: boolean;
@@ -59,42 +44,40 @@ export interface CalendarDay {
   todos: TodoItem[];
 }
 
-// 红人基本信息
 export interface Influencer {
   id: string;
-  channelName: string;       // 频道名称
-  channelUrl: string;        // 频道链接
-  email: string;            // 联系邮箱
-  country: string;          // 国家
-  followers: number;         // 粉丝数
-  category: string;          // 类目
-  rating: 'A' | 'B' | 'C';  // 评级
-  notes: string;             // 备注
-  status: InfluencerStatus; // 当前状态
-  createdAt: string;        // 创建时间
-  updatedAt: string;        // 更新时间
+  channelName: string;
+  channelUrl: string;
+  email: string;
+  country: string;
+  followers: number;
+  category: string;
+  rating: 'A' | 'B' | 'C';
+  notes: string;
+  status: InfluencerStatus;
+  createdAt: string;
+  updatedAt: string;
 }
 
-// 合作项目
 export interface Collaboration {
   id: string;
   influencerId: string;
-  productName: string;       // 产品名称
-  productUrl: string;       // 产品链接
-  price: number | null;     // 合作价格
-  isFree: boolean;          // 是否免费合作
-  shippingAddress: string;  // 收货地址
-  trackingNumber: string;   // 快递单号
-  expectedPublishDate: string; // 预计发布时间
-  discountCode: string;     // 折扣码
-  affiliateLink: string;    // 联盟链接
+  productName: string;
+  productUrl: string;
+  price: number | null;
+  isFree: boolean;
+  shippingAddress: string;
+  trackingNumber: string;
+  expectedPublishDate: string;
+  discountCode: string;
+  affiliateLink: string;
   status: CollaborationStatus;
   createdAt: string;
   updatedAt: string;
 }
 
-export type CollaborationStatus = 
-  | 'pending' 
+export type CollaborationStatus =
+  | 'pending'
   | 'price_confirmed'
   | 'sample_sent'
   | 'received'
@@ -102,7 +85,6 @@ export type CollaborationStatus =
   | 'published'
   | 'cancelled';
 
-// 邮件记录
 export interface EmailRecord {
   id: string;
   influencerId: string;
@@ -110,43 +92,40 @@ export interface EmailRecord {
   subject: string;
   content: string;
   sentAt: string;
-  followUpCount: number;  // 跟进次数
+  followUpCount: number;
 }
 
-export type EmailType = 
-  | 'cold'           // 冷开发信
-  | 'follow_up_1'    // 第一次跟进（3天后）
-  | 'follow_up_2'    // 第二次跟进（7天后）
-  | 'follow_up_3'    // 第三次跟进（7天后）
-  | 'inquiry'        // 询问意向
-  | 'shipping'       // 物流通知
-  | 'care'           // 关怀邮件
-  | 'thank'          // 感谢邮件
-  | 'custom';        // 自定义
+export type EmailType =
+  | 'cold'
+  | 'follow_up_1'
+  | 'follow_up_2'
+  | 'follow_up_3'
+  | 'inquiry'
+  | 'shipping'
+  | 'care'
+  | 'thank'
+  | 'custom';
 
-// 邮件模板
 export interface EmailTemplate {
   id: string;
   name: string;
   type: EmailType;
   subject: string;
   content: string;
-  variables: string[];  // 可用变量列表
+  variables: string[];
   isDefault: boolean;
 }
 
-// 跟进提醒
 export interface FollowUpReminder {
   id: string;
   influencerId: string;
   emailRecordId: string;
-  remindAt: string;      // 提醒时间
+  remindAt: string;
   type: 'auto' | 'manual';
   status: 'pending' | 'completed' | 'skipped';
   note: string;
 }
 
-// 视频数据
 export interface VideoData {
   id: string;
   influencerId: string;
@@ -158,58 +137,59 @@ export interface VideoData {
   fetchedAt: string;
 }
 
-// 看板列配置
 export interface KanbanColumn {
   id: InfluencerStatus;
   title: string;
   color: string;
 }
 
-// 看板列配置
 export const KANBAN_COLUMNS: KanbanColumn[] = [
-  { id: 'talent_pool', title: '红人库', color: 'bg-gray-100' },
-  { id: 'pending', title: '待联系', color: 'bg-blue-50' },
-  { id: 'contacted', title: '已联系', color: 'bg-yellow-50' },
-  { id: 'interested', title: '有意向', color: 'bg-orange-50' },
-  { id: 'negotiating', title: '洽谈中', color: 'bg-purple-50' },
-  { id: 'confirmed', title: '已确认', color: 'bg-green-50' },
-  { id: 'sampling', title: '样品中', color: 'bg-teal-50' },
-  { id: 'filming', title: '拍摄中', color: 'bg-indigo-50' },
-  { id: 'published', title: '已发布', color: 'bg-emerald-50' },
-  { id: 'archived', title: '已归档', color: 'bg-slate-100' },
+  { id: 'talent_pool', title: '\u7ea2\u4eba\u5efa\u6863', color: 'bg-slate-50' },
+  { id: 'pending', title: '\u5f85\u8054\u7cfb', color: 'bg-blue-50' },
+  { id: 'contacted', title: '\u5df2\u8054\u7cfb', color: 'bg-yellow-50' },
+  { id: 'interested', title: '\u6709\u610f\u5411', color: 'bg-orange-50' },
+  { id: 'negotiating', title: '\u8c08\u4ef7\u683c/\u65b9\u5f0f', color: 'bg-purple-50' },
+  { id: 'confirmed', title: '\u5df2\u786e\u8ba4', color: 'bg-green-50' },
+  { id: 'sampling', title: '\u5df2\u5bc4\u6837', color: 'bg-teal-50' },
+  { id: 'filming', title: '\u62cd\u6444\u4e2d', color: 'bg-indigo-50' },
+  { id: 'published', title: '\u5df2\u53d1\u5e03', color: 'bg-emerald-50' },
+  { id: 'archived', title: '\u590d\u76d8/\u5f52\u6863', color: 'bg-slate-100' },
 ];
 
-// 状态映射
-export const STATUS_LABELS: Record<InfluencerStatus, string> = {
-  'talent_pool': '红人库',
-  'pending': '待联系',
-  'contacted': '已联系',
-  'interested': '有意向',
-  'negotiating': '洽谈中',
-  'confirmed': '已确认',
-  'sampling': '样品中',
-  'filming': '拍摄中',
-  'published': '已发布',
-  'archived': '已归档',
-};
+export const STATUS_LABELS: Record<InfluencerStatus, string> = Object.fromEntries(
+  KANBAN_COLUMNS.map((column) => [column.id, column.title]),
+) as Record<InfluencerStatus, string>;
 
-// 国家列表
 export const COUNTRY_OPTIONS = [
-  '德国', '法国', '英国', '意大利', '西班牙', '荷兰', 
-  '比利时', '瑞典', '波兰', '奥地利', '瑞士', '丹麦',
-  '挪威', '芬兰', '捷克', '希腊', '葡萄牙', '其他'
+  '\u7f8e\u56fd',
+  '\u82f1\u56fd',
+  '\u52a0\u62ff\u5927',
+  '\u6fb3\u5927\u5229\u4e9a',
+  '\u5fb7\u56fd',
+  '\u6cd5\u56fd',
+  '\u610f\u5927\u5229',
+  '\u897f\u73ed\u7259',
+  '\u8377\u5170',
+  '\u745e\u5178',
+  '\u65e5\u672c',
+  '\u97e9\u56fd',
+  '\u5176\u4ed6',
 ];
 
-// 类目列表
 export const CATEGORY_OPTIONS = [
-  '科技数码', '美妆护肤', '时尚穿搭', '家居生活',
-  '美食烹饪', '健身运动', '旅游出行', '母婴育儿',
-  '宠物用品', '游戏电竞', '其他'
+  '\u79d1\u6280\u6570\u7801',
+  '\u667a\u80fd\u5bb6\u5c45',
+  '\u5bb6\u5c45\u751f\u6d3b',
+  '\u7f8e\u5986\u62a4\u80a4',
+  '\u65f6\u5c1a\u7a7f\u642d',
+  '\u6bcd\u5a74\u80b2\u513f',
+  '\u6237\u5916\u8fd0\u52a8',
+  '\u6c7d\u8f66\u914d\u4ef6',
+  '\u6e38\u620f\u7535\u7ade',
+  '\u7f8e\u98df\u70f9\u996a',
+  '\u5176\u4ed6',
 ];
 
-// ==================== Gmail 集成相关类型 ====================
-
-// Gmail 授权状态
 export interface GmailAuth {
   isConnected: boolean;
   email?: string;
@@ -218,7 +198,6 @@ export interface GmailAuth {
   expiresAt?: number;
 }
 
-// Gmail 邮件消息
 export interface GmailMessage {
   id: string;
   threadId: string;
@@ -226,26 +205,24 @@ export interface GmailMessage {
   to: string;
   subject: string;
   snippet: string;
-  body: string;           // 纯文本正文
-  htmlBody?: string;      // HTML 正文
-  date: string;           // 发送时间
+  body: string;
+  htmlBody?: string;
+  date: string;
   isRead: boolean;
-  labels: string[];       // 标签
+  labels: string[];
   hasAttachments: boolean;
 }
 
-// Gmail 邮件对话（同一主题的多封邮件）
 export interface GmailThread {
   id: string;
   subject: string;
   snippet: string;
   messages: GmailMessage[];
-  participantCount: number;  // 参与者数量
+  participantCount: number;
   lastMessageDate: string;
   hasUnread: boolean;
 }
 
-// 邮件翻译记录
 export interface EmailTranslation {
   id: string;
   messageId: string;
@@ -256,20 +233,18 @@ export interface EmailTranslation {
   createdAt: string;
 }
 
-// AI 邮件草稿建议
 export interface EmailDraftSuggestion {
   id: string;
   threadId: string;
   messageId?: string;
-  suggestedReply: string;     // 目标语言回复
-  translatedReply?: string;    // 中文对照
-  tone: 'formal' | 'casual' | 'friendly';  // 语气
-  keyPoints: string[];         // 关键要点
+  suggestedReply: string;
+  translatedReply?: string;
+  tone: 'formal' | 'casual' | 'friendly';
+  keyPoints: string[];
   generatedAt: string;
   status: 'pending' | 'approved' | 'rejected';
 }
 
-// 邮件草稿（保存到草稿箱的）
 export interface EmailDraft {
   id: string;
   to: string;
@@ -279,10 +254,9 @@ export interface EmailDraft {
   status: 'draft' | 'sending' | 'sent';
 }
 
-// Gmail 设置
 export interface GmailSettings {
-  autoCheck: boolean;         // 自动检查新邮件
-  checkInterval: number;      // 检查间隔（分钟）
-  notifyOnNewEmail: boolean;  // 新邮件通知
-  matchWithInfluencers: boolean; // 自动匹配红人
+  autoCheck: boolean;
+  checkInterval: number;
+  notifyOnNewEmail: boolean;
+  matchWithInfluencers: boolean;
 }
