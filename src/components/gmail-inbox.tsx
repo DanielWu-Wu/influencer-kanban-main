@@ -53,10 +53,10 @@ const CATEGORY_TABS: Array<{
   { id: 'social', label: '\u793e\u4ea4', icon: Users },
 ];
 
-const CATEGORY_LABELS: Record<GmailCategory, string> = {
-  primary: 'CATEGORY_PERSONAL',
-  promotions: 'CATEGORY_PROMOTIONS',
-  social: 'CATEGORY_SOCIAL',
+const CATEGORY_QUERIES: Record<GmailCategory, string> = {
+  primary: 'category:primary',
+  promotions: 'category:promotions',
+  social: 'category:social',
 };
 
 const MAILBOX_API_LABELS: Record<GmailMailbox, string[]> = {
@@ -164,6 +164,7 @@ function replaceInlineContentIds(html: string, attachments: GmailAttachment[]): 
 async function parseGmailThread(
   apiThread: Record<string, unknown>,
   accessToken: string,
+  loadAttachmentBodies = false,
 ): Promise<GmailThread> {
   const apiMessages = (apiThread.messages || []) as Record<string, unknown>[];
   const firstPayload = (apiMessages[0]?.payload || {}) as Record<string, unknown>;
@@ -178,11 +179,13 @@ async function parseGmailThread(
     const labels = (message.labelIds as string[]) || [];
     const parsed: ParsedMimeContent = { textParts: [], htmlParts: [], attachments: [] };
     parseMimeParts(payload, parsed);
-    const attachments = await Promise.all(
-      parsed.attachments.map((attachment) =>
-        loadAttachmentData(String(message.id), attachment, accessToken),
-      ),
-    );
+    const attachments = loadAttachmentBodies
+      ? await Promise.all(
+          parsed.attachments.map((attachment) =>
+            loadAttachmentData(String(message.id), attachment, accessToken),
+          ),
+        )
+      : parsed.attachments;
     const htmlBody = replaceInlineContentIds(parsed.htmlParts.join('\n'), attachments);
     const body = parsed.textParts.join('\n\n') || htmlBody.replace(/<[^>]+>/g, ' ');
     const rawDate = getHeader(headers, 'Date');
@@ -218,6 +221,21 @@ async function parseGmailThread(
     labels: allLabels,
     isStarred: allLabels.includes('STARRED'),
   };
+}
+
+async function fetchWithTimeout(
+  input: RequestInfo | URL,
+  init: RequestInit = {},
+  timeoutMs = 15_000,
+) {
+  const controller = new AbortController();
+  const timeout = window.setTimeout(() => controller.abort(), timeoutMs);
+
+  try {
+    return await fetch(input, { ...init, signal: controller.signal });
+  } finally {
+    window.clearTimeout(timeout);
+  }
 }
 
 export function GmailInbox({
@@ -305,11 +323,11 @@ export function GmailInbox({
     try {
       const accessToken = await getAccessToken();
       const headers = { Authorization: `Bearer ${accessToken}` };
-      const params = new URLSearchParams({ maxResults: '50' });
+      const params = new URLSearchParams({ maxResults: '30' });
       MAILBOX_API_LABELS[mailbox].forEach((label) => params.append('labelIds', label));
-      if (mailbox === 'inbox') params.append('labelIds', CATEGORY_LABELS[category]);
+      if (mailbox === 'inbox') params.set('q', CATEGORY_QUERIES[category]);
 
-      const listResponse = await fetch(
+      const listResponse = await fetchWithTimeout(
         `https://gmail.googleapis.com/gmail/v1/users/me/threads?${params.toString()}`,
         { headers },
       );
@@ -319,19 +337,35 @@ export function GmailInbox({
       }
 
       const listResult = await listResponse.json();
-      const details = await Promise.all(
-        ((listResult.threads || []) as { id: string }[]).map(async (thread) => {
-          const response = await fetch(
-            `https://gmail.googleapis.com/gmail/v1/users/me/threads/${thread.id}?format=full`,
-            { headers },
-          );
-          return response.ok ? response.json() : null;
-        }),
-      );
+      const threadRefs = (listResult.threads || []) as { id: string }[];
+      const details: Record<string, unknown>[] = [];
+
+      // Keep Gmail API requests in small batches to avoid rate limiting and long stalls.
+      for (let index = 0; index < threadRefs.length; index += 8) {
+        const batch = threadRefs.slice(index, index + 8);
+        const batchResults = await Promise.all(
+          batch.map(async (thread) => {
+            try {
+              const response = await fetchWithTimeout(
+                `https://gmail.googleapis.com/gmail/v1/users/me/threads/${thread.id}?format=metadata&metadataHeaders=From&metadataHeaders=To&metadataHeaders=Subject&metadataHeaders=Date`,
+                { headers },
+                12_000,
+              );
+              return response.ok ? response.json() : null;
+            } catch {
+              return null;
+            }
+          }),
+        );
+        details.push(
+          ...batchResults.filter(
+            (thread): thread is Record<string, unknown> => Boolean(thread),
+          ),
+        );
+      }
+
       const parsed = await Promise.all(
-        details
-          .filter((thread): thread is Record<string, unknown> => Boolean(thread))
-          .map((thread) => parseGmailThread(thread, accessToken)),
+        details.map((thread) => parseGmailThread(thread, accessToken, false)),
       );
       setThreads(parsed);
     } catch (caughtError) {
@@ -410,12 +444,29 @@ export function GmailInbox({
   };
 
   const handleOpenThread = async (thread: GmailThread) => {
-    if (thread.hasUnread) {
-      const updatedThread = await modifyThread(thread, [], ['UNREAD']);
-      onSelectThread(updatedThread);
-      return;
+    setActionThreadId(thread.id);
+    let nextThread = thread;
+
+    try {
+      const accessToken = await getAccessToken();
+      const response = await fetchWithTimeout(
+        `https://gmail.googleapis.com/gmail/v1/users/me/threads/${thread.id}?format=full`,
+        { headers: { Authorization: `Bearer ${accessToken}` } },
+        20_000,
+      );
+      if (response.ok) {
+        nextThread = await parseGmailThread(await response.json(), accessToken, true);
+      }
+    } catch {
+      // The lightweight list data is still usable if full content loading fails.
+    } finally {
+      setActionThreadId(null);
     }
-    onSelectThread(thread);
+
+    if (nextThread.hasUnread) {
+      nextThread = await modifyThread(nextThread, [], ['UNREAD']);
+    }
+    onSelectThread(nextThread);
   };
 
   const filteredThreads = threads.filter((thread) => {
