@@ -94,7 +94,11 @@ export default function DashboardPage() {
 
   useEffect(() => {
     const params = new URLSearchParams(window.location.search);
-    if (params.get('auth_code') || params.get('auth_error')) {
+    if (
+      params.get('view') === 'gmail' ||
+      params.get('gmail_connected') ||
+      params.get('auth_error')
+    ) {
       setCurrentView('gmail');
     }
   }, []);

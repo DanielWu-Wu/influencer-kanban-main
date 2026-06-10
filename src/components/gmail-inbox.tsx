@@ -7,7 +7,7 @@ import { Badge } from '@/components/ui/badge';
 import { ScrollArea } from '@/components/ui/scroll-area';
 import { Separator } from '@/components/ui/separator';
 import { GmailThread, GmailMessage } from '@/lib/types';
-import { useGmailAuth, useSettings } from '@/lib/data';
+import { useGmailAuth } from '@/lib/data';
 import { 
   Search, RefreshCw, Mail, MailOpen, Clock, 
   User, ChevronRight, Inbox, AlertCircle, ExternalLink,
@@ -111,7 +111,6 @@ function parseGmailThread(apiThread: Record<string, unknown>): GmailThread {
 
 export function GmailInbox({ onSelectThread, selectedThreadId }: GmailInboxProps) {
   const { auth, connect, disconnect } = useGmailAuth();
-  const { settings } = useSettings();
   const [threads, setThreads] = useState<GmailThread[]>([]);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -122,56 +121,44 @@ export function GmailInbox({ onSelectThread, selectedThreadId }: GmailInboxProps
   // 处理 OAuth 回调
   useEffect(() => {
     const params = new URLSearchParams(window.location.search);
-    const authCode = params.get('auth_code');
+    const gmailConnected = params.get('gmail_connected');
     const authError = params.get('auth_error');
 
     if (authError) {
-      setError(`授权失败: ${authError}`);
-      // 清理 URL
+      const errorMessages: Record<string, string> = {
+        access_denied: '你取消了 Gmail 授权。',
+        missing_google_client_id: 'Vercel 尚未配置 GOOGLE_CLIENT_ID。',
+        missing_google_oauth_env: 'Vercel 尚未完整配置 Google OAuth 环境变量。',
+        token_exchange_failed: 'Google 授权码交换失败，请检查回调地址和 OAuth 配置。',
+        callback_failed: 'Gmail 授权回调失败，请稍后重试。',
+        no_code: 'Google 没有返回授权码。',
+        invalid_state: 'Gmail 授权校验失败，请重新点击连接。',
+      };
+      setError(errorMessages[authError] || `Gmail 授权失败：${authError}`);
       window.history.replaceState({}, '', window.location.pathname);
       return;
     }
 
-    if (authCode && settings.gmailClientId && settings.gmailClientSecret) {
+    if (gmailConnected) {
       setAuthProcessing(true);
-      const redirectUri = `${window.location.origin}/api/auth/callback`;
-      
-      // 直接从浏览器与 Google 交换 token
-      // 因为后端服务器可能无法访问 Google（网络限制）
-      fetch('https://oauth2.googleapis.com/token', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
-        body: new URLSearchParams({
-          code: authCode,
-          client_id: settings.gmailClientId,
-          client_secret: settings.gmailClientSecret,
-          redirect_uri: redirectUri,
-          grant_type: 'authorization_code',
-        }),
-      })
-        .then(res => res.json())
-        .then(data => {
-          if (data.access_token) {
-            connect({
-              isConnected: true,
-              accessToken: data.access_token,
-              refreshToken: data.refresh_token,
-              expiresAt: Date.now() + (data.expires_in * 1000),
-            });
+      fetch('/api/auth/session')
+        .then((response) => response.json())
+        .then((result) => {
+          if (result.success && result.data?.accessToken) {
+            connect(result.data);
           } else {
-            setError(`Token 获取失败: ${data.error_description || data.error || '未知错误'}`);
+            setError(result.error || '无法保存 Gmail 授权信息，请重新连接。');
           }
         })
-        .catch(err => {
-          setError(`连接失败: ${err.message}`);
+        .catch((err) => {
+          setError(`Gmail 连接失败：${err.message}`);
         })
         .finally(() => {
           setAuthProcessing(false);
-          // 清理 URL
           window.history.replaceState({}, '', window.location.pathname);
         });
     }
-  }, [settings.gmailClientId, settings.gmailClientSecret, connect]);
+  }, [connect]);
 
   // 获取邮件列表
   const fetchThreads = useCallback(async () => {
@@ -180,9 +167,31 @@ export function GmailInbox({ onSelectThread, selectedThreadId }: GmailInboxProps
     setLoading(true);
     setError(null);
     try {
+      let accessToken = auth.accessToken;
+
+      if (auth.refreshToken && auth.expiresAt && auth.expiresAt <= Date.now() + 60_000) {
+        const refreshResponse = await fetch('/api/auth/refresh', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ refreshToken: auth.refreshToken }),
+        });
+        const refreshResult = await refreshResponse.json();
+
+        if (!refreshResponse.ok || !refreshResult.data?.accessToken) {
+          throw new Error(refreshResult.error || 'Gmail 授权已过期，请重新连接。');
+        }
+
+        accessToken = refreshResult.data.accessToken;
+        connect({
+          ...auth,
+          accessToken,
+          expiresAt: Date.now() + refreshResult.data.expiresIn * 1000,
+        });
+      }
+
       // 直接从浏览器调用 Gmail API（因为后端服务器无法访问 Google）
       const headers = {
-        'Authorization': `Bearer ${auth.accessToken}`,
+        'Authorization': `Bearer ${accessToken}`,
         'Content-Type': 'application/json',
       };
 
@@ -221,7 +230,7 @@ export function GmailInbox({ onSelectThread, selectedThreadId }: GmailInboxProps
     } finally {
       setLoading(false);
     }
-  }, [auth?.accessToken]);
+  }, [auth, connect]);
 
   // 连接后自动获取邮件
   useEffect(() => {
@@ -265,7 +274,6 @@ export function GmailInbox({ onSelectThread, selectedThreadId }: GmailInboxProps
     }
   };
 
-  // 授权处理中
   if (authProcessing) {
     return (
       <div className="flex flex-col items-center justify-center h-full text-center p-6">
@@ -276,7 +284,6 @@ export function GmailInbox({ onSelectThread, selectedThreadId }: GmailInboxProps
     );
   }
 
-  // 未连接状态
   if (!auth?.isConnected) {
     return (
       <div className="flex flex-col items-center justify-center h-full text-center p-6">
@@ -285,13 +292,18 @@ export function GmailInbox({ onSelectThread, selectedThreadId }: GmailInboxProps
         </div>
         <h3 className="text-lg font-semibold mb-2">连接 Gmail</h3>
         <p className="text-sm text-muted-foreground mb-4 max-w-xs">
-          请先在设置中配置 Gmail OAuth，然后连接你的邮箱
+          请先在 Gmail 设置中点击“连接 Gmail”，完成 Google 授权。
         </p>
         {error && (
           <div className="bg-red-50 p-3 rounded-lg mb-4 text-sm text-red-600 max-w-xs">
             {error}
           </div>
         )}
+        <Button className="bg-red-500 hover:bg-red-600" onClick={() => {
+          window.location.href = '/api/auth/google';
+        }}>
+          连接 Gmail
+        </Button>
       </div>
     );
   }

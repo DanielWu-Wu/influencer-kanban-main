@@ -4,12 +4,11 @@ export async function POST(request: NextRequest) {
   try {
     const body = await request.json();
     const { refreshToken, clientId, clientSecret } = body;
+    const resolvedClientId = clientId || process.env.GOOGLE_CLIENT_ID;
+    const resolvedClientSecret = clientSecret || process.env.GOOGLE_CLIENT_SECRET;
 
-    if (!refreshToken || !clientId || !clientSecret) {
-      return NextResponse.json(
-        { error: '缺少必要参数' },
-        { status: 400 }
-      );
+    if (!refreshToken || !resolvedClientId || !resolvedClientSecret) {
+      return NextResponse.json({ error: '缺少 refresh token 或 Google OAuth 环境变量' }, { status: 400 });
     }
 
     const tokenResponse = await fetch('https://oauth2.googleapis.com/token', {
@@ -17,19 +16,16 @@ export async function POST(request: NextRequest) {
       headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
       body: new URLSearchParams({
         refresh_token: refreshToken,
-        client_id: clientId,
-        client_secret: clientSecret,
+        client_id: resolvedClientId,
+        client_secret: resolvedClientSecret,
         grant_type: 'refresh_token',
       }),
     });
 
     if (!tokenResponse.ok) {
-      const errorData = await tokenResponse.text();
-      console.error('Token refresh failed:', errorData);
-      return NextResponse.json(
-        { error: 'Token 刷新失败', details: errorData },
-        { status: 400 }
-      );
+      const details = await tokenResponse.text();
+      console.error('Token refresh failed:', details);
+      return NextResponse.json({ error: 'Token 刷新失败', details }, { status: 400 });
     }
 
     const tokenData = await tokenResponse.json();
@@ -45,9 +41,6 @@ export async function POST(request: NextRequest) {
     });
   } catch (err) {
     console.error('Token refresh error:', err);
-    return NextResponse.json(
-      { error: '服务器错误' },
-      { status: 500 }
-    );
+    return NextResponse.json({ error: '服务器错误' }, { status: 500 });
   }
 }
