@@ -309,7 +309,7 @@ export function GmailInbox({ onSelectThread, selectedThreadId }: GmailInboxProps
   }
 
   return (
-    <div className="flex flex-col h-full">
+    <div className="flex h-full min-h-0 flex-col overflow-hidden">
       {/* 头部 */}
       <div className="flex items-center justify-between px-4 py-3 border-b">
         <div className="flex items-center gap-3">
@@ -363,7 +363,7 @@ export function GmailInbox({ onSelectThread, selectedThreadId }: GmailInboxProps
       </div>
 
       {/* 邮件列表 */}
-      <ScrollArea className="flex-1">
+      <ScrollArea className="min-h-0 flex-1">
         {loading && threads.length === 0 ? (
           <div className="flex items-center justify-center py-12">
             <Loader2 className="w-6 h-6 animate-spin text-muted-foreground" />

@@ -24,9 +24,9 @@ export function GmailPage() {
   };
 
   return (
-    <div className="h-full flex bg-background">
+    <div className="h-full min-h-0 flex overflow-hidden bg-background">
       {/* 左侧：收件箱列表 */}
-      <div className={`${selectedThread ? 'hidden lg:flex' : 'flex'} w-full lg:w-96 border-r flex-col bg-card`}>
+      <div className={`${selectedThread ? 'hidden lg:flex' : 'flex'} min-h-0 w-full lg:w-96 border-r flex-col overflow-hidden bg-card`}>
         <GmailInbox 
           onSelectThread={handleSelectThread}
           selectedThreadId={selectedThread?.id}
@@ -34,7 +34,7 @@ export function GmailPage() {
       </div>
 
       {/* 右侧：邮件详情 */}
-      <div className={`flex-1 ${selectedThread ? 'flex' : 'hidden lg:flex'} flex-col bg-background`}>
+      <div className={`min-h-0 min-w-0 flex-1 ${selectedThread ? 'flex' : 'hidden lg:flex'} flex-col overflow-hidden bg-background`}>
         {selectedThread ? (
           <EmailDetail 
             thread={selectedThread}

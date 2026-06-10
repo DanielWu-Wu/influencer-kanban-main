@@ -260,7 +260,7 @@ export default function DashboardPage() {
           </SheetContent>
         </Sheet>
 
-        <main className="flex-1 min-h-[calc(100vh-3.5rem)] overflow-hidden flex flex-col">
+        <main className="flex-1 h-[calc(100vh-3.5rem)] min-h-0 overflow-hidden flex flex-col">
           {currentView === 'kanban' && (
             <div className="flex-1 overflow-auto p-4 md:p-6">
               <div className="flex gap-3 mb-4 flex-shrink-0">
@@ -385,7 +385,7 @@ export default function DashboardPage() {
           )}
 
           {currentView === 'gmail' && (
-            <div className="h-[calc(100vh-8rem)] p-4 md:p-6">
+            <div className="flex-1 min-h-0 overflow-hidden p-4 md:p-6">
               <GmailPage />
             </div>
           )}

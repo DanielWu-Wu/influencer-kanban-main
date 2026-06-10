@@ -117,7 +117,7 @@ export function EmailDetail({ thread, onBack, onAIReply }: EmailDetailProps) {
   };
 
   return (
-    <div className="flex flex-col h-full">
+    <div className="flex h-full min-h-0 flex-col overflow-hidden">
       {/* 头部 */}
       <div className="flex items-center justify-between px-4 py-3 border-b bg-background">
         <div className="flex items-center gap-3">
@@ -145,7 +145,7 @@ export function EmailDetail({ thread, onBack, onAIReply }: EmailDetailProps) {
       </div>
 
       {/* 邮件对话 */}
-      <ScrollArea className="flex-1">
+      <ScrollArea className="min-h-0 flex-1">
         <div className="p-4 space-y-4">
           {thread.messages.map((message, index) => {
             const sender = getDisplayEmail(message.from);
@@ -220,7 +220,7 @@ export function EmailDetail({ thread, onBack, onAIReply }: EmailDetailProps) {
                         
                         <TabsContent value="original" className="mt-3">
                           <div className="prose prose-sm max-w-none">
-                            <pre className="whitespace-pre-wrap font-sans text-sm bg-accent/30 rounded-xl p-4">
+                            <pre className="max-w-full whitespace-pre-wrap break-words font-sans text-sm bg-accent/30 rounded-xl p-4">
                               {message.body}
                             </pre>
                           </div>
@@ -229,7 +229,7 @@ export function EmailDetail({ thread, onBack, onAIReply }: EmailDetailProps) {
                         {translation && (
                           <TabsContent value="translated" className="mt-3">
                             <div className="prose prose-sm max-w-none">
-                              <pre className="whitespace-pre-wrap font-sans text-sm bg-blue-50 rounded-xl p-4">
+                              <pre className="max-w-full whitespace-pre-wrap break-words font-sans text-sm bg-blue-50 rounded-xl p-4">
                                 {translation.translatedText}
                               </pre>
                             </div>
