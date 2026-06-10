@@ -1,124 +1,242 @@
 'use client';
 
-import { useState, useEffect, useCallback } from 'react';
+import { useCallback, useEffect, useState } from 'react';
+import {
+  AlertCircle,
+  Inbox,
+  Loader2,
+  LogOut,
+  Mail,
+  MailOpen,
+  RefreshCw,
+  Search,
+  Star,
+  Tag,
+  Users,
+} from 'lucide-react';
+import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
-import { Badge } from '@/components/ui/badge';
 import { ScrollArea } from '@/components/ui/scroll-area';
-import { Separator } from '@/components/ui/separator';
-import { GmailThread, GmailMessage } from '@/lib/types';
 import { useGmailAuth } from '@/lib/data';
-import { 
-  Search, RefreshCw, Mail, MailOpen, Clock, 
-  User, ChevronRight, Inbox, AlertCircle, ExternalLink,
-  Settings, Trash2, MoreHorizontal, Star, StarOff, Loader2
-} from 'lucide-react';
+import {
+  GmailAttachment,
+  GmailCategory,
+  GmailMailbox,
+  GmailMessage,
+  GmailThread,
+} from '@/lib/types';
 
 interface GmailInboxProps {
   onSelectThread: (thread: GmailThread) => void;
+  onThreadUpdated?: (thread: GmailThread) => void;
+  onCategoryChange: (category: GmailCategory) => void;
   selectedThreadId?: string;
+  mailbox: GmailMailbox;
+  category: GmailCategory;
 }
 
-// 从 Gmail API 响应中解析邮件头
+const MAILBOX_LABELS: Record<GmailMailbox, string> = {
+  inbox: '\u6536\u4ef6\u7bb1',
+  starred: '\u5df2\u6807\u661f',
+  sent: '\u5df2\u53d1\u9001',
+  drafts: '\u8349\u7a3f',
+};
+
+const CATEGORY_TABS: Array<{
+  id: GmailCategory;
+  label: string;
+  icon: typeof Inbox;
+}> = [
+  { id: 'primary', label: '\u4e3b\u8981', icon: Inbox },
+  { id: 'promotions', label: '\u63a8\u5e7f', icon: Tag },
+  { id: 'social', label: '\u793e\u4ea4', icon: Users },
+];
+
+const CATEGORY_LABELS: Record<GmailCategory, string> = {
+  primary: 'CATEGORY_PERSONAL',
+  promotions: 'CATEGORY_PROMOTIONS',
+  social: 'CATEGORY_SOCIAL',
+};
+
+const MAILBOX_API_LABELS: Record<GmailMailbox, string[]> = {
+  inbox: ['INBOX'],
+  starred: ['STARRED'],
+  sent: ['SENT'],
+  drafts: ['DRAFT'],
+};
+
 function getHeader(headers: { name: string; value: string }[], name: string): string {
-  const header = headers?.find(h => h.name.toLowerCase() === name.toLowerCase());
-  return header?.value || '';
+  return headers?.find((header) => header.name.toLowerCase() === name.toLowerCase())?.value || '';
 }
 
-// 安全获取嵌套属性
-// 从 Gmail API 响应中解析邮件正文（纯文本 + HTML + 嵌套 multipart）
-function getBodyData(payload: Record<string, unknown>): string {
-  const body = payload?.body as Record<string, unknown> | undefined;
-  if (body?.data && typeof body.data === 'string') {
-    return atob(body.data.replace(/-/g, '+').replace(/_/g, '/'));
-  }
-  const parts = payload?.parts as Record<string, unknown>[] | undefined;
-  if (parts) {
-    // 优先找 text/plain
-    const textPart = parts.find((p) => p.mimeType === 'text/plain');
-    if (textPart) {
-      const textBody = textPart.body as Record<string, unknown> | undefined;
-      if (textBody?.data && typeof textBody.data === 'string') {
-        return atob(textBody.data.replace(/-/g, '+').replace(/_/g, '/'));
-      }
-    }
-    // 其次找 text/html
-    const htmlPart = parts.find((p) => p.mimeType === 'text/html');
-    if (htmlPart) {
-      const htmlBody = htmlPart.body as Record<string, unknown> | undefined;
-      if (htmlBody?.data && typeof htmlBody.data === 'string') {
-        return atob(htmlBody.data.replace(/-/g, '+').replace(/_/g, '/'));
-      }
-    }
-    // 递归查找嵌套 multipart
-    for (const part of parts) {
-      const result = getBodyData(part as Record<string, unknown>);
-      if (result) return result;
-    }
-  }
-  return '';
+function normalizeBase64(data: string) {
+  const normalized = data.replace(/-/g, '+').replace(/_/g, '/');
+  return normalized.padEnd(Math.ceil(normalized.length / 4) * 4, '=');
 }
 
-// 从 Gmail API thread 响应转换为我们的 GmailThread 类型
-function parseGmailThread(apiThread: Record<string, unknown>): GmailThread {
-  const messages = (apiThread.messages || []) as Record<string, unknown>[];
-  const firstMessage = messages[0];
-  const lastMessage = messages[messages.length - 1];
+function decodeBase64Url(data: string, charset = 'utf-8'): string {
+  const binary = atob(normalizeBase64(data));
+  const bytes = Uint8Array.from(binary, (char) => char.charCodeAt(0));
 
-  const lastPayload = (lastMessage?.payload || {}) as Record<string, unknown>;
-  const firstPayload = (firstMessage?.payload || {}) as Record<string, unknown>;
-  const headers = (lastPayload.headers as { name: string; value: string }[]) || [];
-  const firstHeaders = (firstPayload.headers as { name: string; value: string }[]) || [];
+  try {
+    return new TextDecoder(charset).decode(bytes);
+  } catch {
+    return new TextDecoder('utf-8').decode(bytes);
+  }
+}
 
-  const subject = getHeader(headers, 'Subject') || getHeader(firstHeaders, 'Subject') || '(无主题)';
-  const from = getHeader(headers, 'From') || '';
-  const date = getHeader(headers, 'Date') || '';
+function getCharset(headers: { name: string; value: string }[]): string {
+  const contentType = getHeader(headers, 'Content-Type');
+  return contentType.match(/charset=["']?([^;"'\s]+)/i)?.[1] || 'utf-8';
+}
 
-  const hasUnread = messages.some((m: Record<string, unknown>) => {
-    const labelIds = m.labelIds as string[] || [];
-    return labelIds.includes('UNREAD');
-  });
+function getContentId(headers: { name: string; value: string }[]): string | undefined {
+  return getHeader(headers, 'Content-ID').replace(/[<>]/g, '') || undefined;
+}
 
-  const snippet = (apiThread.snippet as string) || '';
+type ParsedMimeContent = {
+  textParts: string[];
+  htmlParts: string[];
+  attachments: GmailAttachment[];
+};
+
+function parseMimeParts(payload: Record<string, unknown>, result: ParsedMimeContent) {
+  const mimeType = String(payload.mimeType || '');
+  const filename = String(payload.filename || '');
+  const headers = (payload.headers as { name: string; value: string }[]) || [];
+  const body = (payload.body as Record<string, unknown>) || {};
+  const data = typeof body.data === 'string' ? body.data : undefined;
+  const attachmentId = typeof body.attachmentId === 'string' ? body.attachmentId : undefined;
+  const size = typeof body.size === 'number' ? body.size : 0;
+  const contentId = getContentId(headers);
+  const disposition = getHeader(headers, 'Content-Disposition').toLowerCase();
+
+  if (mimeType === 'text/plain' && data) {
+    result.textParts.push(decodeBase64Url(data, getCharset(headers)));
+  } else if (mimeType === 'text/html' && data) {
+    result.htmlParts.push(decodeBase64Url(data, getCharset(headers)));
+  } else if (filename || attachmentId || contentId) {
+    result.attachments.push({
+      id: attachmentId || contentId || filename,
+      filename: filename || `inline-${result.attachments.length + 1}`,
+      mimeType: mimeType || 'application/octet-stream',
+      size,
+      contentId,
+      inline: Boolean(contentId) || disposition.includes('inline'),
+      dataUrl: data ? `data:${mimeType};base64,${normalizeBase64(data)}` : undefined,
+    });
+  }
+
+  const parts = payload.parts as Record<string, unknown>[] | undefined;
+  parts?.forEach((part) => parseMimeParts(part, result));
+}
+
+async function loadAttachmentData(
+  messageId: string,
+  attachment: GmailAttachment,
+  accessToken: string,
+): Promise<GmailAttachment> {
+  if (attachment.dataUrl || !attachment.id) return attachment;
+
+  const response = await fetch(
+    `https://gmail.googleapis.com/gmail/v1/users/me/messages/${messageId}/attachments/${attachment.id}`,
+    { headers: { Authorization: `Bearer ${accessToken}` } },
+  );
+  if (!response.ok) return attachment;
+
+  const result = await response.json();
+  if (!result.data) return attachment;
 
   return {
-    id: apiThread.id as string,
-    subject,
-    snippet,
-    hasUnread,
-    participantCount: 0,
-    lastMessageDate: date ? new Date(date).toISOString() : new Date().toISOString(),
-    messages: messages.map((m: Record<string, unknown>) => {
-      const mPayload = (m.payload || {}) as Record<string, unknown>;
-      const mHeaders = (mPayload.headers as { name: string; value: string }[]) || [];
-      const labelIds = m.labelIds as string[] || [];
-      const body = getBodyData(mPayload);
-      return {
-        id: m.id as string,
-        threadId: m.threadId as string,
-        from: getHeader(mHeaders, 'From'),
-        to: getHeader(mHeaders, 'To'),
-        subject: getHeader(mHeaders, 'Subject'),
-        snippet: m.snippet as string || '',
-        body,
-        htmlBody: '',
-        date: getHeader(mHeaders, 'Date') ? new Date(getHeader(mHeaders, 'Date')).toISOString() : '',
-        isRead: !labelIds.includes('UNREAD'),
-      } as GmailMessage;
-    }),
+    ...attachment,
+    dataUrl: `data:${attachment.mimeType};base64,${normalizeBase64(String(result.data))}`,
   };
 }
 
-export function GmailInbox({ onSelectThread, selectedThreadId }: GmailInboxProps) {
+function replaceInlineContentIds(html: string, attachments: GmailAttachment[]): string {
+  return attachments.reduce((content, attachment) => {
+    if (!attachment.contentId || !attachment.dataUrl) return content;
+    return content.replaceAll(`cid:${attachment.contentId}`, attachment.dataUrl);
+  }, html);
+}
+
+async function parseGmailThread(
+  apiThread: Record<string, unknown>,
+  accessToken: string,
+): Promise<GmailThread> {
+  const apiMessages = (apiThread.messages || []) as Record<string, unknown>[];
+  const firstPayload = (apiMessages[0]?.payload || {}) as Record<string, unknown>;
+  const lastPayload = (apiMessages[apiMessages.length - 1]?.payload || {}) as Record<string, unknown>;
+  const firstHeaders = (firstPayload.headers as { name: string; value: string }[]) || [];
+  const lastHeaders = (lastPayload.headers as { name: string; value: string }[]) || [];
+  const allLabels = Array.from(new Set(apiMessages.flatMap((message) => (message.labelIds as string[]) || [])));
+
+  const messages = await Promise.all(apiMessages.map(async (message): Promise<GmailMessage> => {
+    const payload = (message.payload || {}) as Record<string, unknown>;
+    const headers = (payload.headers as { name: string; value: string }[]) || [];
+    const labels = (message.labelIds as string[]) || [];
+    const parsed: ParsedMimeContent = { textParts: [], htmlParts: [], attachments: [] };
+    parseMimeParts(payload, parsed);
+    const attachments = await Promise.all(
+      parsed.attachments.map((attachment) =>
+        loadAttachmentData(String(message.id), attachment, accessToken),
+      ),
+    );
+    const htmlBody = replaceInlineContentIds(parsed.htmlParts.join('\n'), attachments);
+    const body = parsed.textParts.join('\n\n') || htmlBody.replace(/<[^>]+>/g, ' ');
+    const rawDate = getHeader(headers, 'Date');
+
+    return {
+      id: String(message.id),
+      threadId: String(message.threadId),
+      from: getHeader(headers, 'From'),
+      to: getHeader(headers, 'To'),
+      subject: getHeader(headers, 'Subject'),
+      snippet: String(message.snippet || ''),
+      body,
+      htmlBody,
+      attachments,
+      date: rawDate ? new Date(rawDate).toISOString() : '',
+      isRead: !labels.includes('UNREAD'),
+      labels,
+      hasAttachments: attachments.some((attachment) => !attachment.inline),
+    };
+  }));
+
+  const participantCount = new Set(messages.map((message) => message.from).filter(Boolean)).size;
+  const rawDate = getHeader(lastHeaders, 'Date');
+
+  return {
+    id: String(apiThread.id),
+    subject: getHeader(lastHeaders, 'Subject') || getHeader(firstHeaders, 'Subject') || '\u65e0\u4e3b\u9898',
+    snippet: String(apiThread.snippet || ''),
+    messages,
+    participantCount,
+    lastMessageDate: rawDate ? new Date(rawDate).toISOString() : new Date().toISOString(),
+    hasUnread: allLabels.includes('UNREAD'),
+    labels: allLabels,
+    isStarred: allLabels.includes('STARRED'),
+  };
+}
+
+export function GmailInbox({
+  onSelectThread,
+  onThreadUpdated,
+  onCategoryChange,
+  selectedThreadId,
+  mailbox,
+  category,
+}: GmailInboxProps) {
   const { auth, connect, disconnect } = useGmailAuth();
   const [threads, setThreads] = useState<GmailThread[]>([]);
   const [loading, setLoading] = useState(false);
+  const [actionThreadId, setActionThreadId] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [searchQuery, setSearchQuery] = useState('');
-  const [filter, setFilter] = useState<'all' | 'unread' | 'recent'>('all');
+  const [showUnreadOnly, setShowUnreadOnly] = useState(false);
   const [authProcessing, setAuthProcessing] = useState(false);
 
-  // 处理 OAuth 回调
   useEffect(() => {
     const params = new URLSearchParams(window.location.search);
     const gmailConnected = params.get('gmail_connected');
@@ -126,15 +244,15 @@ export function GmailInbox({ onSelectThread, selectedThreadId }: GmailInboxProps
 
     if (authError) {
       const errorMessages: Record<string, string> = {
-        access_denied: '你取消了 Gmail 授权。',
-        missing_google_client_id: 'Vercel 尚未配置 GOOGLE_CLIENT_ID。',
-        missing_google_oauth_env: 'Vercel 尚未完整配置 Google OAuth 环境变量。',
-        token_exchange_failed: 'Google 授权码交换失败，请检查回调地址和 OAuth 配置。',
-        callback_failed: 'Gmail 授权回调失败，请稍后重试。',
-        no_code: 'Google 没有返回授权码。',
-        invalid_state: 'Gmail 授权校验失败，请重新点击连接。',
+        access_denied: '\u4f60\u53d6\u6d88\u4e86 Gmail \u6388\u6743\u3002',
+        missing_google_client_id: 'Vercel \u5c1a\u672a\u914d\u7f6e GOOGLE_CLIENT_ID\u3002',
+        missing_google_oauth_env: 'Vercel \u5c1a\u672a\u5b8c\u6574\u914d\u7f6e Google OAuth \u73af\u5883\u53d8\u91cf\u3002',
+        token_exchange_failed: 'Google \u6388\u6743\u7801\u4ea4\u6362\u5931\u8d25\uff0c\u8bf7\u68c0\u67e5 OAuth \u914d\u7f6e\u3002',
+        callback_failed: 'Gmail \u6388\u6743\u56de\u8c03\u5931\u8d25\uff0c\u8bf7\u7a0d\u540e\u91cd\u8bd5\u3002',
+        no_code: 'Google \u6ca1\u6709\u8fd4\u56de\u6388\u6743\u7801\u3002',
+        invalid_state: 'Gmail \u6388\u6743\u6821\u9a8c\u5931\u8d25\uff0c\u8bf7\u91cd\u65b0\u8fde\u63a5\u3002',
       };
-      setError(errorMessages[authError] || `Gmail 授权失败：${authError}`);
+      setError(errorMessages[authError] || `Gmail \u6388\u6743\u5931\u8d25\uff1a${authError}`);
       window.history.replaceState({}, '', window.location.pathname);
       return;
     }
@@ -144,15 +262,10 @@ export function GmailInbox({ onSelectThread, selectedThreadId }: GmailInboxProps
       fetch('/api/auth/session')
         .then((response) => response.json())
         .then((result) => {
-          if (result.success && result.data?.accessToken) {
-            connect(result.data);
-          } else {
-            setError(result.error || '无法保存 Gmail 授权信息，请重新连接。');
-          }
+          if (result.success && result.data?.accessToken) connect(result.data);
+          else setError(result.error || '\u65e0\u6cd5\u4fdd\u5b58 Gmail \u6388\u6743\u4fe1\u606f\u3002');
         })
-        .catch((err) => {
-          setError(`Gmail 连接失败：${err.message}`);
-        })
+        .catch((caughtError: Error) => setError(`Gmail \u8fde\u63a5\u5931\u8d25\uff1a${caughtError.message}`))
         .finally(() => {
           setAuthProcessing(false);
           window.history.replaceState({}, '', window.location.pathname);
@@ -160,149 +273,189 @@ export function GmailInbox({ onSelectThread, selectedThreadId }: GmailInboxProps
     }
   }, [connect]);
 
-  // 获取邮件列表
+  const getAccessToken = useCallback(async () => {
+    if (!auth?.accessToken) throw new Error('\u8bf7\u91cd\u65b0\u8fde\u63a5 Gmail\u3002');
+    if (!auth.refreshToken || !auth.expiresAt || auth.expiresAt > Date.now() + 60_000) {
+      return auth.accessToken;
+    }
+
+    const response = await fetch('/api/auth/refresh', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ refreshToken: auth.refreshToken }),
+    });
+    const result = await response.json();
+    if (!response.ok || !result.data?.accessToken) {
+      throw new Error(result.error || 'Gmail \u6388\u6743\u5df2\u8fc7\u671f\uff0c\u8bf7\u91cd\u65b0\u8fde\u63a5\u3002');
+    }
+
+    connect({
+      ...auth,
+      accessToken: result.data.accessToken,
+      expiresAt: Date.now() + result.data.expiresIn * 1000,
+    });
+    return result.data.accessToken as string;
+  }, [auth, connect]);
+
   const fetchThreads = useCallback(async () => {
     if (!auth?.accessToken) return;
-    
     setLoading(true);
     setError(null);
+
     try {
-      let accessToken = auth.accessToken;
+      const accessToken = await getAccessToken();
+      const headers = { Authorization: `Bearer ${accessToken}` };
+      const params = new URLSearchParams({ maxResults: '50' });
+      MAILBOX_API_LABELS[mailbox].forEach((label) => params.append('labelIds', label));
+      if (mailbox === 'inbox') params.append('labelIds', CATEGORY_LABELS[category]);
 
-      if (auth.refreshToken && auth.expiresAt && auth.expiresAt <= Date.now() + 60_000) {
-        const refreshResponse = await fetch('/api/auth/refresh', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ refreshToken: auth.refreshToken }),
-        });
-        const refreshResult = await refreshResponse.json();
-
-        if (!refreshResponse.ok || !refreshResult.data?.accessToken) {
-          throw new Error(refreshResult.error || 'Gmail 授权已过期，请重新连接。');
-        }
-
-        accessToken = refreshResult.data.accessToken;
-        connect({
-          ...auth,
-          accessToken,
-          expiresAt: Date.now() + refreshResult.data.expiresIn * 1000,
-        });
-      }
-
-      // 直接从浏览器调用 Gmail API（因为后端服务器无法访问 Google）
-      const headers = {
-        'Authorization': `Bearer ${accessToken}`,
-        'Content-Type': 'application/json',
-      };
-
-      // 获取邮件列表
-      const listRes = await fetch(
-        'https://gmail.googleapis.com/gmail/v1/users/me/threads?maxResults=30',
-        { headers }
+      const listResponse = await fetch(
+        `https://gmail.googleapis.com/gmail/v1/users/me/threads?${params.toString()}`,
+        { headers },
       );
-      
-      if (!listRes.ok) {
-        const errData = await listRes.json().catch(() => ({}));
-        throw new Error(errData.error?.message || '获取邮件列表失败');
+      if (!listResponse.ok) {
+        const result = await listResponse.json().catch(() => ({}));
+        throw new Error(result.error?.message || '\u83b7\u53d6\u90ae\u4ef6\u5217\u8868\u5931\u8d25');
       }
 
-      const listData = await listRes.json();
-      
-      // 获取每个 thread 的详细信息
-      if (listData.threads && listData.threads.length > 0) {
-        const threadDetails = await Promise.all(
-          listData.threads.map(async (thread: { id: string }) => {
-            const threadRes = await fetch(
-              `https://gmail.googleapis.com/gmail/v1/users/me/threads/${thread.id}?format=full`,
-              { headers }
-            );
-            if (!threadRes.ok) return thread;
-            return await threadRes.json();
-          })
-        );
-        const parsedThreads = threadDetails.map(parseGmailThread);
-        setThreads(parsedThreads);
-      } else {
-        setThreads([]);
-      }
-    } catch (err) {
-      setError(`网络错误: ${(err as Error).message}`);
+      const listResult = await listResponse.json();
+      const details = await Promise.all(
+        ((listResult.threads || []) as { id: string }[]).map(async (thread) => {
+          const response = await fetch(
+            `https://gmail.googleapis.com/gmail/v1/users/me/threads/${thread.id}?format=full`,
+            { headers },
+          );
+          return response.ok ? response.json() : null;
+        }),
+      );
+      const parsed = await Promise.all(
+        details
+          .filter((thread): thread is Record<string, unknown> => Boolean(thread))
+          .map((thread) => parseGmailThread(thread, accessToken)),
+      );
+      setThreads(parsed);
+    } catch (caughtError) {
+      setError((caughtError as Error).message);
     } finally {
       setLoading(false);
     }
-  }, [auth, connect]);
+  }, [auth?.accessToken, category, getAccessToken, mailbox]);
 
-  // 连接后自动获取邮件
   useEffect(() => {
-    if (auth?.isConnected && auth?.accessToken) {
-      fetchThreads();
-    }
+    if (auth?.isConnected && auth.accessToken) fetchThreads();
   }, [auth?.isConnected, auth?.accessToken, fetchThreads]);
 
-  // 过滤线程
-  const filteredThreads = threads.filter(thread => {
-    const matchesSearch = 
-      thread.subject.toLowerCase().includes(searchQuery.toLowerCase()) ||
-      thread.messages.some((m: GmailMessage) => 
-        m.from.toLowerCase().includes(searchQuery.toLowerCase()) ||
-        m.subject.toLowerCase().includes(searchQuery.toLowerCase())
+  const modifyThread = async (
+    thread: GmailThread,
+    addLabelIds: string[] = [],
+    removeLabelIds: string[] = [],
+  ) => {
+    setActionThreadId(thread.id);
+    setError(null);
+
+    try {
+      const accessToken = await getAccessToken();
+      const response = await fetch(
+        `https://gmail.googleapis.com/gmail/v1/users/me/threads/${thread.id}/modify`,
+        {
+          method: 'POST',
+          headers: {
+            Authorization: `Bearer ${accessToken}`,
+            'Content-Type': 'application/json',
+          },
+          body: JSON.stringify({ addLabelIds, removeLabelIds }),
+        },
       );
-    
-    if (filter === 'unread') return matchesSearch && thread.hasUnread;
-    if (filter === 'recent') {
-      const lastDate = new Date(thread.lastMessageDate);
-      const now = new Date();
-      const diffHours = (now.getTime() - lastDate.getTime()) / (1000 * 60 * 60);
-      return matchesSearch && diffHours < 24;
+      if (!response.ok) {
+        const result = await response.json().catch(() => ({}));
+        throw new Error(result.error?.message || '\u66f4\u65b0\u90ae\u4ef6\u72b6\u6001\u5931\u8d25');
+      }
+
+      const nextLabels = Array.from(new Set([
+        ...thread.labels.filter((label) => !removeLabelIds.includes(label)),
+        ...addLabelIds,
+      ]));
+      const nextThread: GmailThread = {
+        ...thread,
+        labels: nextLabels,
+        hasUnread: nextLabels.includes('UNREAD'),
+        isStarred: nextLabels.includes('STARRED'),
+        messages: thread.messages.map((message) => ({
+          ...message,
+          labels: Array.from(new Set([
+            ...message.labels.filter((label) => !removeLabelIds.includes(label)),
+            ...addLabelIds,
+          ])),
+          isRead: removeLabelIds.includes('UNREAD')
+            ? true
+            : addLabelIds.includes('UNREAD')
+              ? false
+              : message.isRead,
+        })),
+      };
+
+      if (mailbox === 'starred' && removeLabelIds.includes('STARRED')) {
+        setThreads((current) => current.filter((item) => item.id !== thread.id));
+      } else {
+        setThreads((current) => current.map((item) => item.id === thread.id ? nextThread : item));
+      }
+      onThreadUpdated?.(nextThread);
+      return nextThread;
+    } catch (caughtError) {
+      setError((caughtError as Error).message);
+      return thread;
+    } finally {
+      setActionThreadId(null);
     }
-    return matchesSearch;
+  };
+
+  const handleOpenThread = async (thread: GmailThread) => {
+    if (thread.hasUnread) {
+      const updatedThread = await modifyThread(thread, [], ['UNREAD']);
+      onSelectThread(updatedThread);
+      return;
+    }
+    onSelectThread(thread);
+  };
+
+  const filteredThreads = threads.filter((thread) => {
+    const normalizedQuery = searchQuery.trim().toLowerCase();
+    const matchesSearch = !normalizedQuery
+      || thread.subject.toLowerCase().includes(normalizedQuery)
+      || thread.snippet.toLowerCase().includes(normalizedQuery)
+      || thread.messages.some((message) => message.from.toLowerCase().includes(normalizedQuery));
+    return matchesSearch && (!showUnreadOnly || thread.hasUnread);
   });
 
-  const formatDate = (dateStr: string) => {
-    const date = new Date(dateStr);
+  const formatDate = (dateString: string) => {
+    const date = new Date(dateString);
     const now = new Date();
-    const diffDays = Math.floor((now.getTime() - date.getTime()) / (1000 * 60 * 60 * 24));
-    
-    if (diffDays === 0) {
+    if (date.toDateString() === now.toDateString()) {
       return date.toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit' });
-    } else if (diffDays === 1) {
-      return '昨天';
-    } else if (diffDays < 7) {
-      return `${diffDays}天前`;
-    } else {
-      return date.toLocaleDateString('zh-CN', { month: 'short', day: 'numeric' });
     }
+    return date.toLocaleDateString('zh-CN', { month: 'numeric', day: 'numeric' });
   };
 
   if (authProcessing) {
     return (
-      <div className="flex flex-col items-center justify-center h-full text-center p-6">
-        <Loader2 className="w-8 h-8 animate-spin text-primary mb-4" />
-        <h3 className="text-lg font-semibold mb-2">正在连接 Gmail...</h3>
-        <p className="text-sm text-muted-foreground">请稍候</p>
+      <div className="flex h-full flex-col items-center justify-center p-6 text-center">
+        <Loader2 className="mb-4 h-8 w-8 animate-spin text-primary" />
+        <h3 className="mb-2 text-lg font-semibold">{'\u6b63\u5728\u8fde\u63a5 Gmail...'}</h3>
       </div>
     );
   }
 
   if (!auth?.isConnected) {
     return (
-      <div className="flex flex-col items-center justify-center h-full text-center p-6">
-        <div className="w-16 h-16 rounded-2xl bg-gradient-to-br from-red-50 to-orange-50 flex items-center justify-center mb-4">
-          <Mail className="w-8 h-8 text-red-400" />
-        </div>
-        <h3 className="text-lg font-semibold mb-2">连接 Gmail</h3>
-        <p className="text-sm text-muted-foreground mb-4 max-w-xs">
-          请先在 Gmail 设置中点击“连接 Gmail”，完成 Google 授权。
+      <div className="flex h-full flex-col items-center justify-center p-6 text-center">
+        <Mail className="mb-4 h-10 w-10 text-red-500" />
+        <h3 className="mb-2 text-lg font-semibold">{'\u8fde\u63a5 Gmail'}</h3>
+        <p className="mb-4 max-w-xs text-sm text-muted-foreground">
+          {'\u5b8c\u6210 Google \u6388\u6743\u540e\uff0c\u5373\u53ef\u5728\u5de5\u4f5c\u53f0\u5185\u7ba1\u7406\u90ae\u4ef6\u3002'}
         </p>
-        {error && (
-          <div className="bg-red-50 p-3 rounded-lg mb-4 text-sm text-red-600 max-w-xs">
-            {error}
-          </div>
-        )}
-        <Button className="bg-red-500 hover:bg-red-600" onClick={() => {
-          window.location.href = '/api/auth/google';
-        }}>
-          连接 Gmail
+        {error && <p className="mb-4 text-sm text-destructive">{error}</p>}
+        <Button onClick={() => { window.location.href = '/api/auth/google'; }}>
+          {'\u8fde\u63a5 Gmail'}
         </Button>
       </div>
     );
@@ -310,123 +463,179 @@ export function GmailInbox({ onSelectThread, selectedThreadId }: GmailInboxProps
 
   return (
     <div className="flex h-full min-h-0 flex-col overflow-hidden">
-      {/* 头部 */}
-      <div className="flex items-center justify-between px-4 py-3 border-b">
-        <div className="flex items-center gap-3">
-          <h2 className="font-semibold">收件箱</h2>
-          <Badge variant="secondary" className="bg-red-100 text-red-600 hover:bg-red-100">
-            {filteredThreads.filter(t => t.hasUnread).length} 未读
-          </Badge>
+      <div className="flex shrink-0 items-center justify-between border-b px-4 py-3">
+        <div className="flex min-w-0 items-center gap-2">
+          <h2 className="truncate font-semibold">{MAILBOX_LABELS[mailbox]}</h2>
+          {mailbox === 'inbox' && (
+            <Badge variant="secondary">
+              {threads.filter((thread) => thread.hasUnread).length} {'\u672a\u8bfb'}
+            </Badge>
+          )}
         </div>
-        <Button variant="ghost" size="icon" className="h-8 w-8" onClick={fetchThreads} disabled={loading}>
-          <RefreshCw className={`w-4 h-4 ${loading ? 'animate-spin' : ''}`} />
+        <Button
+          variant="ghost"
+          size="icon"
+          className="h-8 w-8"
+          title={'\u5237\u65b0'}
+          onClick={fetchThreads}
+          disabled={loading}
+        >
+          <RefreshCw className={`h-4 w-4 ${loading ? 'animate-spin' : ''}`} />
         </Button>
       </div>
 
-      {/* 搜索和过滤 */}
-      <div className="px-4 py-2 border-b space-y-2">
+      <div className="shrink-0 border-b px-3 py-2">
         <div className="relative">
-          <Search className="absolute left-2.5 top-2.5 h-4 w-4 text-muted-foreground" />
+          <Search className="absolute left-3 top-2.5 h-4 w-4 text-muted-foreground" />
           <Input
-            placeholder="搜索邮件..."
+            placeholder={'\u641c\u7d22\u90ae\u4ef6...'}
             value={searchQuery}
-            onChange={(e) => setSearchQuery(e.target.value)}
-            className="pl-9 h-9 text-sm"
+            onChange={(event) => setSearchQuery(event.target.value)}
+            className="h-9 pl-9"
           />
         </div>
-        <div className="flex gap-1">
-          <Button
-            variant={filter === 'all' ? 'secondary' : 'ghost'}
-            size="sm"
-            className="h-7 text-xs"
-            onClick={() => setFilter('all')}
-          >
-            全部
-          </Button>
-          <Button
-            variant={filter === 'unread' ? 'secondary' : 'ghost'}
-            size="sm"
-            className="h-7 text-xs"
-            onClick={() => setFilter('unread')}
-          >
-            未读
-          </Button>
-          <Button
-            variant={filter === 'recent' ? 'secondary' : 'ghost'}
-            size="sm"
-            className="h-7 text-xs"
-            onClick={() => setFilter('recent')}
-          >
-            最近
-          </Button>
-        </div>
+        <Button
+          variant={showUnreadOnly ? 'secondary' : 'ghost'}
+          size="sm"
+          className="mt-1 h-7 px-2 text-xs"
+          onClick={() => setShowUnreadOnly((current) => !current)}
+        >
+          {showUnreadOnly ? '\u663e\u793a\u5168\u90e8' : '\u53ea\u770b\u672a\u8bfb'}
+        </Button>
       </div>
 
-      {/* 邮件列表 */}
+      {mailbox === 'inbox' && (
+        <div className="grid shrink-0 grid-cols-3 border-b">
+          {CATEGORY_TABS.map(({ id, label, icon: Icon }) => (
+            <button
+              key={id}
+              type="button"
+              className={`flex h-11 items-center justify-center gap-2 border-b-2 text-sm transition-colors ${
+                category === id
+                  ? 'border-primary font-medium text-primary'
+                  : 'border-transparent text-muted-foreground hover:bg-muted/50'
+              }`}
+              onClick={() => onCategoryChange(id)}
+            >
+              <Icon className="h-4 w-4" />
+              {label}
+            </button>
+          ))}
+        </div>
+      )}
+
       <ScrollArea className="min-h-0 flex-1">
         {loading && threads.length === 0 ? (
-          <div className="flex items-center justify-center py-12">
-            <Loader2 className="w-6 h-6 animate-spin text-muted-foreground" />
+          <div className="flex justify-center py-12">
+            <Loader2 className="h-6 w-6 animate-spin text-muted-foreground" />
           </div>
         ) : error ? (
-          <div className="p-4 text-center">
-            <AlertCircle className="w-8 h-8 text-red-400 mx-auto mb-2" />
-            <p className="text-sm text-red-600">{error}</p>
-            <Button variant="outline" size="sm" className="mt-2" onClick={fetchThreads}>
-              重试
+          <div className="p-6 text-center">
+            <AlertCircle className="mx-auto mb-2 h-8 w-8 text-destructive" />
+            <p className="text-sm text-destructive">{error}</p>
+            <Button variant="outline" size="sm" className="mt-3" onClick={fetchThreads}>
+              {'\u91cd\u8bd5'}
             </Button>
           </div>
         ) : filteredThreads.length === 0 ? (
-          <div className="p-4 text-center text-muted-foreground text-sm">
-            {searchQuery ? '没有找到匹配的邮件' : '暂无邮件'}
+          <div className="p-8 text-center text-sm text-muted-foreground">
+            {searchQuery ? '\u6ca1\u6709\u627e\u5230\u5339\u914d\u7684\u90ae\u4ef6' : '\u8fd9\u91cc\u6682\u65f6\u6ca1\u6709\u90ae\u4ef6'}
           </div>
         ) : (
-          <div>
-            {filteredThreads.map(thread => (
+          filteredThreads.map((thread) => {
+            const latestMessage = thread.messages[thread.messages.length - 1];
+            const sender = latestMessage?.from?.split('<')[0]?.replaceAll('"', '').trim()
+              || '\u672a\u77e5\u53d1\u4ef6\u4eba';
+            const actionLoading = actionThreadId === thread.id;
+
+            return (
               <div
                 key={thread.id}
-                className={`px-4 py-3 border-b cursor-pointer hover:bg-muted/50 transition-colors ${
+                role="button"
+                tabIndex={0}
+                className={`group border-b px-3 py-2.5 transition-colors hover:bg-muted/50 ${
                   selectedThreadId === thread.id ? 'bg-muted' : ''
-                } ${thread.hasUnread ? 'bg-primary/5' : ''}`}
-                onClick={() => onSelectThread(thread)}
+                } ${thread.hasUnread ? 'bg-primary/[0.04]' : ''}`}
+                onClick={() => handleOpenThread(thread)}
+                onKeyDown={(event) => {
+                  if (event.key === 'Enter') handleOpenThread(thread);
+                }}
               >
-                <div className="flex items-start justify-between gap-2">
-                  <div className="flex-1 min-w-0">
+                <div className="flex items-start gap-2">
+                  <Button
+                    variant="ghost"
+                    size="icon"
+                    className="mt-0.5 h-7 w-7 shrink-0"
+                    title={thread.isStarred ? '\u53d6\u6d88\u6807\u661f' : '\u6807\u661f'}
+                    disabled={actionLoading}
+                    onClick={(event) => {
+                      event.stopPropagation();
+                      modifyThread(
+                        thread,
+                        thread.isStarred ? [] : ['STARRED'],
+                        thread.isStarred ? ['STARRED'] : [],
+                      );
+                    }}
+                  >
+                    <Star className={`h-4 w-4 ${thread.isStarred ? 'fill-amber-400 text-amber-400' : 'text-muted-foreground'}`} />
+                  </Button>
+
+                  <div className="min-w-0 flex-1">
                     <div className="flex items-center gap-2">
-                      {thread.hasUnread ? (
-                        <Mail className="w-4 h-4 text-primary flex-shrink-0" />
-                      ) : (
-                        <MailOpen className="w-4 h-4 text-muted-foreground flex-shrink-0" />
-                      )}
-                      <span className={`text-sm truncate ${thread.hasUnread ? 'font-semibold' : 'text-muted-foreground'}`}>
-                        {thread.messages[thread.messages.length - 1]?.from?.split('<')[0]?.trim() || '未知发件人'}
+                      <span className={`min-w-0 flex-1 truncate text-sm ${thread.hasUnread ? 'font-semibold' : 'text-muted-foreground'}`}>
+                        {sender}
+                      </span>
+                      <span className="shrink-0 text-xs text-muted-foreground">
+                        {formatDate(thread.lastMessageDate)}
                       </span>
                     </div>
-                    <p className={`text-sm mt-1 truncate ${thread.hasUnread ? 'font-medium' : ''}`}>
+                    <p className={`mt-0.5 truncate text-sm ${thread.hasUnread ? 'font-semibold' : ''}`}>
                       {thread.subject}
                     </p>
-                    <p className="text-xs text-muted-foreground mt-0.5 truncate">
-                      {thread.snippet}
-                    </p>
+                    <p className="mt-0.5 truncate text-xs text-muted-foreground">{thread.snippet}</p>
                   </div>
-                  <span className="text-xs text-muted-foreground flex-shrink-0 mt-1">
-                    {formatDate(thread.lastMessageDate)}
-                  </span>
+
+                  <Button
+                    variant="ghost"
+                    size="icon"
+                    className="h-7 w-7 shrink-0 opacity-70 group-hover:opacity-100"
+                    title={thread.hasUnread ? '\u6807\u8bb0\u4e3a\u5df2\u8bfb' : '\u6807\u8bb0\u4e3a\u672a\u8bfb'}
+                    disabled={actionLoading}
+                    onClick={(event) => {
+                      event.stopPropagation();
+                      modifyThread(
+                        thread,
+                        thread.hasUnread ? [] : ['UNREAD'],
+                        thread.hasUnread ? ['UNREAD'] : [],
+                      );
+                    }}
+                  >
+                    {actionLoading ? (
+                      <Loader2 className="h-4 w-4 animate-spin" />
+                    ) : thread.hasUnread ? (
+                      <MailOpen className="h-4 w-4" />
+                    ) : (
+                      <Mail className="h-4 w-4" />
+                    )}
+                  </Button>
                 </div>
               </div>
-            ))}
-          </div>
+            );
+          })
         )}
       </ScrollArea>
 
-      {/* 底部：断开连接 */}
-      <div className="px-4 py-2 border-t">
-        <div className="flex items-center justify-between text-xs text-muted-foreground">
-          <span>已连接: {auth.email || 'Gmail'}</span>
-          <Button variant="ghost" size="sm" className="h-7 text-xs text-red-500 hover:text-red-600" onClick={disconnect}>
-            断开
-          </Button>
-        </div>
+      <div className="flex shrink-0 items-center justify-between border-t px-3 py-2 text-xs text-muted-foreground">
+        <span className="truncate">{auth.email || 'Gmail'}</span>
+        <Button
+          variant="ghost"
+          size="sm"
+          className="h-7 gap-1 px-2 text-xs"
+          onClick={disconnect}
+        >
+          <LogOut className="h-3.5 w-3.5" />
+          {'\u65ad\u5f00'}
+        </Button>
       </div>
     </div>
   );

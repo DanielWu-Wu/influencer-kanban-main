@@ -6,12 +6,13 @@ import { Badge } from '@/components/ui/badge';
 import { ScrollArea } from '@/components/ui/scroll-area';
 import { Separator } from '@/components/ui/separator';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
-import { GmailThread, GmailMessage } from '@/lib/types';
+import { GmailAttachment, GmailThread, GmailMessage } from '@/lib/types';
 import { useEmailTranslations, useSettings } from '@/lib/data';
 import { 
   ArrowLeft, Reply, ReplyAll, Forward, Trash2, 
   MoreHorizontal, Star, Clock, Globe, Languages,
-  Copy, Check, AlertCircle, Sparkles, ChevronDown, Loader2
+  Copy, Check, AlertCircle, Sparkles, ChevronDown, Loader2,
+  Paperclip, Download
 } from 'lucide-react';
 import { EmailComposer } from './email-composer';
 
@@ -116,6 +117,57 @@ export function EmailDetail({ thread, onBack, onAIReply }: EmailDetailProps) {
     navigator.clipboard.writeText(text);
   };
 
+  const sanitizeEmailHtml = (html: string) => {
+    if (typeof window === 'undefined') return '';
+
+    const documentNode = new DOMParser().parseFromString(html, 'text/html');
+    documentNode
+      .querySelectorAll('script, iframe, object, embed, form, input, button, meta, base')
+      .forEach((element) => element.remove());
+
+    documentNode.querySelectorAll<HTMLElement>('*').forEach((element) => {
+      Array.from(element.attributes).forEach((attribute) => {
+        if (attribute.name.toLowerCase().startsWith('on')) {
+          element.removeAttribute(attribute.name);
+        }
+      });
+
+      const style = element.getAttribute('style');
+      if (style) {
+        element.setAttribute(
+          'style',
+          style
+            .replace(/position\s*:\s*(fixed|sticky)/gi, 'position: static')
+            .replace(/z-index\s*:[^;]+;?/gi, ''),
+        );
+      }
+    });
+
+    documentNode.querySelectorAll<HTMLAnchorElement>('a[href]').forEach((link) => {
+      const href = link.getAttribute('href') || '';
+      if (!/^(https?:|mailto:)/i.test(href)) {
+        link.removeAttribute('href');
+      } else {
+        link.target = '_blank';
+        link.rel = 'noopener noreferrer';
+      }
+    });
+
+    documentNode.querySelectorAll<HTMLImageElement>('img').forEach((image) => {
+      const source = image.getAttribute('src') || '';
+      if (!/^(https?:|data:image\/|blob:)/i.test(source)) {
+        image.remove();
+        return;
+      }
+      image.loading = 'lazy';
+      image.referrerPolicy = 'no-referrer';
+      image.style.maxWidth = '100%';
+      image.style.height = 'auto';
+    });
+
+    return documentNode.body.innerHTML;
+  };
+
   return (
     <div className="flex h-full min-h-0 flex-col overflow-hidden">
       {/* 头部 */}
@@ -152,6 +204,9 @@ export function EmailDetail({ thread, onBack, onAIReply }: EmailDetailProps) {
             const translation = getTranslation(message.id);
             const isExpanded = expandedMessages.has(message.id);
             const isLast = index === thread.messages.length - 1;
+            const visibleAttachments = (message.attachments || []).filter(
+              (attachment) => !attachment.inline,
+            );
 
             return (
               <div key={message.id} className="space-y-3">
@@ -219,11 +274,18 @@ export function EmailDetail({ thread, onBack, onAIReply }: EmailDetailProps) {
                         </TabsList>
                         
                         <TabsContent value="original" className="mt-3">
-                          <div className="prose prose-sm max-w-none">
-                            <pre className="max-w-full whitespace-pre-wrap break-words font-sans text-sm bg-accent/30 rounded-xl p-4">
-                              {message.body}
-                            </pre>
-                          </div>
+                          {message.htmlBody ? (
+                            <div
+                              className="email-html-content max-w-full overflow-hidden rounded-xl bg-white p-4 text-sm"
+                              dangerouslySetInnerHTML={{ __html: sanitizeEmailHtml(message.htmlBody) }}
+                            />
+                          ) : (
+                            <div className="prose prose-sm max-w-none">
+                              <pre className="max-w-full whitespace-pre-wrap break-words font-sans text-sm bg-accent/30 rounded-xl p-4">
+                                {message.body}
+                              </pre>
+                            </div>
+                          )}
                         </TabsContent>
 
                         {translation && (
@@ -236,6 +298,10 @@ export function EmailDetail({ thread, onBack, onAIReply }: EmailDetailProps) {
                           </TabsContent>
                         )}
                       </Tabs>
+
+                      {visibleAttachments.length > 0 && (
+                        <AttachmentList attachments={visibleAttachments} />
+                      )}
 
                       {/* 操作按钮 */}
                       <div className="flex items-center gap-2 pt-2">
@@ -318,4 +384,51 @@ export function EmailDetail({ thread, onBack, onAIReply }: EmailDetailProps) {
       </div>
     </div>
   );
+}
+
+function AttachmentList({ attachments }: { attachments: GmailAttachment[] }) {
+  return (
+    <div className="space-y-2">
+      <div className="flex items-center gap-2 text-sm font-medium">
+        <Paperclip className="w-4 h-4" />
+        附件（{attachments.length}）
+      </div>
+      <div className="grid gap-2 sm:grid-cols-2">
+        {attachments.map((attachment) => (
+          <a
+            key={`${attachment.id}-${attachment.filename}`}
+            href={attachment.dataUrl}
+            download={attachment.filename}
+            className="flex min-w-0 items-center gap-3 rounded-lg border bg-background p-3 hover:bg-muted/50"
+          >
+            {attachment.mimeType.startsWith('image/') && attachment.dataUrl ? (
+              <img
+                src={attachment.dataUrl}
+                alt={attachment.filename}
+                className="h-12 w-12 flex-shrink-0 rounded object-cover"
+              />
+            ) : (
+              <div className="flex h-12 w-12 flex-shrink-0 items-center justify-center rounded bg-muted">
+                <Paperclip className="w-5 h-5 text-muted-foreground" />
+              </div>
+            )}
+            <div className="min-w-0 flex-1">
+              <p className="truncate text-sm font-medium">{attachment.filename}</p>
+              <p className="text-xs text-muted-foreground">
+                {formatFileSize(attachment.size)}
+              </p>
+            </div>
+            <Download className="w-4 h-4 flex-shrink-0 text-muted-foreground" />
+          </a>
+        ))}
+      </div>
+    </div>
+  );
+}
+
+function formatFileSize(bytes: number) {
+  if (!bytes) return '未知大小';
+  if (bytes < 1024) return `${bytes} B`;
+  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
+  return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
 }

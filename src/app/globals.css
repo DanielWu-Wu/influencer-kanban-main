@@ -174,3 +174,22 @@
   scrollbar-width: none;
 }
 
+.email-html-content {
+  overflow-wrap: anywhere;
+  word-break: break-word;
+}
+
+.email-html-content img {
+  display: inline-block;
+  max-width: 100% !important;
+  height: auto !important;
+}
+
+.email-html-content table {
+  max-width: 100% !important;
+}
+
+.email-html-content a {
+  color: #2563eb;
+  text-decoration: underline;
+}

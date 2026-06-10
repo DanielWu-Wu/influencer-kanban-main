@@ -207,10 +207,21 @@ export interface GmailMessage {
   snippet: string;
   body: string;
   htmlBody?: string;
+  attachments?: GmailAttachment[];
   date: string;
   isRead: boolean;
   labels: string[];
   hasAttachments: boolean;
+}
+
+export interface GmailAttachment {
+  id: string;
+  filename: string;
+  mimeType: string;
+  size: number;
+  dataUrl?: string;
+  contentId?: string;
+  inline: boolean;
 }
 
 export interface GmailThread {
@@ -221,7 +232,12 @@ export interface GmailThread {
   participantCount: number;
   lastMessageDate: string;
   hasUnread: boolean;
+  labels: string[];
+  isStarred: boolean;
 }
+
+export type GmailMailbox = 'inbox' | 'starred' | 'sent' | 'drafts';
+export type GmailCategory = 'primary' | 'promotions' | 'social';
 
 export interface EmailTranslation {
   id: string;
