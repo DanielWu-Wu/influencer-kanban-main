@@ -31,6 +31,7 @@ interface GmailInboxProps {
   onSelectThread: (thread: GmailThread) => void;
   onThreadUpdated?: (thread: GmailThread) => void;
   onCategoryChange: (category: GmailCategory) => void;
+  updatedThread?: GmailThread | null;
   selectedThreadId?: string;
   mailbox: GmailMailbox;
   category: GmailCategory;
@@ -242,6 +243,7 @@ export function GmailInbox({
   onSelectThread,
   onThreadUpdated,
   onCategoryChange,
+  updatedThread,
   selectedThreadId,
   mailbox,
   category,
@@ -254,6 +256,13 @@ export function GmailInbox({
   const [searchQuery, setSearchQuery] = useState('');
   const [showUnreadOnly, setShowUnreadOnly] = useState(false);
   const [authProcessing, setAuthProcessing] = useState(false);
+
+  useEffect(() => {
+    if (!updatedThread) return;
+    setThreads((current) =>
+      current.map((thread) => thread.id === updatedThread.id ? updatedThread : thread),
+    );
+  }, [updatedThread]);
 
   useEffect(() => {
     const params = new URLSearchParams(window.location.search);

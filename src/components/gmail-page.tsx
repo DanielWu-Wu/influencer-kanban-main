@@ -71,6 +71,7 @@ export function GmailPage() {
           mailbox={mailbox}
           category={category}
           onCategoryChange={setCategory}
+          updatedThread={selectedThread}
           onThreadUpdated={(thread) => {
             if (selectedThread?.id === thread.id) setSelectedThread(thread);
           }}
@@ -83,6 +84,7 @@ export function GmailPage() {
             thread={selectedThread}
             onBack={() => setSelectedThread(null)}
             onAIReply={setSelectedThread}
+            onThreadUpdated={setSelectedThread}
           />
         ) : (
           <div className="flex flex-1 flex-col items-center justify-center p-6 text-center">

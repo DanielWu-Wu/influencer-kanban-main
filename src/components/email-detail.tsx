@@ -7,12 +7,12 @@ import { ScrollArea } from '@/components/ui/scroll-area';
 import { Separator } from '@/components/ui/separator';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { GmailAttachment, GmailThread, GmailMessage } from '@/lib/types';
-import { useEmailTranslations, useSettings } from '@/lib/data';
+import { useEmailTranslations, useGmailAuth, useSettings } from '@/lib/data';
 import { 
   ArrowLeft, Reply, ReplyAll, Forward, Trash2, 
   MoreHorizontal, Star, Clock, Globe, Languages,
   Copy, Check, AlertCircle, Sparkles, ChevronDown, Loader2,
-  Paperclip, Download
+  Paperclip, Download, Mail
 } from 'lucide-react';
 import { EmailComposer } from './email-composer';
 
@@ -20,13 +20,17 @@ interface EmailDetailProps {
   thread: GmailThread;
   onBack: () => void;
   onAIReply: (thread: GmailThread) => void;
+  onThreadUpdated?: (thread: GmailThread) => void;
 }
 
-export function EmailDetail({ thread, onBack, onAIReply }: EmailDetailProps) {
+export function EmailDetail({ thread, onBack, onAIReply, onThreadUpdated }: EmailDetailProps) {
   const [expandedMessages, setExpandedMessages] = useState<Set<string>>(new Set([thread.messages[thread.messages.length - 1].id]));
   const [showComposer, setShowComposer] = useState(false);
   const [replyMode, setReplyMode] = useState<'compose' | 'ai'>('compose');
+  const [markingUnreadId, setMarkingUnreadId] = useState<string | null>(null);
+  const [messageActionError, setMessageActionError] = useState<string | null>(null);
   const { translations, addTranslation, getTranslation } = useEmailTranslations();
+  const { auth, connect } = useGmailAuth();
 
   const toggleMessage = (messageId: string) => {
     const newExpanded = new Set(expandedMessages);
@@ -36,6 +40,73 @@ export function EmailDetail({ thread, onBack, onAIReply }: EmailDetailProps) {
       newExpanded.add(messageId);
     }
     setExpandedMessages(newExpanded);
+  };
+
+  const getAccessToken = async () => {
+    if (!auth?.accessToken) throw new Error('\u8bf7\u91cd\u65b0\u8fde\u63a5 Gmail\u3002');
+    if (!auth.refreshToken || !auth.expiresAt || auth.expiresAt > Date.now() + 60_000) {
+      return auth.accessToken;
+    }
+
+    const response = await fetch('/api/auth/refresh', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ refreshToken: auth.refreshToken }),
+    });
+    const result = await response.json();
+    if (!response.ok || !result.data?.accessToken) {
+      throw new Error(result.error || 'Gmail \u6388\u6743\u5df2\u8fc7\u671f\u3002');
+    }
+
+    connect({
+      ...auth,
+      accessToken: result.data.accessToken,
+      expiresAt: Date.now() + result.data.expiresIn * 1000,
+    });
+    return result.data.accessToken as string;
+  };
+
+  const markMessageUnread = async (message: GmailMessage) => {
+    if (!message.isRead || markingUnreadId) return;
+    setMarkingUnreadId(message.id);
+    setMessageActionError(null);
+
+    try {
+      const accessToken = await getAccessToken();
+      const response = await fetch(
+        `https://gmail.googleapis.com/gmail/v1/users/me/messages/${message.id}/modify`,
+        {
+          method: 'POST',
+          headers: {
+            Authorization: `Bearer ${accessToken}`,
+            'Content-Type': 'application/json',
+          },
+          body: JSON.stringify({ addLabelIds: ['UNREAD'], removeLabelIds: [] }),
+        },
+      );
+      if (!response.ok) {
+        const result = await response.json().catch(() => ({}));
+        throw new Error(result.error?.message || '\u6807\u8bb0\u672a\u8bfb\u5931\u8d25');
+      }
+
+      const updatedThread: GmailThread = {
+        ...thread,
+        hasUnread: true,
+        labels: Array.from(new Set([...thread.labels, 'UNREAD'])),
+        messages: thread.messages.map((item) => item.id === message.id
+          ? {
+              ...item,
+              isRead: false,
+              labels: Array.from(new Set([...item.labels, 'UNREAD'])),
+            }
+          : item),
+      };
+      onThreadUpdated?.(updatedThread);
+    } catch (error) {
+      setMessageActionError(error instanceof Error ? error.message : '\u6807\u8bb0\u672a\u8bfb\u5931\u8d25');
+    } finally {
+      setMarkingUnreadId(null);
+    }
   };
 
   const formatDate = (dateStr: string) => {
@@ -197,6 +268,11 @@ export function EmailDetail({ thread, onBack, onAIReply }: EmailDetailProps) {
       </div>
 
       {/* 邮件对话 */}
+      {messageActionError && (
+        <div className="shrink-0 border-b bg-destructive/5 px-4 py-2 text-xs text-destructive">
+          {messageActionError}
+        </div>
+      )}
       <ScrollArea className="min-h-0 flex-1">
         <div className="p-4 space-y-4">
           {thread.messages.map((message, index) => {
@@ -240,6 +316,24 @@ export function EmailDetail({ thread, onBack, onAIReply }: EmailDetailProps) {
                     </div>
 
                     <div className="flex items-center gap-2 flex-shrink-0">
+                      <Button
+                        variant="ghost"
+                        size="icon"
+                        className="h-8 w-8"
+                        title={message.isRead ? '\u6807\u8bb0\u4e3a\u672a\u8bfb' : '\u5df2\u662f\u672a\u8bfb\u90ae\u4ef6'}
+                        disabled={!message.isRead || markingUnreadId === message.id}
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          markMessageUnread(message);
+                        }}
+                      >
+                        {markingUnreadId === message.id ? (
+                          <Loader2 className="h-4 w-4 animate-spin" />
+                        ) : (
+                          <Mail className={`h-4 w-4 ${message.isRead ? '' : 'text-primary'}`} />
+                        )}
+                        <span className="sr-only">{'\u6807\u8bb0\u4e3a\u672a\u8bfb'}</span>
+                      </Button>
                       {message.hasAttachments && (
                         <Badge variant="secondary" className="text-xs">有附件</Badge>
                       )}
