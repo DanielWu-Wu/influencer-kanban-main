@@ -203,8 +203,12 @@ export function EmailComposer({ thread, mode, onClose, initialMessage }: EmailCo
   };
 
   const saveToGmailDrafts = async () => {
-    const finalReply = replyContent.trim();
-    if (!finalReply) return;
+    const replyBody = replyContent.trim();
+    if (!replyBody) return;
+    const signature = settings.emailSignature?.trim();
+    const finalReply = signature && !replyBody.endsWith(signature)
+      ? `${replyBody}\n\n${signature}`
+      : replyBody;
     setSavingDraft(true);
     setAiError('');
 

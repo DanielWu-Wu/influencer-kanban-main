@@ -1,11 +1,12 @@
 'use client';
 
 import { useState } from 'react';
-import { FileText, Inbox, Mail, Send, Star } from 'lucide-react';
+import { FileText, Inbox, Mail, Send, Settings, Star } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { GmailCategory, GmailMailbox, GmailThread } from '@/lib/types';
 import { EmailDetail } from './email-detail';
 import { GmailInbox } from './gmail-inbox';
+import { GmailSignatureSettings } from './gmail-signature-settings';
 
 const MAILBOXES: Array<{
   id: GmailMailbox;
@@ -22,10 +23,12 @@ export function GmailPage() {
   const [selectedThread, setSelectedThread] = useState<GmailThread | null>(null);
   const [mailbox, setMailbox] = useState<GmailMailbox>('inbox');
   const [category, setCategory] = useState<GmailCategory>('primary');
+  const [showSettings, setShowSettings] = useState(false);
 
   const handleMailboxChange = (nextMailbox: GmailMailbox) => {
     setMailbox(nextMailbox);
     setSelectedThread(null);
+    setShowSettings(false);
   };
 
   return (
@@ -48,8 +51,21 @@ export function GmailPage() {
             </Button>
           ))}
         </nav>
+        <div className="my-3 border-t" />
+        <Button
+          variant={showSettings ? 'secondary' : 'ghost'}
+          className="h-9 w-full justify-start gap-3 px-3 font-normal"
+          onClick={() => {
+            setShowSettings(true);
+            setSelectedThread(null);
+          }}
+        >
+          <Settings className="h-4 w-4" />
+          设置
+        </Button>
       </aside>
 
+      {!showSettings && (
       <div className={`${selectedThread ? 'hidden lg:flex' : 'flex'} min-h-0 w-full flex-col overflow-hidden border-r bg-card lg:w-[420px]`}>
         <div className="flex shrink-0 gap-1 overflow-x-auto border-b p-2 md:hidden">
           {MAILBOXES.map(({ id, label, icon: Icon }) => (
@@ -64,6 +80,18 @@ export function GmailPage() {
               {label}
             </Button>
           ))}
+          <Button
+            variant={showSettings ? 'secondary' : 'ghost'}
+            size="sm"
+            className="shrink-0 gap-2"
+            onClick={() => {
+              setShowSettings(true);
+              setSelectedThread(null);
+            }}
+          >
+            <Settings className="h-4 w-4" />
+            设置
+          </Button>
         </div>
         <GmailInbox
           onSelectThread={setSelectedThread}
@@ -77,9 +105,12 @@ export function GmailPage() {
           }}
         />
       </div>
+      )}
 
-      <div className={`min-h-0 min-w-0 flex-1 ${selectedThread ? 'flex' : 'hidden lg:flex'} flex-col overflow-hidden bg-background`}>
-        {selectedThread ? (
+      <div className={`min-h-0 min-w-0 flex-1 ${selectedThread || showSettings ? 'flex' : 'hidden lg:flex'} flex-col overflow-hidden bg-background`}>
+        {showSettings ? (
+          <GmailSignatureSettings onBack={() => setShowSettings(false)} />
+        ) : selectedThread ? (
           <EmailDetail
             thread={selectedThread}
             onBack={() => setSelectedThread(null)}

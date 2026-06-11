@@ -41,6 +41,7 @@ export interface AppSettings {
   feishuUrl?: string;
   brandName?: string;
   senderName?: string;
+  emailSignature?: string;
   gmailClientId?: string;
   gmailClientSecret?: string;
   translatePrompt?: string;
