@@ -83,7 +83,6 @@ export function GmailPage() {
           <EmailDetail
             thread={selectedThread}
             onBack={() => setSelectedThread(null)}
-            onAIReply={setSelectedThread}
             onThreadUpdated={setSelectedThread}
           />
         ) : (

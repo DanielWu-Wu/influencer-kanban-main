@@ -7,21 +7,20 @@ import { Label } from '@/components/ui/label';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
 import { Badge } from '@/components/ui/badge';
 import { Separator } from '@/components/ui/separator';
-import { useSettings } from '@/lib/data';
+import { useGmailAuth, useSettings } from '@/lib/data';
 import {
   Settings, Database, Mail, FileSpreadsheet, Zap,
   CheckCircle2, AlertTriangle, ExternalLink,
   Plug, RefreshCw, Trash2, Save, HelpCircle, Link2, Cpu,
-  ChevronDown, ChevronUp, Info, User, Clock, Heart
+  ChevronDown, ChevronUp, Info, User, Clock, Heart, LogOut
 } from 'lucide-react';
 
 export function SettingsPanel() {
   const { settings, updateSettings } = useSettings();
+  const { auth: gmailAuth, disconnect: disconnectGmail } = useGmailAuth();
   const [feishuUrl, setFeishuUrl] = useState(settings.feishuUrl || '');
   const [brandName, setBrandName] = useState(settings.brandName || '');
   const [senderName, setSenderName] = useState(settings.senderName || '');
-  const [gmailClientId, setGmailClientId] = useState(settings.gmailClientId || '');
-  const [gmailClientSecret, setGmailClientSecret] = useState(settings.gmailClientSecret || '');
   const [modelProvider, setModelProvider] = useState<'builtin' | 'custom'>(settings.modelProvider || 'builtin');
   const [customApiUrl, setCustomApiUrl] = useState(settings.customApiUrl || '');
   const [customApiKey, setCustomApiKey] = useState(settings.customApiKey || '');
@@ -40,8 +39,6 @@ export function SettingsPanel() {
       feishuUrl,
       brandName,
       senderName,
-      gmailClientId,
-      gmailClientSecret,
       modelProvider,
       customApiUrl,
       customApiKey,
@@ -95,26 +92,7 @@ export function SettingsPanel() {
   };
 
   const handleConnectGmail = () => {
-    updateSettings({ gmailClientId, gmailClientSecret });
-
-    const redirectUri = `${window.location.origin}/api/auth/callback`;
-    const scopes = [
-      'https://www.googleapis.com/auth/gmail.readonly',
-      'https://www.googleapis.com/auth/gmail.compose',
-      'https://www.googleapis.com/auth/gmail.modify',
-    ].join(' ');
-
-    const params = new URLSearchParams({
-      client_id: gmailClientId,
-      redirect_uri: redirectUri,
-      response_type: 'code',
-      scope: scopes,
-      access_type: 'offline',
-      prompt: 'consent',
-      state: window.location.origin,
-    });
-
-    window.location.href = `https://accounts.google.com/o/oauth2/v2/auth?${params.toString()}`;
+    window.location.href = '/api/auth/google';
   };
 
   return (
@@ -257,8 +235,8 @@ export function SettingsPanel() {
                   </div>
                 </div>
                 <div className="flex items-center gap-2">
-                  {settings.gmailClientId && (
-                    <Badge variant="secondary" className="text-xs">已配置</Badge>
+                  {gmailAuth?.isConnected && (
+                    <Badge variant="secondary" className="text-xs">已连接</Badge>
                   )}
                   {expandedSection === 'gmail' ? (
                     <ChevronUp className="w-4 h-4 text-muted-foreground" />
@@ -279,62 +257,50 @@ export function SettingsPanel() {
                 </Badge>
               </div>
 
-              <div className="rounded-lg bg-red-500/5 p-3 space-y-2">
-                <h4 className="text-xs font-medium text-foreground flex items-center gap-1.5">
-                  <AlertTriangle className="w-3.5 h-3.5 text-red-500" />
-                  配置步骤
-                </h4>
-                <ol className="text-xs text-muted-foreground space-y-1 list-decimal list-inside">
-                  <li>Google Cloud Console 创建 OAuth 2.0 客户端</li>
-                  <li>启用 Gmail API</li>
-                  <li>配置授权重定向 URI（见下方）</li>
-                  <li>获取 Client ID 和 Client Secret</li>
-                </ol>
-                <div className="mt-2 p-2 bg-background rounded text-xs text-muted-foreground">
-                  <span className="font-medium">重定向 URI：</span>
-                  <code className="block mt-1 break-all select-all bg-muted/50 p-1 rounded">
-                    {typeof window !== 'undefined' ? `${window.location.origin}/api/auth/callback` : ''}
-                  </code>
+              {gmailAuth?.isConnected ? (
+                <div className="flex items-center justify-between gap-4 rounded-lg border border-green-200 bg-green-50 p-4">
+                  <div className="min-w-0">
+                    <div className="flex items-center gap-2 text-sm font-medium text-green-800">
+                      <CheckCircle2 className="h-4 w-4" />
+                      Gmail 已连接
+                    </div>
+                    <p className="mt-1 truncate text-xs text-green-700">
+                      {gmailAuth.email || 'Google 账号'}
+                    </p>
+                  </div>
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    className="shrink-0 gap-1.5"
+                    onClick={disconnectGmail}
+                  >
+                    <LogOut className="h-4 w-4" />
+                    断开
+                  </Button>
                 </div>
-                <Button variant="outline" size="sm" className="mt-2 border-red-200 text-red-600 hover:bg-red-50 h-7 text-xs" asChild>
-                  <a href="https://console.cloud.google.com/" target="_blank" rel="noopener noreferrer">
-                    <ExternalLink className="w-3 h-3 mr-1" />
-                    打开 Google Cloud Console
-                  </a>
-                </Button>
-              </div>
+              ) : (
+                <div className="space-y-3 rounded-lg border bg-muted/30 p-4">
+                  <div>
+                    <p className="text-sm font-medium">授权你的 Gmail 账号</p>
+                    <p className="mt-1 text-xs leading-5 text-muted-foreground">
+                      点击后跳转至 Google 官方授权页面。应用不会要求你填写或保存 Google Client Secret。
+                    </p>
+                  </div>
+                  <div className="rounded-md bg-background p-3 text-xs text-muted-foreground">
+                    授权后可读取和分类邮件、标记已读或未读、标星，以及保存 AI 回复草稿。
+                  </div>
+                  <Button
+                    className="w-full gap-2 bg-red-500 hover:bg-red-600"
+                    onClick={handleConnectGmail}
+                  >
+                    <Plug className="h-4 w-4" />
+                    一键连接 Gmail
+                  </Button>
+                </div>
+              )}
 
-              <div className="space-y-3">
-                <div className="space-y-2">
-                  <Label htmlFor="gmail-client-id" className="text-xs">Google Client ID</Label>
-                  <Input
-                    id="gmail-client-id"
-                    type="text"
-                    placeholder="xxxxx.apps.googleusercontent.com"
-                    value={gmailClientId}
-                    onChange={(e) => setGmailClientId(e.target.value)}
-                    className="text-sm"
-                  />
-                </div>
-                <div className="space-y-2">
-                  <Label htmlFor="gmail-client-secret" className="text-xs">Google Client Secret</Label>
-                  <Input
-                    id="gmail-client-secret"
-                    type="password"
-                    placeholder="GOCSPX-xxxxxxxxxx"
-                    value={gmailClientSecret}
-                    onChange={(e) => setGmailClientSecret(e.target.value)}
-                    className="text-sm"
-                  />
-                </div>
-                <Button
-                  className="w-full"
-                  disabled={!gmailClientId || !gmailClientSecret}
-                  onClick={handleConnectGmail}
-                >
-                  <Plug className="w-4 h-4 mr-1" />
-                  连接 Gmail
-                </Button>
+              <div className="rounded-lg bg-muted/50 p-3 text-xs text-muted-foreground">
+                OAuth 密钥由项目的 Vercel 环境变量安全管理，无需在网页中重复填写。
               </div>
             </CardContent>
           )}

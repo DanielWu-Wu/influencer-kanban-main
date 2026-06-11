@@ -212,6 +212,8 @@ export interface GmailMessage {
   isRead: boolean;
   labels: string[];
   hasAttachments: boolean;
+  rfcMessageId?: string;
+  references?: string;
 }
 
 export interface GmailAttachment {

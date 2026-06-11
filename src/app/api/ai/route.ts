@@ -12,6 +12,13 @@ type ChatOptions = {
   temperature?: number;
 };
 
+type ThreadMessage = {
+  from?: string;
+  to?: string;
+  date?: string;
+  body?: string;
+};
+
 function resolveChatOptions(options: ChatOptions): Required<ChatOptions> {
   const apiKey =
     options.apiKey ||
@@ -21,7 +28,7 @@ function resolveChatOptions(options: ChatOptions): Required<ChatOptions> {
 
   if (!apiKey) {
     throw new Error(
-      '缺少 AI API Key。请在设置中配置自定义 OpenAI 兼容 API，或在环境变量中设置 AI_API_KEY / DEEPSEEK_API_KEY / OPENAI_API_KEY。',
+      '缺少 AI API Key。请在 Vercel 环境变量中设置 AI_API_KEY、DEEPSEEK_API_KEY 或 OPENAI_API_KEY。',
     );
   }
 
@@ -37,7 +44,7 @@ function resolveChatOptions(options: ChatOptions): Required<ChatOptions> {
       process.env.AI_MODEL ||
       process.env.DEEPSEEK_MODEL ||
       'deepseek-chat',
-    temperature: options.temperature ?? 0.7,
+    temperature: options.temperature ?? 0.4,
   };
 }
 
@@ -46,7 +53,6 @@ async function invokeOpenAICompatibleApi(
   options: ChatOptions,
 ): Promise<string> {
   const { apiUrl, apiKey, modelName, temperature } = resolveChatOptions(options);
-
   const response = await fetch(apiUrl, {
     method: 'POST',
     headers: {
@@ -67,115 +73,143 @@ async function invokeOpenAICompatibleApi(
 
   const data = await response.json();
   const content = data?.choices?.[0]?.message?.content ?? data?.content;
-
-  if (typeof content !== 'string') {
-    throw new Error('无法解析 AI API 返回的数据。');
-  }
-
+  if (typeof content !== 'string') throw new Error('无法解析 AI API 返回的数据。');
   return content;
+}
+
+function parseJson(content: string) {
+  const jsonMatch = content.trim().match(/\{[\s\S]*\}/);
+  if (!jsonMatch) throw new Error('AI 未返回有效 JSON。');
+  return JSON.parse(jsonMatch[0]);
+}
+
+function buildConversation(messages: ThreadMessage[]) {
+  const selectedMessages = messages.slice(-40);
+  const charactersPerMessage = Math.max(
+    1_500,
+    Math.min(6_000, Math.floor(60_000 / Math.max(selectedMessages.length, 1))),
+  );
+
+  return selectedMessages
+    .map((message, index) => {
+      const body = String(message.body || '').slice(0, charactersPerMessage);
+      return `--- 邮件 ${index + 1} ---
+时间：${message.date || '未知'}
+发件人：${message.from || '未知'}
+收件人：${message.to || '未知'}
+正文：
+${body}`;
+    })
+    .join('\n\n');
+}
+
+function getModelOptions(body: Record<string, unknown>, temperature: number): ChatOptions {
+  return {
+    apiUrl: body.modelProvider === 'custom' ? String(body.customApiUrl || '') : undefined,
+    apiKey: body.modelProvider === 'custom' ? String(body.customApiKey || '') : undefined,
+    modelName: body.modelProvider === 'custom' ? String(body.customModelName || '') : undefined,
+    temperature,
+  };
 }
 
 export async function POST(request: NextRequest) {
   try {
-    const {
-      threadSubject,
-      lastMessage,
-      userIdeas,
-      targetLang = 'en',
-      customPrompt,
-      modelProvider,
-      customApiUrl,
-      customApiKey,
-      customModelName,
-    } = await request.json();
+    const body = await request.json() as Record<string, unknown>;
+    const action = String(body.action || 'draft');
+    const threadSubject = String(body.threadSubject || '无主题');
+    const threadMessages = Array.isArray(body.threadMessages)
+      ? body.threadMessages as ThreadMessage[]
+      : [];
 
-    if (!lastMessage || !userIdeas) {
-      return NextResponse.json({ error: '缺少必要参数。' }, { status: 400 });
-    }
+    if (action === 'analyze') {
+      if (threadMessages.length === 0) {
+        return NextResponse.json({ error: '缺少完整邮件对话。' }, { status: 400 });
+      }
 
-    const langNames: Record<string, string> = {
-      en: '英语',
-      zh: '中文',
-      ja: '日语',
-      de: '德语',
-      fr: '法语',
-      es: '西班牙语',
-      it: '意大利语',
-      ru: '俄语',
-      ar: '阿拉伯语',
-      pt: '葡萄牙语',
-      nl: '荷兰语',
-      sv: '瑞典语',
-      pl: '波兰语',
-      da: '丹麦语',
-      no: '挪威语',
-      fi: '芬兰语',
-      cs: '捷克语',
-      el: '希腊语',
-      tr: '土耳其语',
-    };
+      const systemPrompt = `你是一位资深的 YouTube 红人合作与商务谈判顾问。
+请分析品牌方与红人的完整邮件往来，并结合以下合作流程判断当前状态：
+红人建档 → 待联系 → 已联系 → 有意向 → 谈价格/方式 → 已确认 → 已寄样 → 拍摄中 → 已发布 → 复盘/归档。
 
-    const targetLangName = langNames[targetLang] || '英语';
-    const defaultPrompt = `你是一位专业的跨境电商红人推广邮件助手。请根据用户提供的上下文和回复想法，撰写一封专业、友好、适合商务沟通的${targetLangName}邮件，并提供中文翻译。
-
-请严格返回 JSON，不要添加额外说明：
+请识别对方最近一封实质邮件的语言。language 必须返回 ISO 639-1 代码，例如 en、nl、es、de、fr、it、pt、ja。
+请只返回以下 JSON，不要添加其他文字：
 {
-  "suggestedReply": "使用${targetLangName}撰写的邮件回复",
-  "translatedReply": "上述邮件的中文翻译",
-  "tone": "friendly",
-  "keyPoints": ["要点1", "要点2"]
+  "latestSummary": "最新邮件的中文意思梗概",
+  "creatorIntent": "红人的真实意图和核心诉求",
+  "stage": "当前合作阶段",
+  "attitude": "红人的态度、积极程度和情绪",
+  "confirmedItems": ["已经确认的事项"],
+  "openQuestions": ["尚待确认或解决的问题"],
+  "risks": ["潜在风险或需要留意的地方"],
+  "replyStrategy": ["建议回复方向或谈判策略"],
+  "language": "en",
+  "languageName": "英语"
 }`;
 
-    const systemPrompt = customPrompt
-      ? customPrompt.replace(/{targetLangName}/g, targetLangName)
-      : defaultPrompt;
+      const userPrompt = `邮件主题：${threadSubject}
 
-    const userPrompt = `邮件主题：${threadSubject || '无主题'}
+完整邮件往来（按时间顺序）：
+${buildConversation(threadMessages)}`;
 
-对方最近一封邮件内容：
-${lastMessage}
-
-我的回复想法（中文）：
-${userIdeas}
-
-请根据以上信息撰写邮件，并附上中文翻译。`;
-
-    const messages: ChatMessage[] = [
-      { role: 'system', content: systemPrompt },
-      { role: 'user', content: userPrompt },
-    ];
-
-    const content = await invokeOpenAICompatibleApi(messages, {
-      apiUrl: modelProvider === 'custom' ? customApiUrl : undefined,
-      apiKey: modelProvider === 'custom' ? customApiKey : undefined,
-      modelName: modelProvider === 'custom' ? customModelName : undefined,
-      temperature: 0.7,
-    });
-
-    let result;
-    try {
-      const jsonMatch = content.trim().match(/\{[\s\S]*\}/);
-      if (!jsonMatch) {
-        throw new Error('AI 未返回 JSON。');
-      }
-      result = JSON.parse(jsonMatch[0]);
-    } catch {
-      result = {
-        suggestedReply: content,
-        translatedReply: 'AI 返回格式不是标准 JSON，请检查原文。',
-        tone: 'friendly',
-        keyPoints: String(userIdeas)
-          .split(/[。！？；\n]/)
-          .map((point) => point.trim())
-          .filter(Boolean),
-      };
+      const result = parseJson(await invokeOpenAICompatibleApi(
+        [
+          { role: 'system', content: systemPrompt },
+          { role: 'user', content: userPrompt },
+        ],
+        getModelOptions(body, 0.25),
+      ));
+      return NextResponse.json({ success: true, data: result });
     }
 
+    const userIdeas = String(body.userIdeas || '').trim();
+    const targetLang = String(body.targetLang || 'en');
+    const targetLangName = String(body.targetLangName || targetLang);
+    const analysis = body.analysis || {};
+
+    if (!userIdeas || threadMessages.length === 0) {
+      return NextResponse.json({ error: '缺少完整对话或你的回复想法。' }, { status: 400 });
+    }
+
+    const systemPrompt = `你是一位资深 YouTube 红人合作邮件与谈判助手。
+请结合完整邮件历史、合作分析和用户的中文回复想法，起草一封${targetLangName}商务回复。
+要求：
+1. 使用对方当前沟通语言，不要混入中文。
+2. 保持专业、自然、友好，不虚构价格、日期、地址或承诺。
+3. 用户没有明确说明的关键商务条件，应使用询问或保留表达。
+4. 邮件正文不要重复主题，不使用 Markdown。
+5. 同时提供准确的中文对照。
+
+只返回以下 JSON：
+{
+  "suggestedReply": "使用${targetLangName}撰写的完整回复邮件",
+  "translatedReply": "中文对照",
+  "tone": "friendly",
+  "keyPoints": ["本次回复落实的要点"]
+}`;
+
+    const userPrompt = `邮件主题：${threadSubject}
+
+完整邮件往来：
+${buildConversation(threadMessages)}
+
+AI 对合作状态的分析：
+${JSON.stringify(analysis)}
+
+我的回复想法和判断（中文）：
+${userIdeas}
+
+目标语言代码：${targetLang}`;
+
+    const result = parseJson(await invokeOpenAICompatibleApi(
+      [
+        { role: 'system', content: systemPrompt },
+        { role: 'user', content: userPrompt },
+      ],
+      getModelOptions(body, 0.55),
+    ));
     return NextResponse.json({ success: true, data: result });
   } catch (error) {
-    console.error('AI 邮件生成失败:', error);
-    const errorMessage =
-      error instanceof Error ? error.message : 'AI 邮件生成失败，请稍后重试。';
+    console.error('AI 邮件处理失败:', error);
+    const errorMessage = error instanceof Error ? error.message : 'AI 邮件处理失败，请稍后重试。';
     return NextResponse.json({ error: errorMessage }, { status: 500 });
   }
 }

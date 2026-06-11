@@ -4,14 +4,11 @@ import { useState } from 'react';
 import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
 import { ScrollArea } from '@/components/ui/scroll-area';
-import { Separator } from '@/components/ui/separator';
-import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { GmailAttachment, GmailThread, GmailMessage } from '@/lib/types';
 import { useEmailTranslations, useGmailAuth, useSettings } from '@/lib/data';
 import { 
-  ArrowLeft, Reply, ReplyAll, Forward, Trash2, 
-  MoreHorizontal, Star, Clock, Globe, Languages,
-  Copy, Check, AlertCircle, Sparkles, ChevronDown, Loader2,
+  ArrowLeft, Reply, MoreHorizontal, Globe, Languages,
+  Copy, Sparkles, ChevronDown, Loader2,
   Paperclip, Download, Mail
 } from 'lucide-react';
 import { EmailComposer } from './email-composer';
@@ -19,17 +16,16 @@ import { EmailComposer } from './email-composer';
 interface EmailDetailProps {
   thread: GmailThread;
   onBack: () => void;
-  onAIReply: (thread: GmailThread) => void;
   onThreadUpdated?: (thread: GmailThread) => void;
 }
 
-export function EmailDetail({ thread, onBack, onAIReply, onThreadUpdated }: EmailDetailProps) {
+export function EmailDetail({ thread, onBack, onThreadUpdated }: EmailDetailProps) {
   const [expandedMessages, setExpandedMessages] = useState<Set<string>>(new Set([thread.messages[thread.messages.length - 1].id]));
   const [showComposer, setShowComposer] = useState(false);
   const [replyMode, setReplyMode] = useState<'compose' | 'ai'>('compose');
   const [markingUnreadId, setMarkingUnreadId] = useState<string | null>(null);
   const [messageActionError, setMessageActionError] = useState<string | null>(null);
-  const { translations, addTranslation, getTranslation } = useEmailTranslations();
+  const { addTranslation, getTranslation } = useEmailTranslations();
   const { auth, connect } = useGmailAuth();
 
   const toggleMessage = (messageId: string) => {
@@ -129,10 +125,25 @@ export function EmailDetail({ thread, onBack, onAIReply, onThreadUpdated }: Emai
   };
 
   const [translatingIds, setTranslatingIds] = useState<Set<string>>(new Set());
+  const [showingTranslationIds, setShowingTranslationIds] = useState<Set<string>>(new Set());
   const [translateErrors, setTranslateErrors] = useState<Record<string, string>>({});
   const { settings } = useSettings();
 
   const handleTranslate = async (message: GmailMessage) => {
+    if (showingTranslationIds.has(message.id)) {
+      setShowingTranslationIds((current) => {
+        const next = new Set(current);
+        next.delete(message.id);
+        return next;
+      });
+      return;
+    }
+
+    if (getTranslation(message.id)) {
+      setShowingTranslationIds((current) => new Set(current).add(message.id));
+      return;
+    }
+
     setTranslatingIds(prev => new Set(prev).add(message.id));
     setTranslateErrors(prev => { const next = { ...prev }; delete next[message.id]; return next; });
     
@@ -164,6 +175,7 @@ export function EmailDetail({ thread, onBack, onAIReply, onThreadUpdated }: Emai
         sourceLang: result.data.sourceLang,
         targetLang: 'zh',
       });
+      setShowingTranslationIds((current) => new Set(current).add(message.id));
     } catch (error) {
       const msg = error instanceof Error ? error.message : '翻译失败，请稍后重试';
       setTranslateErrors(prev => ({ ...prev, [message.id]: msg }));
@@ -255,7 +267,16 @@ export function EmailDetail({ thread, onBack, onAIReply, onThreadUpdated }: Emai
           </div>
         </div>
         <div className="flex items-center gap-1">
-          <Button variant="ghost" size="icon" className="h-8 w-8" onClick={() => onAIReply(thread)}>
+          <Button
+            variant="ghost"
+            size="icon"
+            className="h-8 w-8"
+            title="AI 辅助回复"
+            onClick={() => {
+              setReplyMode('ai');
+              setShowComposer(true);
+            }}
+          >
             <Sparkles className="w-4 h-4 text-primary" />
           </Button>
           <Button variant="ghost" size="icon" className="h-8 w-8">
@@ -345,8 +366,16 @@ export function EmailDetail({ thread, onBack, onAIReply, onThreadUpdated }: Emai
                           e.stopPropagation();
                           handleTranslate(message);
                         }}
+                        disabled={translatingIds.has(message.id)}
+                        title={showingTranslationIds.has(message.id) ? '显示原文' : '翻译成中文'}
                       >
-                        <Globe className="w-4 h-4" />
+                        {translatingIds.has(message.id) ? (
+                          <Loader2 className="h-4 w-4 animate-spin" />
+                        ) : showingTranslationIds.has(message.id) ? (
+                          <Languages className="h-4 w-4 text-primary" />
+                        ) : (
+                          <Globe className="h-4 w-4" />
+                        )}
                       </Button>
                       <ChevronDown className={`w-4 h-4 transition-transform ${isExpanded ? 'rotate-180' : ''}`} />
                     </div>
@@ -355,43 +384,30 @@ export function EmailDetail({ thread, onBack, onAIReply, onThreadUpdated }: Emai
                   {/* 展开的邮件内容 */}
                   {isExpanded && (
                     <div className="mt-4 space-y-4" onClick={(e) => e.stopPropagation()}>
-                      <Tabs defaultValue="original" className="w-full">
-                        <TabsList className="h-8">
-                          <TabsTrigger value="original" className="text-xs h-7 px-3">
-                            原文
-                          </TabsTrigger>
-                          {translation && (
-                            <TabsTrigger value="translated" className="text-xs h-7 px-3">
-                              中文
-                            </TabsTrigger>
-                          )}
-                        </TabsList>
-                        
-                        <TabsContent value="original" className="mt-3">
-                          {message.htmlBody ? (
-                            <div
-                              className="email-html-content max-w-full overflow-hidden rounded-xl bg-white p-4 text-sm"
-                              dangerouslySetInnerHTML={{ __html: sanitizeEmailHtml(message.htmlBody) }}
-                            />
-                          ) : (
-                            <div className="prose prose-sm max-w-none">
-                              <pre className="max-w-full whitespace-pre-wrap break-words font-sans text-sm bg-accent/30 rounded-xl p-4">
-                                {message.body}
-                              </pre>
-                            </div>
-                          )}
-                        </TabsContent>
+                      <div className="flex items-center justify-between">
+                        <Badge variant="outline" className="text-xs">
+                          {showingTranslationIds.has(message.id) ? '中文翻译' : '原文'}
+                        </Badge>
+                      </div>
 
-                        {translation && (
-                          <TabsContent value="translated" className="mt-3">
-                            <div className="prose prose-sm max-w-none">
-                              <pre className="max-w-full whitespace-pre-wrap break-words font-sans text-sm bg-blue-50 rounded-xl p-4">
-                                {translation.translatedText}
-                              </pre>
-                            </div>
-                          </TabsContent>
-                        )}
-                      </Tabs>
+                      {showingTranslationIds.has(message.id) && translation ? (
+                        <div className="prose prose-sm max-w-none">
+                          <pre className="max-w-full whitespace-pre-wrap break-words rounded-xl bg-blue-50 p-4 font-sans text-sm">
+                            {translation.translatedText}
+                          </pre>
+                        </div>
+                      ) : message.htmlBody ? (
+                        <div
+                          className="email-html-content max-w-full overflow-hidden rounded-xl bg-white p-4 text-sm"
+                          dangerouslySetInnerHTML={{ __html: sanitizeEmailHtml(message.htmlBody) }}
+                        />
+                      ) : (
+                        <div className="prose prose-sm max-w-none">
+                          <pre className="max-w-full whitespace-pre-wrap break-words rounded-xl bg-accent/30 p-4 font-sans text-sm">
+                            {message.body}
+                          </pre>
+                        </div>
+                      )}
 
                       {visibleAttachments.length > 0 && (
                         <AttachmentList attachments={visibleAttachments} />
@@ -408,27 +424,25 @@ export function EmailDetail({ thread, onBack, onAIReply, onThreadUpdated }: Emai
                           <Copy className="w-3 h-3 mr-1" />
                           复制
                         </Button>
-                        {!translation && (
-                          <Button 
-                            size="sm" 
-                            variant="outline" 
-                            className="h-8"
-                            onClick={() => handleTranslate(message)}
-                            disabled={translatingIds.has(message.id)}
-                          >
-                            {translatingIds.has(message.id) ? (
-                              <>
-                                <Loader2 className="w-3 h-3 mr-1 animate-spin" />
-                                翻译中...
-                              </>
-                            ) : (
-                              <>
-                                <Languages className="w-3 h-3 mr-1" />
-                                翻译
-                              </>
-                            )}
-                          </Button>
-                        )}
+                        <Button
+                          size="sm"
+                          variant="outline"
+                          className="h-8"
+                          onClick={() => handleTranslate(message)}
+                          disabled={translatingIds.has(message.id)}
+                        >
+                          {translatingIds.has(message.id) ? (
+                            <>
+                              <Loader2 className="mr-1 h-3 w-3 animate-spin" />
+                              翻译中...
+                            </>
+                          ) : (
+                            <>
+                              <Languages className="mr-1 h-3 w-3" />
+                              {showingTranslationIds.has(message.id) ? '恢复原文' : '翻译成中文'}
+                            </>
+                          )}
+                        </Button>
                         {translateErrors[message.id] && (
                           <span className="text-xs text-destructive">{translateErrors[message.id]}</span>
                         )}
@@ -443,7 +457,7 @@ export function EmailDetail({ thread, onBack, onAIReply, onThreadUpdated }: Emai
       </ScrollArea>
 
       {/* 底部回复区域 */}
-      <div className="border-t bg-background p-4">
+      <div className={`${showComposer ? 'max-h-[72%] overflow-y-auto' : ''} shrink-0 border-t bg-background p-4`}>
         {!showComposer ? (
           <div className="flex items-center justify-center gap-3">
             <Button 

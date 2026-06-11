@@ -205,6 +205,8 @@ async function parseGmailThread(
       isRead: !labels.includes('UNREAD'),
       labels,
       hasAttachments: attachments.some((attachment) => !attachment.inline),
+      rfcMessageId: getHeader(headers, 'Message-ID'),
+      references: getHeader(headers, 'References'),
     };
   }));
 

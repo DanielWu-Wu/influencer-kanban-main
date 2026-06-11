@@ -105,7 +105,16 @@ export async function GET(request: NextRequest) {
 export async function POST(request: NextRequest) {
   try {
     const body = await request.json();
-    const { action, accessToken, to, subject, body: emailBody, threadId } = body;
+    const {
+      action,
+      accessToken,
+      to,
+      subject,
+      body: emailBody,
+      threadId,
+      inReplyTo,
+      references,
+    } = body;
 
     if (!accessToken) {
       return NextResponse.json({ error: '缺少 access token' }, { status: 401 });
@@ -121,6 +130,8 @@ export async function POST(request: NextRequest) {
       const rawEmail = [
         `To: ${to}`,
         `Subject: =?utf-8?B?${Buffer.from(subject).toString('base64')}?=`,
+        ...(inReplyTo ? [`In-Reply-To: ${inReplyTo}`] : []),
+        ...(references ? [`References: ${references}`] : []),
         'Content-Type: text/plain; charset=utf-8',
         'MIME-Version: 1.0',
         '',
