@@ -35,6 +35,7 @@ interface GmailInboxProps {
   selectedThreadId?: string;
   mailbox: GmailMailbox;
   category: GmailCategory;
+  refreshKey?: number;
 }
 
 const MAILBOX_LABELS: Record<GmailMailbox, string> = {
@@ -251,6 +252,7 @@ export function GmailInbox({
   selectedThreadId,
   mailbox,
   category,
+  refreshKey = 0,
 }: GmailInboxProps) {
   const { auth, connect, disconnect } = useGmailAuth();
   const [threads, setThreads] = useState<GmailThread[]>([]);
@@ -393,7 +395,7 @@ export function GmailInbox({
 
   useEffect(() => {
     if (auth?.isConnected && auth.accessToken) fetchThreads();
-  }, [auth?.isConnected, auth?.accessToken, fetchThreads]);
+  }, [auth?.isConnected, auth?.accessToken, fetchThreads, refreshKey]);
 
   const modifyThread = async (
     thread: GmailThread,

@@ -19,7 +19,15 @@ import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { Textarea } from '@/components/ui/textarea';
 import { useEmailAISuggestions, useEmailDrafts, useGmailAuth, useSettings } from '@/lib/data';
+import {
+  appendEmailSignature,
+  buildRichRawEmail,
+  emailHtmlToText,
+  isEmailContentEmpty,
+  toBase64Url,
+} from '@/lib/email-content';
 import { GmailThread } from '@/lib/types';
+import { RichEmailEditor } from './rich-email-editor';
 
 interface EmailComposerProps {
   thread: GmailThread;
@@ -34,6 +42,12 @@ type CollaborationAnalysis = {
   creatorIntent: string;
   stage: string;
   attitude: string;
+  communicationStyle?: string;
+  currentEmotion?: string;
+  statedPosition?: string;
+  coreInterests?: string;
+  communicationRisks?: string[];
+  leverageOptions?: string[];
   confirmedItems: string[];
   openQuestions: string[];
   risks: string[];
@@ -88,95 +102,6 @@ function buildThreadMessages(thread: GmailThread) {
     date: message.date,
     body: message.body,
   }));
-}
-
-function encodeUtf8Base64(value: string) {
-  const bytes = new TextEncoder().encode(value);
-  let binary = '';
-  const chunkSize = 32_768;
-  for (let index = 0; index < bytes.length; index += chunkSize) {
-    binary += String.fromCharCode(...bytes.subarray(index, index + chunkSize));
-  }
-  return btoa(binary);
-}
-
-function arrayBufferToBase64(buffer: ArrayBuffer) {
-  const bytes = new Uint8Array(buffer);
-  let binary = '';
-  const chunkSize = 32_768;
-  for (let index = 0; index < bytes.length; index += chunkSize) {
-    binary += String.fromCharCode(...bytes.subarray(index, index + chunkSize));
-  }
-  return btoa(binary);
-}
-
-function wrapBase64(value: string) {
-  return value.match(/.{1,76}/g)?.join('\r\n') || '';
-}
-
-async function buildRawEmail({
-  to,
-  subject,
-  body,
-  inReplyTo,
-  references,
-  attachments,
-}: {
-  to: string;
-  subject: string;
-  body: string;
-  inReplyTo?: string;
-  references?: string;
-  attachments: File[];
-}) {
-  const headers = [
-    `To: ${to}`,
-    `Subject: =?utf-8?B?${encodeUtf8Base64(subject)}?=`,
-    ...(inReplyTo ? [`In-Reply-To: ${inReplyTo}`] : []),
-    ...(references ? [`References: ${references}`] : []),
-    'MIME-Version: 1.0',
-  ];
-
-  if (attachments.length === 0) {
-    return [
-      ...headers,
-      'Content-Type: text/plain; charset=utf-8',
-      'Content-Transfer-Encoding: base64',
-      '',
-      wrapBase64(encodeUtf8Base64(body)),
-    ].join('\r\n');
-  }
-
-  const boundary = `influencer-kanban-${crypto.randomUUID()}`;
-  const parts = [
-    ...headers,
-    `Content-Type: multipart/mixed; boundary="${boundary}"`,
-    '',
-    `--${boundary}`,
-    'Content-Type: text/plain; charset=utf-8',
-    'Content-Transfer-Encoding: base64',
-    '',
-    wrapBase64(encodeUtf8Base64(body)),
-  ];
-
-  for (const file of attachments) {
-    const encodedName = encodeUtf8Base64(file.name.replace(/[\r\n]/g, ' '));
-    parts.push(
-      `--${boundary}`,
-      `Content-Type: ${file.type || 'application/octet-stream'}; name="=?utf-8?B?${encodedName}?="`,
-      `Content-Disposition: attachment; filename="=?utf-8?B?${encodedName}?="`,
-      'Content-Transfer-Encoding: base64',
-      '',
-      wrapBase64(arrayBufferToBase64(await file.arrayBuffer())),
-    );
-  }
-
-  parts.push(`--${boundary}--`, '');
-  return parts.join('\r\n');
-}
-
-function toBase64Url(value: string) {
-  return btoa(value).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
 }
 
 export function EmailComposer({
@@ -356,21 +281,17 @@ export function EmailComposer({
   };
 
   const createOutgoingEmail = async () => {
-    const replyBody = replyContent.trim();
-    if (!replyBody) throw new Error('请先填写回复内容。');
-    const signature = settings.emailSignature?.trim();
-    const finalReply = signature && !replyBody.endsWith(signature)
-      ? `${replyBody}\n\n${signature}`
-      : replyBody;
+    if (isEmailContentEmpty(replyContent)) throw new Error('请先填写回复内容。');
+    const finalReply = appendEmailSignature(replyContent, settings.emailSignature);
     const accessToken = await getAccessToken();
     const references = [externalMessage.references, externalMessage.rfcMessageId]
       .filter(Boolean)
       .join(' ');
     const subject = /^re:/i.test(thread.subject) ? thread.subject : `Re: ${thread.subject}`;
-    const rawEmail = await buildRawEmail({
+    const rawEmail = await buildRichRawEmail({
       to: extractEmail(externalMessage.from),
       subject,
-      body: finalReply,
+      htmlBody: finalReply,
       inReplyTo: externalMessage.rfcMessageId,
       references,
       attachments,
@@ -405,7 +326,7 @@ export function EmailComposer({
       addDraft({
         to: extractEmail(externalMessage.from),
         subject,
-        body: finalReply,
+        body: emailHtmlToText(finalReply),
       });
       onDraftSaved?.(finalReply);
       setCompletion('draft');
@@ -417,7 +338,7 @@ export function EmailComposer({
   };
 
   const sendEmail = async () => {
-    if (!replyContent.trim()) return;
+    if (isEmailContentEmpty(replyContent)) return;
     const recipient = extractEmail(externalMessage.from);
     const confirmed = window.confirm(
       `确定要直接发送给 ${recipient} 吗？发送后将无法撤回。`,
@@ -595,10 +516,21 @@ export function EmailComposer({
             <AnalysisItem title="红人的意图" content={analysis.creatorIntent} />
             <AnalysisItem title="当前合作进度" content={analysis.stage} />
             <AnalysisItem title="红人的态度" content={analysis.attitude} />
+            <AnalysisItem
+              title="沟通风格与当前情绪"
+              content={[
+                analysis.communicationStyle && `沟通风格：${analysis.communicationStyle}`,
+                analysis.currentEmotion && `当前情绪：${analysis.currentEmotion}`,
+              ].filter(Boolean).join('\n')}
+            />
+            <AnalysisItem title="表面立场" content={analysis.statedPosition || ''} />
+            <AnalysisItem title="核心利益" content={analysis.coreInterests || ''} />
           </div>
 
           <AnalysisList title="已确认事项" items={analysis.confirmedItems} />
           <AnalysisList title="待解决事项" items={analysis.openQuestions} />
+          <AnalysisList title="沟通雷区" items={analysis.communicationRisks} />
+          <AnalysisList title="破局筹码" items={analysis.leverageOptions} />
           <AnalysisList title="风险提醒" items={analysis.risks} />
           <AnalysisList title="回复建议" items={analysis.replyStrategy} />
 
@@ -654,10 +586,11 @@ export function EmailComposer({
                 {copied ? '已复制' : '复制'}
               </Button>
             </div>
-            <Textarea
+            <RichEmailEditor
               value={replyContent}
-              onChange={(event) => setReplyContent(event.target.value)}
-              className="min-h-44 resize-y"
+              onChange={setReplyContent}
+              placeholder="编辑 AI 起草的邮件..."
+              minHeight="11rem"
             />
           </div>
           <div className="space-y-2">
@@ -681,7 +614,7 @@ export function EmailComposer({
             <Button
               variant="outline"
               onClick={sendEmail}
-              disabled={sending || savingDraft || !replyContent.trim()}
+              disabled={sending || savingDraft || isEmailContentEmpty(replyContent)}
             >
               {sending ? (
                 <Loader2 className="mr-2 h-4 w-4 animate-spin" />
@@ -690,7 +623,7 @@ export function EmailComposer({
               )}
               直接发送
             </Button>
-            <Button onClick={saveToGmailDrafts} disabled={savingDraft || sending || !replyContent.trim()}>
+            <Button onClick={saveToGmailDrafts} disabled={savingDraft || sending || isEmailContentEmpty(replyContent)}>
               {savingDraft ? (
                 <Loader2 className="mr-2 h-4 w-4 animate-spin" />
               ) : (
@@ -704,23 +637,23 @@ export function EmailComposer({
 
       {mode === 'compose' && (
         <div className="space-y-4">
-          <Textarea
+          <RichEmailEditor
             value={replyContent}
-            onChange={(event) => setReplyContent(event.target.value)}
+            onChange={setReplyContent}
             placeholder="输入回复内容..."
-            className="min-h-44 resize-y"
+            minHeight="12rem"
           />
           {aiError && <ErrorMessage message={aiError} />}
           <div className="grid grid-cols-2 gap-2">
           <Button
             variant="outline"
             onClick={sendEmail}
-            disabled={sending || savingDraft || !replyContent.trim()}
+            disabled={sending || savingDraft || isEmailContentEmpty(replyContent)}
           >
             {sending ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <Send className="mr-2 h-4 w-4" />}
             直接发送
           </Button>
-          <Button onClick={saveToGmailDrafts} disabled={savingDraft || sending || !replyContent.trim()}>
+          <Button onClick={saveToGmailDrafts} disabled={savingDraft || sending || isEmailContentEmpty(replyContent)}>
             {savingDraft ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <ArrowRight className="mr-2 h-4 w-4" />}
             保存为草稿
           </Button>
@@ -735,7 +668,7 @@ function AnalysisItem({ title, content }: { title: string; content: string }) {
   return (
     <div className="rounded-lg border p-3">
       <p className="text-xs text-muted-foreground">{title}</p>
-      <p className="mt-1 text-sm leading-6">{content || '暂无明确结论'}</p>
+      <p className="mt-1 whitespace-pre-line text-sm leading-6">{content || '暂无明确结论'}</p>
     </div>
   );
 }

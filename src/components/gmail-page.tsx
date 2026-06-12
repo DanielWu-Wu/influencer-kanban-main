@@ -1,12 +1,13 @@
 'use client';
 
 import { useState } from 'react';
-import { FileText, Inbox, Mail, MailOpen, Send, Settings, Star } from 'lucide-react';
+import { FilePenLine, FileText, Inbox, Mail, MailOpen, Send, Settings, Star } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { GmailCategory, GmailMailbox, GmailThread } from '@/lib/types';
 import { EmailDetail } from './email-detail';
 import { GmailInbox } from './gmail-inbox';
 import { GmailSignatureSettings } from './gmail-signature-settings';
+import { NewEmailComposer } from './new-email-composer';
 
 const MAILBOXES: Array<{
   id: GmailMailbox;
@@ -25,6 +26,8 @@ export function GmailPage() {
   const [mailbox, setMailbox] = useState<GmailMailbox>('inbox');
   const [category, setCategory] = useState<GmailCategory>('primary');
   const [showSettings, setShowSettings] = useState(false);
+  const [showNewEmail, setShowNewEmail] = useState(false);
+  const [mailboxRefreshKey, setMailboxRefreshKey] = useState(0);
 
   const handleMailboxChange = (nextMailbox: GmailMailbox) => {
     setMailbox(nextMailbox);
@@ -39,6 +42,13 @@ export function GmailPage() {
           <Mail className="h-4 w-4 text-red-500" />
           Gmail
         </div>
+        <Button
+          className="mb-3 h-10 w-full justify-start gap-3 px-3"
+          onClick={() => setShowNewEmail(true)}
+        >
+          <FilePenLine className="h-4 w-4" />
+          写信
+        </Button>
         <nav className="space-y-1">
           {MAILBOXES.map(({ id, label, icon: Icon }) => (
             <Button
@@ -69,6 +79,14 @@ export function GmailPage() {
       {!showSettings && (
       <div className={`${selectedThread ? 'hidden lg:flex' : 'flex'} min-h-0 w-full flex-col overflow-hidden border-r bg-card lg:w-[420px]`}>
         <div className="flex shrink-0 gap-1 overflow-x-auto border-b p-2 md:hidden">
+          <Button
+            size="sm"
+            className="shrink-0 gap-2"
+            onClick={() => setShowNewEmail(true)}
+          >
+            <FilePenLine className="h-4 w-4" />
+            写信
+          </Button>
           {MAILBOXES.map(({ id, label, icon: Icon }) => (
             <Button
               key={id}
@@ -99,6 +117,7 @@ export function GmailPage() {
           selectedThreadId={selectedThread?.id}
           mailbox={mailbox}
           category={category}
+          refreshKey={mailboxRefreshKey}
           onCategoryChange={setCategory}
           updatedThread={selectedThread}
           onThreadUpdated={(thread) => {
@@ -129,6 +148,16 @@ export function GmailPage() {
           </div>
         )}
       </div>
+      <NewEmailComposer
+        open={showNewEmail}
+        onOpenChange={setShowNewEmail}
+        onDraftSaved={() => {
+          setMailbox('drafts');
+          setSelectedThread(null);
+          setShowSettings(false);
+          setMailboxRefreshKey((current) => current + 1);
+        }}
+      />
     </div>
   );
 }
