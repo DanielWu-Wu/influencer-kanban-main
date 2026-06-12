@@ -49,6 +49,16 @@ type AISuggestion = {
   keyPoints: string[];
 };
 
+type AIHistoryMessage = {
+  id?: string;
+  threadId?: string;
+  subject?: string;
+  from?: string;
+  to?: string;
+  date?: string;
+  body?: string;
+};
+
 const LANGUAGE_OPTIONS = [
   ['en', '英语'],
   ['nl', '荷兰语'],
@@ -70,6 +80,9 @@ function extractEmail(value: string) {
 
 function buildThreadMessages(thread: GmailThread) {
   return thread.messages.map((message) => ({
+    id: message.id,
+    threadId: message.threadId,
+    subject: message.subject || thread.subject,
     from: message.from,
     to: message.to,
     date: message.date,
@@ -182,6 +195,7 @@ export function EmailComposer({
   const [analysis, setAnalysis] = useState<CollaborationAnalysis | null>(null);
   const [analysisLoading, setAnalysisLoading] = useState(mode === 'ai');
   const [analysisError, setAnalysisError] = useState('');
+  const [historyMessages, setHistoryMessages] = useState<AIHistoryMessage[]>([]);
   const [targetLang, setTargetLang] = useState('en');
   const [targetLangName, setTargetLangName] = useState('英语');
   const [aiLoading, setAiLoading] = useState(false);
@@ -206,15 +220,19 @@ export function EmailComposer({
     }) || lastMessage;
   }, [auth?.email, lastMessage, thread.messages]);
 
-  const invokeAI = async (payload: Record<string, unknown>) => {
+  const invokeAI = async (
+    payload: Record<string, unknown>,
+    messages: AIHistoryMessage[] = historyMessages.length ? historyMessages : threadMessages,
+  ) => {
     const response = await fetch('/api/ai', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
         ...payload,
         threadSubject: thread.subject,
-        threadMessages,
-        customPrompt: settings.aiEmailPrompt || '',
+        threadMessages: messages,
+        analysisPrompt: settings.aiAnalysisPrompt || '',
+        draftPrompt: settings.aiDraftPrompt || settings.aiEmailPrompt || '',
         modelProvider: settings.modelProvider || 'builtin',
         customApiUrl: settings.customApiUrl || '',
         customApiKey: settings.customApiKey || '',
@@ -226,13 +244,44 @@ export function EmailComposer({
     return result.data;
   };
 
+  const loadContactHistory = async () => {
+    const accessToken = await getAccessToken();
+    const contactEmail = extractEmail(externalMessage.from);
+    const response = await fetch('/api/gmail', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        action: 'contactHistory',
+        accessToken,
+        contactEmail,
+        maxResults: 50,
+      }),
+    });
+    const result = await response.json();
+    if (!response.ok || !result.success) {
+      throw new Error(result.error || '读取联系人历史邮件失败');
+    }
+
+    const fetched = (result.data || []) as AIHistoryMessage[];
+    const byId = new Map<string, AIHistoryMessage>();
+    [...fetched, ...threadMessages].forEach((message, index) => {
+      const key = message.id || `${message.date}-${message.from}-${index}`;
+      byId.set(key, message);
+    });
+    return [...byId.values()]
+      .sort((a, b) => new Date(a.date || 0).getTime() - new Date(b.date || 0).getTime())
+      .slice(-50);
+  };
+
   const analyzeThread = async () => {
     setAnalysisLoading(true);
     setAnalysisError('');
     setSuggestion(null);
 
     try {
-      const result = await invokeAI({ action: 'analyze' }) as CollaborationAnalysis;
+      const contactHistory = await loadContactHistory();
+      setHistoryMessages(contactHistory);
+      const result = await invokeAI({ action: 'analyze' }, contactHistory) as CollaborationAnalysis;
       const language = result.language || 'en';
       const knownLanguage = LANGUAGE_OPTIONS.find(([code]) => code === language);
       setAnalysis(result);
@@ -263,7 +312,7 @@ export function EmailComposer({
         userIdeas,
         targetLang,
         targetLangName,
-      }) as AISuggestion;
+      }, historyMessages) as AISuggestion;
       setSuggestion(result);
       setReplyContent(result.suggestedReply);
       addSuggestion({
@@ -465,8 +514,10 @@ export function EmailComposer({
         <div className="flex items-center gap-3 rounded-lg border p-4">
           <Loader2 className="h-5 w-5 animate-spin text-primary" />
           <div>
-            <p className="text-sm font-medium">正在分析完整邮件往来</p>
-            <p className="text-xs text-muted-foreground">AI 正在判断红人意图、合作阶段和回复策略。</p>
+            <p className="text-sm font-medium">正在读取联系人历史并分析合作情况</p>
+            <p className="text-xs text-muted-foreground">
+              将读取与该邮箱最近最多 50 封邮件，不限于当前线程。
+            </p>
           </div>
         </div>
       )}
@@ -535,6 +586,10 @@ export function EmailComposer({
 
       {mode === 'ai' && analysis && !suggestion && (
         <>
+          <div className="flex items-center justify-between rounded-md bg-muted/40 px-3 py-2 text-xs text-muted-foreground">
+            <span>本次分析已合并当前线程和联系人历史邮件</span>
+            <Badge variant="outline">{historyMessages.length} 封</Badge>
+          </div>
           <div className="grid gap-3 sm:grid-cols-2">
             <AnalysisItem title="最新邮件意思梗概" content={analysis.latestSummary} />
             <AnalysisItem title="红人的意图" content={analysis.creatorIntent} />

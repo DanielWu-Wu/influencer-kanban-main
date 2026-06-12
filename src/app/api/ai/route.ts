@@ -1,4 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server';
+import { DEFAULT_ANALYSIS_PROMPT, DEFAULT_DRAFT_PROMPT } from '@/lib/ai-prompts';
 
 type ChatMessage = {
   role: 'system' | 'user' | 'assistant';
@@ -13,6 +14,8 @@ type ChatOptions = {
 };
 
 type ThreadMessage = {
+  id?: string;
+  subject?: string;
   from?: string;
   to?: string;
   date?: string;
@@ -28,7 +31,7 @@ function resolveChatOptions(options: ChatOptions): Required<ChatOptions> {
 
   if (!apiKey) {
     throw new Error(
-      '缺少 AI API Key。请在 Vercel 环境变量中设置 AI_API_KEY、DEEPSEEK_API_KEY 或 OPENAI_API_KEY。',
+      '缺少 AI API Key。请在网站设置中填写 API，或在 Vercel 环境变量中设置 AI_API_KEY。',
     );
   }
 
@@ -59,11 +62,7 @@ async function invokeOpenAICompatibleApi(
       'Content-Type': 'application/json',
       Authorization: `Bearer ${apiKey}`,
     },
-    body: JSON.stringify({
-      model: modelName,
-      messages,
-      temperature,
-    }),
+    body: JSON.stringify({ model: modelName, messages, temperature }),
   });
 
   if (!response.ok) {
@@ -84,16 +83,19 @@ function parseJson(content: string) {
 }
 
 function buildConversation(messages: ThreadMessage[]) {
-  const selectedMessages = messages.slice(-40);
+  const selectedMessages = [...messages]
+    .sort((a, b) => new Date(a.date || 0).getTime() - new Date(b.date || 0).getTime())
+    .slice(-50);
   const charactersPerMessage = Math.max(
-    1_500,
-    Math.min(6_000, Math.floor(60_000 / Math.max(selectedMessages.length, 1))),
+    1_000,
+    Math.min(5_000, Math.floor(75_000 / Math.max(selectedMessages.length, 1))),
   );
 
   return selectedMessages
     .map((message, index) => {
       const body = String(message.body || '').slice(0, charactersPerMessage);
       return `--- 邮件 ${index + 1} ---
+主题：${message.subject || '无主题'}
 时间：${message.date || '未知'}
 发件人：${message.from || '未知'}
 收件人：${message.to || '未知'}
@@ -112,6 +114,21 @@ function getModelOptions(body: Record<string, unknown>, temperature: number): Ch
   };
 }
 
+function withCustomInstructions(
+  basePrompt: string,
+  customPrompt: unknown,
+  defaultPrompt?: string,
+) {
+  const custom = String(customPrompt || '').trim();
+  if (!custom || custom === defaultPrompt?.trim()) return basePrompt;
+  return `${basePrompt}
+
+以下是用户在设置中配置的专属要求。请在不违反事实准确性和输出格式要求的前提下优先遵守：
+--- 用户专属提示词 ---
+${custom}
+--- 用户专属提示词结束 ---`;
+}
+
 export async function POST(request: NextRequest) {
   try {
     const body = await request.json() as Record<string, unknown>;
@@ -123,15 +140,14 @@ export async function POST(request: NextRequest) {
 
     if (action === 'analyze') {
       if (threadMessages.length === 0) {
-        return NextResponse.json({ error: '缺少完整邮件对话。' }, { status: 400 });
+        return NextResponse.json({ error: '缺少邮件历史，无法进行合作分析。' }, { status: 400 });
       }
 
-      const systemPrompt = `你是一位资深的 YouTube 红人合作与商务谈判顾问。
-请分析品牌方与红人的完整邮件往来，并结合以下合作流程判断当前状态：
-红人建档 → 待联系 → 已联系 → 有意向 → 谈价格/方式 → 已确认 → 已寄样 → 拍摄中 → 已发布 → 复盘/归档。
+      const systemPrompt = withCustomInstructions(
+        `${DEFAULT_ANALYSIS_PROMPT}
 
 请识别对方最近一封实质邮件的语言。language 必须返回 ISO 639-1 代码，例如 en、nl、es、de、fr、it、pt、ja。
-请只返回以下 JSON，不要添加其他文字：
+只返回以下 JSON，不要添加其他文字：
 {
   "latestSummary": "最新邮件的中文意思梗概",
   "creatorIntent": "红人的真实意图和核心诉求",
@@ -143,11 +159,14 @@ export async function POST(request: NextRequest) {
   "replyStrategy": ["建议回复方向或谈判策略"],
   "language": "en",
   "languageName": "英语"
-}`;
+}`,
+        body.analysisPrompt,
+        DEFAULT_ANALYSIS_PROMPT,
+      );
 
-      const userPrompt = `邮件主题：${threadSubject}
+      const userPrompt = `当前邮件主题：${threadSubject}
 
-完整邮件往来（按时间顺序）：
+以下内容包含当前线程，以及与同一联系人最近最多 50 封历史邮件，已经按时间顺序排列：
 ${buildConversation(threadMessages)}`;
 
       const result = parseJson(await invokeOpenAICompatibleApi(
@@ -166,29 +185,30 @@ ${buildConversation(threadMessages)}`;
     const analysis = body.analysis || {};
 
     if (!userIdeas || threadMessages.length === 0) {
-      return NextResponse.json({ error: '缺少完整对话或你的回复想法。' }, { status: 400 });
+      return NextResponse.json(
+        { error: '缺少邮件历史或你的回复想法。' },
+        { status: 400 },
+      );
     }
 
-    const systemPrompt = `你是一位资深 YouTube 红人合作邮件与谈判助手。
-请结合完整邮件历史、合作分析和用户的中文回复想法，起草一封${targetLangName}商务回复。
-要求：
-1. 使用对方当前沟通语言，不要混入中文。
-2. 保持专业、自然、友好，不虚构价格、日期、地址或承诺。
-3. 用户没有明确说明的关键商务条件，应使用询问或保留表达。
-4. 邮件正文不要重复主题，不使用 Markdown。
-5. 同时提供准确的中文对照。
+    const systemPrompt = withCustomInstructions(
+      `${DEFAULT_DRAFT_PROMPT}
 
-只返回以下 JSON：
+目标语言：${targetLangName}
+只返回以下 JSON，不要添加其他文字：
 {
   "suggestedReply": "使用${targetLangName}撰写的完整回复邮件",
   "translatedReply": "中文对照",
   "tone": "friendly",
   "keyPoints": ["本次回复落实的要点"]
-}`;
+}`,
+      body.draftPrompt,
+      DEFAULT_DRAFT_PROMPT,
+    );
 
-    const userPrompt = `邮件主题：${threadSubject}
+    const userPrompt = `当前邮件主题：${threadSubject}
 
-完整邮件往来：
+与该联系人的最近邮件历史：
 ${buildConversation(threadMessages)}
 
 AI 对合作状态的分析：
@@ -209,7 +229,9 @@ ${userIdeas}
     return NextResponse.json({ success: true, data: result });
   } catch (error) {
     console.error('AI 邮件处理失败:', error);
-    const errorMessage = error instanceof Error ? error.message : 'AI 邮件处理失败，请稍后重试。';
+    const errorMessage = error instanceof Error
+      ? error.message
+      : 'AI 邮件处理失败，请稍后重试。';
     return NextResponse.json({ error: errorMessage }, { status: 500 });
   }
 }

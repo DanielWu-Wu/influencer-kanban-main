@@ -1,5 +1,62 @@
 import { NextRequest, NextResponse } from 'next/server';
 
+type GmailHeader = { name: string; value: string };
+
+function getHeader(headers: GmailHeader[] = [], name: string) {
+  return headers.find((header) => header.name.toLowerCase() === name.toLowerCase())?.value || '';
+}
+
+function decodeBase64Url(data: string, charset = 'utf-8') {
+  const normalized = data.replace(/-/g, '+').replace(/_/g, '/');
+  const buffer = Buffer.from(normalized, 'base64');
+  try {
+    return new TextDecoder(charset).decode(buffer);
+  } catch {
+    return buffer.toString('utf8');
+  }
+}
+
+function collectMessageBodies(payload: Record<string, unknown>, text: string[], html: string[]) {
+  const headers = (payload.headers as GmailHeader[]) || [];
+  const body = (payload.body as Record<string, unknown>) || {};
+  const data = typeof body.data === 'string' ? body.data : '';
+  const mimeType = String(payload.mimeType || '');
+  const charset = getHeader(headers, 'Content-Type').match(/charset=["']?([^;"'\s]+)/i)?.[1] || 'utf-8';
+
+  if (data && mimeType === 'text/plain') text.push(decodeBase64Url(data, charset));
+  if (data && mimeType === 'text/html') html.push(decodeBase64Url(data, charset));
+
+  const parts = payload.parts as Record<string, unknown>[] | undefined;
+  parts?.forEach((part) => collectMessageBodies(part, text, html));
+}
+
+function parseHistoryMessage(message: Record<string, unknown>) {
+  const payload = (message.payload || {}) as Record<string, unknown>;
+  const headers = (payload.headers as GmailHeader[]) || [];
+  const text: string[] = [];
+  const html: string[] = [];
+  collectMessageBodies(payload, text, html);
+  const htmlFallback = html.join('\n')
+    .replace(/<style[\s\S]*?<\/style>/gi, ' ')
+    .replace(/<script[\s\S]*?<\/script>/gi, ' ')
+    .replace(/<[^>]+>/g, ' ')
+    .replace(/&nbsp;/gi, ' ')
+    .replace(/&amp;/gi, '&')
+    .replace(/\s+/g, ' ')
+    .trim();
+  const rawDate = getHeader(headers, 'Date');
+
+  return {
+    id: String(message.id || ''),
+    threadId: String(message.threadId || ''),
+    subject: getHeader(headers, 'Subject') || '无主题',
+    from: getHeader(headers, 'From'),
+    to: getHeader(headers, 'To'),
+    date: rawDate ? new Date(rawDate).toISOString() : '',
+    body: text.join('\n\n').trim() || htmlFallback || String(message.snippet || ''),
+  };
+}
+
 // Gmail API 代理 - 获取邮件列表和详情
 export async function GET(request: NextRequest) {
   try {
@@ -94,6 +151,45 @@ export async function GET(request: NextRequest) {
       return NextResponse.json({ success: true, data });
     }
 
+    if (action === 'contactHistory') {
+      const contactEmail = searchParams.get('email')?.trim();
+      const maxResults = Math.min(Number(searchParams.get('maxResults') || 50), 50);
+      if (!contactEmail) {
+        return NextResponse.json({ error: '缺少联系人邮箱' }, { status: 400 });
+      }
+
+      const q = `{from:${contactEmail} to:${contactEmail}}`;
+      const listRes = await fetch(
+        `https://gmail.googleapis.com/gmail/v1/users/me/messages?maxResults=${maxResults}&q=${encodeURIComponent(q)}`,
+        { headers },
+      );
+      if (!listRes.ok) {
+        const details = await listRes.text();
+        return NextResponse.json(
+          { error: '获取联系人历史邮件失败', details },
+          { status: listRes.status },
+        );
+      }
+
+      const listData = await listRes.json();
+      const references = (listData.messages || []) as Array<{ id: string }>;
+      const messages = await Promise.all(references.map(async ({ id }) => {
+        const messageRes = await fetch(
+          `https://gmail.googleapis.com/gmail/v1/users/me/messages/${id}?format=full`,
+          { headers },
+        );
+        if (!messageRes.ok) return null;
+        return parseHistoryMessage(await messageRes.json());
+      }));
+
+      return NextResponse.json({
+        success: true,
+        data: messages
+          .filter(Boolean)
+          .sort((a, b) => new Date(a!.date || 0).getTime() - new Date(b!.date || 0).getTime()),
+      });
+    }
+
     return NextResponse.json({ error: '未知操作' }, { status: 400 });
   } catch (err) {
     console.error('Gmail API proxy error:', err);
@@ -114,6 +210,8 @@ export async function POST(request: NextRequest) {
       threadId,
       inReplyTo,
       references,
+      contactEmail,
+      maxResults: requestedMaxResults,
     } = body;
 
     if (!accessToken) {
@@ -124,6 +222,43 @@ export async function POST(request: NextRequest) {
       'Authorization': `Bearer ${accessToken}`,
       'Content-Type': 'application/json',
     };
+
+    if (action === 'contactHistory') {
+      if (!contactEmail) {
+        return NextResponse.json({ error: '缺少联系人邮箱' }, { status: 400 });
+      }
+      const maxResults = Math.min(Number(requestedMaxResults || 50), 50);
+      const q = `{from:${contactEmail} to:${contactEmail}}`;
+      const listRes = await fetch(
+        `https://gmail.googleapis.com/gmail/v1/users/me/messages?maxResults=${maxResults}&q=${encodeURIComponent(q)}`,
+        { headers },
+      );
+      if (!listRes.ok) {
+        const details = await listRes.text();
+        return NextResponse.json(
+          { error: '获取联系人历史邮件失败', details },
+          { status: listRes.status },
+        );
+      }
+
+      const listData = await listRes.json();
+      const messageRefs = (listData.messages || []) as Array<{ id: string }>;
+      const messages = await Promise.all(messageRefs.map(async ({ id }) => {
+        const messageRes = await fetch(
+          `https://gmail.googleapis.com/gmail/v1/users/me/messages/${id}?format=full`,
+          { headers },
+        );
+        if (!messageRes.ok) return null;
+        return parseHistoryMessage(await messageRes.json());
+      }));
+
+      return NextResponse.json({
+        success: true,
+        data: messages
+          .filter(Boolean)
+          .sort((a, b) => new Date(a!.date || 0).getTime() - new Date(b!.date || 0).getTime()),
+      });
+    }
 
     if (action === 'draft') {
       // 创建草稿

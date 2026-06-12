@@ -16,6 +16,7 @@ import {
   EmailDraftSuggestion,
   EmailDraft,
 } from './types';
+import type { PromptTemplate } from './ai-prompts';
 
 const STORAGE_KEYS = {
   INFLUENCERS: 'influencer-board-influencers',
@@ -46,6 +47,9 @@ export interface AppSettings {
   gmailClientSecret?: string;
   translatePrompt?: string;
   aiEmailPrompt?: string;
+  aiAnalysisPrompt?: string;
+  aiDraftPrompt?: string;
+  promptTemplates?: PromptTemplate[];
   modelProvider?: 'builtin' | 'custom';
   customApiUrl?: string;
   customApiKey?: string;

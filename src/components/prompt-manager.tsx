@@ -1,273 +1,322 @@
 'use client';
 
-import { useState, useEffect } from 'react';
-import { useSettings } from '@/lib/data';
-import { Button } from '@/components/ui/button';
-import { Textarea } from '@/components/ui/textarea';
-import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
-import { Badge } from '@/components/ui/badge';
-import { Separator } from '@/components/ui/separator';
+import { useEffect, useMemo, useState } from 'react';
 import {
-  MessageSquare, Languages, Save, RotateCcw,
-  ChevronDown, ChevronUp, Info, Sparkles, Lightbulb,
-  CheckCircle2, AlertCircle
+  BarChart3,
+  CheckCircle2,
+  ChevronDown,
+  ChevronUp,
+  FilePenLine,
+  Languages,
+  Plus,
+  RotateCcw,
+  Save,
+  Sparkles,
+  Trash2,
 } from 'lucide-react';
+import { toast, Toaster } from 'sonner';
+import { Badge } from '@/components/ui/badge';
+import { Button } from '@/components/ui/button';
+import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
+import { Input } from '@/components/ui/input';
+import { Separator } from '@/components/ui/separator';
+import { Textarea } from '@/components/ui/textarea';
+import {
+  BUILT_IN_PROMPT_TEMPLATES,
+  DEFAULT_ANALYSIS_PROMPT,
+  DEFAULT_DRAFT_PROMPT,
+  DEFAULT_TRANSLATE_PROMPT,
+  type PromptTemplate,
+  type PromptType,
+} from '@/lib/ai-prompts';
+import { generateId, useSettings } from '@/lib/data';
 
-const DEFAULT_TRANSLATE_PROMPT = `你是一位专业的翻译助手。将用户提供的文本翻译成中文。
-源语言可能是英语、法语、德语、西班牙语、葡萄牙语、意大利语、荷兰语等任何语言，请自动识别。
-只返回翻译结果，不要添加任何解释或额外内容。
-保持原文的格式和段落结构。
-如果是邮件内容，请保持邮件的格式。`;
+type PromptValues = Record<PromptType, string>;
 
-const DEFAULT_AI_PROMPT = `你是一位专业的跨境电商红人推广邮件助手。你的任务是：
-1. 根据用户提供的想法和上下文，撰写专业的邮件回复
-2. 邮件必须使用{{targetLang}}语言撰写
-3. 语气友好专业，符合商务沟通规范
-4. 同时提供中文翻译，方便用户检查
-5. 回复内容要具体，不要太空泛
-
-输出格式：
-【{{targetLang}}回复】
-（用{{targetLang}}写的邮件内容）
-
-【中文对照】
-（中文翻译）
-
-注意：
-- 变量 {{targetLang}} 会被替换为对方邮件使用的语言
-- 不要在邮件中使用过于夸张的营销语言
-- 保持真诚和专业的态度`;
+const PROMPT_SECTIONS: Array<{
+  type: PromptType;
+  title: string;
+  description: string;
+  icon: typeof Languages;
+  defaultValue: string;
+  rows: number;
+}> = [
+  {
+    type: 'translate',
+    title: '邮件翻译提示词',
+    description: '控制 AI 如何把外文邮件翻译成中文',
+    icon: Languages,
+    defaultValue: DEFAULT_TRANSLATE_PROMPT,
+    rows: 9,
+  },
+  {
+    type: 'analysis',
+    title: '合作分析提示词',
+    description: '控制 AI 如何判断红人意图、合作进度、风险和回复策略',
+    icon: BarChart3,
+    defaultValue: DEFAULT_ANALYSIS_PROMPT,
+    rows: 13,
+  },
+  {
+    type: 'draft',
+    title: '邮件起草提示词',
+    description: '控制 AI 如何根据你的想法起草正式回复',
+    icon: FilePenLine,
+    defaultValue: DEFAULT_DRAFT_PROMPT,
+    rows: 13,
+  },
+];
 
 export default function PromptManager() {
-  const { settings, updateSettings } = useSettings();
-  const [translatePrompt, setTranslatePrompt] = useState('');
-  const [aiPrompt, setAiPrompt] = useState('');
+  const { settings, updateSettings, loading } = useSettings();
+  const [prompts, setPrompts] = useState<PromptValues>({
+    translate: DEFAULT_TRANSLATE_PROMPT,
+    analysis: DEFAULT_ANALYSIS_PROMPT,
+    draft: DEFAULT_DRAFT_PROMPT,
+  });
+  const [customTemplates, setCustomTemplates] = useState<PromptTemplate[]>([]);
+  const [templateNames, setTemplateNames] = useState<Record<PromptType, string>>({
+    translate: '',
+    analysis: '',
+    draft: '',
+  });
+  const [selectedTemplates, setSelectedTemplates] = useState<Record<PromptType, string>>({
+    translate: 'builtin-translate-standard',
+    analysis: 'builtin-analysis-youtube',
+    draft: 'builtin-draft-business',
+  });
+  const [expandedSection, setExpandedSection] = useState<PromptType | null>('analysis');
   const [saved, setSaved] = useState(false);
-  const [expandedSection, setExpandedSection] = useState<'translate' | 'ai' | null>('translate');
 
   useEffect(() => {
-    setTranslatePrompt(settings.translatePrompt || DEFAULT_TRANSLATE_PROMPT);
-    setAiPrompt(settings.aiEmailPrompt || DEFAULT_AI_PROMPT);
-  }, [settings.translatePrompt, settings.aiEmailPrompt]);
+    if (loading) return;
+    setPrompts({
+      translate: settings.translatePrompt || DEFAULT_TRANSLATE_PROMPT,
+      analysis: settings.aiAnalysisPrompt || DEFAULT_ANALYSIS_PROMPT,
+      draft: settings.aiDraftPrompt || settings.aiEmailPrompt || DEFAULT_DRAFT_PROMPT,
+    });
+  }, [
+    loading,
+    settings.aiAnalysisPrompt,
+    settings.aiDraftPrompt,
+    settings.aiEmailPrompt,
+    settings.translatePrompt,
+  ]);
 
-  const handleSave = () => {
+  useEffect(() => {
+    if (!loading) setCustomTemplates(settings.promptTemplates || []);
+  }, [loading, settings.promptTemplates]);
+
+  const allTemplates = useMemo(
+    () => [...BUILT_IN_PROMPT_TEMPLATES, ...customTemplates],
+    [customTemplates],
+  );
+
+  const persistTemplates = (templates: PromptTemplate[]) => {
+    setCustomTemplates(templates);
+    updateSettings({ promptTemplates: templates });
+  };
+
+  const handleSaveAll = () => {
     updateSettings({
-      translatePrompt,
-      aiEmailPrompt: aiPrompt,
+      translatePrompt: prompts.translate,
+      aiAnalysisPrompt: prompts.analysis,
+      aiDraftPrompt: prompts.draft,
+      aiEmailPrompt: prompts.draft,
+      promptTemplates: customTemplates,
     });
     setSaved(true);
-    setTimeout(() => setSaved(false), 2000);
+    window.setTimeout(() => setSaved(false), 2000);
   };
 
-  const handleResetTranslate = () => {
-    setTranslatePrompt(DEFAULT_TRANSLATE_PROMPT);
+  const saveTemplate = (type: PromptType) => {
+    const name = templateNames[type].trim();
+    if (!name) {
+      toast.error('请先填写模板名称');
+      return;
+    }
+    const duplicate = customTemplates.find(
+      (template) => template.type === type && template.name.toLowerCase() === name.toLowerCase(),
+    );
+    const nextTemplates = duplicate
+      ? customTemplates.map((template) =>
+          template.id === duplicate.id ? { ...template, content: prompts[type] } : template)
+      : [
+          ...customTemplates,
+          { id: `prompt-${generateId()}`, name, type, content: prompts[type] },
+        ];
+    persistTemplates(nextTemplates);
+    if (duplicate) setSelectedTemplates((current) => ({ ...current, [type]: duplicate.id }));
+    else setSelectedTemplates((current) => ({
+      ...current,
+      [type]: nextTemplates[nextTemplates.length - 1].id,
+    }));
+    setTemplateNames((current) => ({ ...current, [type]: '' }));
+    toast.success(duplicate ? '模板已更新' : '模板已保存');
   };
 
-  const handleResetAi = () => {
-    setAiPrompt(DEFAULT_AI_PROMPT);
+  const applyTemplate = (type: PromptType, templateId: string) => {
+    setSelectedTemplates((current) => ({ ...current, [type]: templateId }));
+    const template = allTemplates.find((item) => item.id === templateId);
+    if (template) setPrompts((current) => ({ ...current, [type]: template.content }));
   };
 
-  const isTranslateModified = translatePrompt !== DEFAULT_TRANSLATE_PROMPT;
-  const isAiModified = aiPrompt !== DEFAULT_AI_PROMPT;
+  const deleteTemplate = (type: PromptType) => {
+    const templateId = selectedTemplates[type];
+    const template = customTemplates.find((item) => item.id === templateId);
+    if (!template) {
+      toast.error('内置模板不能删除');
+      return;
+    }
+    persistTemplates(customTemplates.filter((item) => item.id !== templateId));
+    const fallback = BUILT_IN_PROMPT_TEMPLATES.find((item) => item.type === type);
+    if (fallback) {
+      setSelectedTemplates((current) => ({ ...current, [type]: fallback.id }));
+      setPrompts((current) => ({ ...current, [type]: fallback.content }));
+    }
+    toast.success('模板已删除');
+  };
 
   return (
-    <div className="h-full flex flex-col overflow-hidden">
-      {/* 顶部标题栏 - 固定不滚动 */}
-      <div className="flex-shrink-0 flex items-center justify-between px-1 mb-4">
+    <div className="flex h-full flex-col overflow-hidden">
+      <Toaster richColors position="top-center" />
+      <div className="mb-4 flex shrink-0 items-center justify-between px-1">
         <div>
-          <h2 className="text-lg font-semibold flex items-center gap-2">
-            <MessageSquare className="w-5 h-5" />
+          <h2 className="flex items-center gap-2 text-lg font-semibold">
+            <Sparkles className="h-5 w-5" />
             提示词管理
           </h2>
-          <p className="text-sm text-muted-foreground mt-0.5">自定义 AI 翻译和邮件回复的行为，让输出更贴合你的风格</p>
+          <p className="mt-0.5 text-sm text-muted-foreground">
+            分别设置翻译、合作判断和邮件起草规则，并保存常用模板
+          </p>
         </div>
-        <Button onClick={handleSave} size="sm" className="gap-1.5">
-          {saved ? (
-            <>
-              <CheckCircle2 className="w-4 h-4" />
-              已保存
-            </>
-          ) : (
-            <>
-              <Save className="w-4 h-4" />
-              保存全部
-            </>
-          )}
+        <Button onClick={handleSaveAll} size="sm" className="gap-1.5">
+          {saved ? <CheckCircle2 className="h-4 w-4" /> : <Save className="h-4 w-4" />}
+          {saved ? '已保存' : '保存全部'}
         </Button>
       </div>
 
-      <Separator className="flex-shrink-0 mb-4" />
+      <Separator className="mb-4 shrink-0" />
 
-      {/* 提示词卡片列表 - 可滚动区域 */}
-      <div className="flex-1 min-h-0 overflow-y-auto pr-1 space-y-4">
-        {/* 翻译提示词 */}
-        <Card className="overflow-hidden">
-          <button
-            type="button"
-            onClick={() => setExpandedSection(expandedSection === 'translate' ? null : 'translate')}
-            className="w-full text-left"
-          >
-            <CardHeader className="pb-3">
-              <div className="flex items-center justify-between">
-                <div className="flex items-center gap-3">
-                  <div className="w-9 h-9 rounded-lg bg-blue-500/10 flex items-center justify-center">
-                    <Languages className="w-4 h-4 text-blue-500" />
+      <div className="min-h-0 flex-1 space-y-4 overflow-y-auto pr-1">
+        {PROMPT_SECTIONS.map((section) => {
+          const Icon = section.icon;
+          const expanded = expandedSection === section.type;
+          const templates = allTemplates.filter((template) => template.type === section.type);
+          const selected = allTemplates.find(
+            (template) => template.id === selectedTemplates[section.type],
+          );
+          const modified = prompts[section.type] !== section.defaultValue;
+
+          return (
+            <Card key={section.type} className="overflow-hidden">
+              <button
+                type="button"
+                className="w-full text-left"
+                onClick={() => setExpandedSection(expanded ? null : section.type)}
+              >
+                <CardHeader className="pb-3">
+                  <div className="flex items-center justify-between">
+                    <div className="flex items-center gap-3">
+                      <div className="flex h-9 w-9 items-center justify-center rounded-md bg-primary/10">
+                        <Icon className="h-4 w-4 text-primary" />
+                      </div>
+                      <div>
+                        <CardTitle className="text-base">{section.title}</CardTitle>
+                        <CardDescription className="mt-0.5 text-xs">
+                          {section.description}
+                        </CardDescription>
+                      </div>
+                    </div>
+                    <div className="flex items-center gap-2">
+                      {modified && <Badge variant="secondary">已修改</Badge>}
+                      {expanded
+                        ? <ChevronUp className="h-4 w-4 text-muted-foreground" />
+                        : <ChevronDown className="h-4 w-4 text-muted-foreground" />}
+                    </div>
                   </div>
-                  <div>
-                    <CardTitle className="text-base">邮件翻译提示词</CardTitle>
-                    <CardDescription className="text-xs mt-0.5">控制 AI 如何将外文邮件翻译成中文</CardDescription>
+                </CardHeader>
+              </button>
+
+              {expanded && (
+                <CardContent className="space-y-4 pt-0">
+                  <div className="rounded-md border bg-muted/20 p-3">
+                    <div className="mb-2 flex items-center justify-between">
+                      <label className="text-sm font-medium">提示词模板</label>
+                      <Button
+                        variant="ghost"
+                        size="sm"
+                        className="h-8 gap-1 text-muted-foreground"
+                        onClick={() => setPrompts((current) => ({
+                          ...current,
+                          [section.type]: section.defaultValue,
+                        }))}
+                      >
+                        <RotateCcw className="h-3.5 w-3.5" />
+                        恢复默认
+                      </Button>
+                    </div>
+                    <div className="flex gap-2">
+                      <select
+                        value={selectedTemplates[section.type]}
+                        className="h-9 min-w-0 flex-1 rounded-md border bg-background px-3 text-sm"
+                        onChange={(event) => applyTemplate(section.type, event.target.value)}
+                      >
+                        {templates.map((template) => (
+                          <option key={template.id} value={template.id}>
+                            {template.builtIn ? `内置 · ${template.name}` : template.name}
+                          </option>
+                        ))}
+                      </select>
+                      <Button
+                        variant="outline"
+                        size="icon"
+                        className="h-9 w-9"
+                        title="删除当前自定义模板"
+                        disabled={!selected || selected.builtIn}
+                        onClick={() => deleteTemplate(section.type)}
+                      >
+                        <Trash2 className="h-4 w-4" />
+                      </Button>
+                    </div>
+                    <div className="mt-2 flex gap-2">
+                      <Input
+                        value={templateNames[section.type]}
+                        placeholder="输入新模板名称"
+                        onChange={(event) => setTemplateNames((current) => ({
+                          ...current,
+                          [section.type]: event.target.value,
+                        }))}
+                      />
+                      <Button
+                        variant="outline"
+                        className="shrink-0 gap-1.5"
+                        onClick={() => saveTemplate(section.type)}
+                      >
+                        <Plus className="h-4 w-4" />
+                        保存为模板
+                      </Button>
+                    </div>
+                    <p className="mt-2 text-xs text-muted-foreground">
+                      使用同名模板保存时会更新原模板；内置模板始终保留。
+                    </p>
                   </div>
-                </div>
-                <div className="flex items-center gap-2">
-                  {isTranslateModified && (
-                    <Badge variant="secondary" className="text-xs">已修改</Badge>
-                  )}
-                  {expandedSection === 'translate' ? (
-                    <ChevronUp className="w-4 h-4 text-muted-foreground" />
-                  ) : (
-                    <ChevronDown className="w-4 h-4 text-muted-foreground" />
-                  )}
-                </div>
-              </div>
-            </CardHeader>
-          </button>
 
-          {expandedSection === 'translate' && (
-            <CardContent className="pt-0 space-y-4">
-              <div className="flex items-center justify-between">
-                <Badge variant="outline" className="text-xs gap-1">
-                  <Info className="w-3 h-3" />
-                  用于「邮件翻译」功能
-                </Badge>
-                <Button
-                  variant="ghost"
-                  size="sm"
-                  className="h-7 text-xs gap-1 text-muted-foreground"
-                  onClick={handleResetTranslate}
-                >
-                  <RotateCcw className="w-3 h-3" />
-                  恢复默认
-                </Button>
-              </div>
-
-              <Textarea
-                value={translatePrompt}
-                onChange={(e) => setTranslatePrompt(e.target.value)}
-                rows={8}
-                className="resize-y font-mono text-sm leading-relaxed"
-                placeholder="输入翻译提示词..."
-              />
-
-              <div className="rounded-lg bg-muted/50 p-3 space-y-2">
-                <h4 className="text-xs font-medium text-foreground flex items-center gap-1.5">
-                  <Lightbulb className="w-3.5 h-3.5 text-primary" />
-                  优化建议
-                </h4>
-                <ul className="text-xs text-muted-foreground space-y-1">
-                  <li>• 可加入行业术语要求，如「跨境电商专业术语保持英文」</li>
-                  <li>• 可指定翻译风格，如「偏口语化」或「偏正式商务」</li>
-                  <li>• 可要求保留原文中的品牌名和产品名</li>
-                </ul>
-              </div>
-            </CardContent>
-          )}
-        </Card>
-
-        {/* AI 邮件回复提示词 */}
-        <Card className="overflow-hidden">
-          <button
-            type="button"
-            onClick={() => setExpandedSection(expandedSection === 'ai' ? null : 'ai')}
-            className="w-full text-left"
-          >
-            <CardHeader className="pb-3">
-              <div className="flex items-center justify-between">
-                <div className="flex items-center gap-3">
-                  <div className="w-9 h-9 rounded-lg bg-primary/10 flex items-center justify-center">
-                    <Sparkles className="w-4 h-4 text-primary" />
-                  </div>
-                  <div>
-                    <CardTitle className="text-base">AI 邮件回复提示词</CardTitle>
-                    <CardDescription className="text-xs mt-0.5">控制 AI 如何帮你起草邮件回复</CardDescription>
-                  </div>
-                </div>
-                <div className="flex items-center gap-2">
-                  {isAiModified && (
-                    <Badge variant="secondary" className="text-xs">已修改</Badge>
-                  )}
-                  {expandedSection === 'ai' ? (
-                    <ChevronUp className="w-4 h-4 text-muted-foreground" />
-                  ) : (
-                    <ChevronDown className="w-4 h-4 text-muted-foreground" />
-                  )}
-                </div>
-              </div>
-            </CardHeader>
-          </button>
-
-          {expandedSection === 'ai' && (
-            <CardContent className="pt-0 space-y-4">
-              <div className="flex items-center justify-between">
-                <Badge variant="outline" className="text-xs gap-1">
-                  <Info className="w-3 h-3" />
-                  用于「AI 辅助回复」功能
-                </Badge>
-                <Button
-                  variant="ghost"
-                  size="sm"
-                  className="h-7 text-xs gap-1 text-muted-foreground"
-                  onClick={handleResetAi}
-                >
-                  <RotateCcw className="w-3 h-3" />
-                  恢复默认
-                </Button>
-              </div>
-
-              <Textarea
-                value={aiPrompt}
-                onChange={(e) => setAiPrompt(e.target.value)}
-                rows={14}
-                className="resize-y font-mono text-sm leading-relaxed"
-                placeholder="输入AI回复提示词..."
-              />
-
-              <div className="rounded-lg bg-muted/50 p-3 space-y-3">
-                {/* 可用变量 */}
-                <div>
-                  <h4 className="text-xs font-medium text-foreground mb-2 flex items-center gap-1.5">
-                    <AlertCircle className="w-3.5 h-3.5 text-primary" />
-                    可用变量
-                  </h4>
-                  <div className="flex flex-wrap gap-1.5">
-                    <Badge variant="secondary" className="text-xs font-mono">
-                      {'{{targetLang}}'}
-                    </Badge>
-                    <span className="text-xs text-muted-foreground self-center">
-                      会被替换为对方邮件使用的语言（如 English、French 等）
-                    </span>
-                  </div>
-                </div>
-
-                <Separator />
-
-                {/* 优化建议 */}
-                <div>
-                  <h4 className="text-xs font-medium text-foreground mb-2 flex items-center gap-1.5">
-                    <Lightbulb className="w-3.5 h-3.5 text-primary" />
-                    优化建议
-                  </h4>
-                  <ul className="text-xs text-muted-foreground space-y-1">
-                    <li>• 加入你的品牌/公司介绍，让 AI 更了解你的背景</li>
-                    <li>• 加入你的产品类别和优势，让回复更具体</li>
-                    <li>• 指定邮件签名格式</li>
-                    <li>• 指定语气偏好（正式/随意/热情）</li>
-                    <li>• 加入你的合作条件和流程说明</li>
-                  </ul>
-                </div>
-              </div>
-            </CardContent>
-          )}
-        </Card>
+                  <Textarea
+                    value={prompts[section.type]}
+                    rows={section.rows}
+                    className="resize-y font-mono text-sm leading-relaxed"
+                    onChange={(event) => setPrompts((current) => ({
+                      ...current,
+                      [section.type]: event.target.value,
+                    }))}
+                    placeholder={`输入${section.title}...`}
+                  />
+                </CardContent>
+              )}
+            </Card>
+          );
+        })}
       </div>
     </div>
   );
