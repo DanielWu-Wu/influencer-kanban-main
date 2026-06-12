@@ -1,6 +1,6 @@
 'use client';
 
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
@@ -16,7 +16,7 @@ import {
 } from 'lucide-react';
 
 export function SettingsPanel() {
-  const { settings, updateSettings } = useSettings();
+  const { settings, updateSettings, loading: settingsLoading } = useSettings();
   const { auth: gmailAuth, disconnect: disconnectGmail } = useGmailAuth();
   const [feishuUrl, setFeishuUrl] = useState(settings.feishuUrl || '');
   const [brandName, setBrandName] = useState(settings.brandName || '');
@@ -29,6 +29,17 @@ export function SettingsPanel() {
   const [modelTestResult, setModelTestResult] = useState<{ success: boolean; message: string } | null>(null);
   const [saved, setSaved] = useState(false);
   const [expandedSection, setExpandedSection] = useState<string | null>('feishu');
+
+  useEffect(() => {
+    if (settingsLoading) return;
+    setFeishuUrl(settings.feishuUrl || '');
+    setBrandName(settings.brandName || '');
+    setSenderName(settings.senderName || '');
+    setModelProvider(settings.modelProvider || 'builtin');
+    setCustomApiUrl(settings.customApiUrl || '');
+    setCustomApiKey(settings.customApiKey || '');
+    setCustomModelName(settings.customModelName || '');
+  }, [settings, settingsLoading]);
 
   const toggleSection = (section: string) => {
     setExpandedSection(expandedSection === section ? null : section);
@@ -67,10 +78,17 @@ export function SettingsPanel() {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
+          action: 'draft',
           threadSubject: '测试连接',
-          lastMessage: 'This is a test message.',
+          threadMessages: [{
+            from: 'creator@example.com',
+            to: 'brand@example.com',
+            date: new Date().toISOString(),
+            body: 'This is a test collaboration message.',
+          }],
           userIdeas: '请简单回复 OK',
           targetLang: 'en',
+          targetLangName: '英语',
           modelProvider,
           customApiUrl,
           customApiKey,

@@ -175,9 +175,11 @@ function saveSettings(settings: AppSettings): void {
 
 export function useSettings() {
   const [settings, setSettings] = useState<AppSettings>({});
+  const [loading, setLoading] = useState(true);
 
   useEffect(() => {
     setSettings(loadSettings());
+    setLoading(false);
 
     const handleStorage = (event: StorageEvent) => {
       if (event.key === STORAGE_KEYS.SETTINGS) {
@@ -208,7 +210,7 @@ export function useSettings() {
     });
   }, []);
 
-  return { settings, updateSettings };
+  return { settings, updateSettings, loading };
 }
 
 export function useInfluencers() {

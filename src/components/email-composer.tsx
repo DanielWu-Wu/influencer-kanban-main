@@ -76,7 +76,7 @@ export function EmailComposer({ thread, mode, onClose, initialMessage }: EmailCo
   const { addSuggestion } = useEmailAISuggestions();
   const { addDraft } = useEmailDrafts();
   const { auth, connect } = useGmailAuth();
-  const { settings } = useSettings();
+  const { settings, loading: settingsLoading } = useSettings();
   const [replyContent, setReplyContent] = useState(initialMessage || '');
   const [userIdeas, setUserIdeas] = useState('');
   const [analysis, setAnalysis] = useState<CollaborationAnalysis | null>(null);
@@ -142,10 +142,10 @@ export function EmailComposer({ thread, mode, onClose, initialMessage }: EmailCo
   };
 
   useEffect(() => {
-    if (mode === 'ai') analyzeThread();
+    if (mode === 'ai' && !settingsLoading) analyzeThread();
     // The analysis should run once when the AI composer opens for this thread.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [mode, thread.id]);
+  }, [mode, thread.id, settingsLoading]);
 
   const generateReply = async () => {
     if (!userIdeas.trim() || !analysis) return;
@@ -286,7 +286,7 @@ export function EmailComposer({ thread, mode, onClose, initialMessage }: EmailCo
         </Button>
       </div>
 
-      {mode === 'ai' && analysisLoading && (
+      {mode === 'ai' && (analysisLoading || settingsLoading) && (
         <div className="flex items-center gap-3 rounded-lg border p-4">
           <Loader2 className="h-5 w-5 animate-spin text-primary" />
           <div>
