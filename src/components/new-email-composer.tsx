@@ -1,6 +1,6 @@
 'use client';
 
-import { useRef, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { FileText, Loader2, Paperclip, Send, X } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import {
@@ -23,6 +23,7 @@ import {
 import { RichEmailEditor } from './rich-email-editor';
 
 const MAX_ATTACHMENT_BYTES = 18 * 1024 * 1024;
+const EMPTY_ATTACHMENTS: File[] = [];
 
 function isValidEmail(value: string) {
   return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(value.trim());
@@ -32,10 +33,20 @@ export function NewEmailComposer({
   open,
   onOpenChange,
   onDraftSaved,
+  initialSubject = '',
+  initialContent = '',
+  initialAttachments = EMPTY_ATTACHMENTS,
+  title = '写新邮件',
+  description = '向新的红人或联系人发送邮件',
 }: {
   open: boolean;
   onOpenChange: (open: boolean) => void;
   onDraftSaved?: () => void;
+  initialSubject?: string;
+  initialContent?: string;
+  initialAttachments?: File[];
+  title?: string;
+  description?: string;
 }) {
   const { auth, connect } = useGmailAuth();
   const { settings } = useSettings();
@@ -48,6 +59,15 @@ export function NewEmailComposer({
   const [saving, setSaving] = useState(false);
   const [sending, setSending] = useState(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
+
+  useEffect(() => {
+    if (!open) return;
+    setTo('');
+    setSubject(initialSubject);
+    setContent(initialContent);
+    setAttachments(initialAttachments);
+    setError('');
+  }, [initialAttachments, initialContent, initialSubject, open]);
 
   const reset = () => {
     setTo('');
@@ -182,8 +202,8 @@ export function NewEmailComposer({
     <Dialog open={open} onOpenChange={handleOpenChange}>
       <DialogContent className="bottom-4 left-auto right-4 top-auto flex h-[min(820px,calc(100vh-2rem))] w-[min(900px,calc(100vw-2rem))] max-w-[900px] translate-x-0 translate-y-0 flex-col gap-0 overflow-hidden rounded-md p-0 shadow-2xl sm:max-w-[900px] max-sm:inset-0 max-sm:h-dvh max-sm:w-full max-sm:max-w-none max-sm:rounded-none">
         <DialogHeader className="shrink-0 border-b bg-muted/40 px-5 py-3">
-          <DialogTitle>写新邮件</DialogTitle>
-          <DialogDescription>向新的红人或联系人发送邮件</DialogDescription>
+          <DialogTitle>{title}</DialogTitle>
+          <DialogDescription>{description}</DialogDescription>
         </DialogHeader>
 
         <div className="flex min-h-0 flex-1 flex-col gap-3 px-5 py-4">

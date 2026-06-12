@@ -9,9 +9,11 @@ import { useEmailTranslations, useGmailAuth, useSettings } from '@/lib/data';
 import { 
   ArrowLeft, Reply, MoreHorizontal, Globe, Languages,
   Copy, Sparkles, ChevronDown, Loader2,
-  Paperclip, Download, Mail, MailOpen
+  Paperclip, Download, Forward, Mail, MailOpen
 } from 'lucide-react';
 import { EmailComposer } from './email-composer';
+import { NewEmailComposer } from './new-email-composer';
+import { textToEmailHtml } from '@/lib/email-content';
 
 interface EmailDetailProps {
   thread: GmailThread;
@@ -26,6 +28,11 @@ export function EmailDetail({ thread, onBack, onThreadUpdated }: EmailDetailProp
   const [savedReplyDraft, setSavedReplyDraft] = useState('');
   const [changingReadStateId, setChangingReadStateId] = useState<string | null>(null);
   const [messageActionError, setMessageActionError] = useState<string | null>(null);
+  const [forwardDraft, setForwardDraft] = useState<{
+    subject: string;
+    content: string;
+    attachments: File[];
+  } | null>(null);
   const { addTranslation, getTranslation } = useEmailTranslations();
   const { auth, connect } = useGmailAuth();
 
@@ -219,6 +226,61 @@ export function EmailDetail({ thread, onBack, onThreadUpdated }: EmailDetailProp
     navigator.clipboard.writeText(text);
   };
 
+  const escapeForwardHeader = (value: string) => value
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;');
+
+  const dataUrlToFile = async (attachment: GmailAttachment) => {
+    if (!attachment.dataUrl) return null;
+    const response = await fetch(attachment.dataUrl);
+    const blob = await response.blob();
+    return new File([blob], attachment.filename, {
+      type: attachment.mimeType || blob.type || 'application/octet-stream',
+    });
+  };
+
+  const handleForward = async (message: GmailMessage) => {
+    setMessageActionError(null);
+    try {
+      const originalSubject = message.subject || thread.subject || '无主题';
+      const forwardSubject = /^(fwd?|转发):/i.test(originalSubject)
+        ? originalSubject
+        : `Fwd: ${originalSubject}`;
+      const originalBody = message.htmlBody
+        ? sanitizeEmailHtml(message.htmlBody)
+        : textToEmailHtml(message.body);
+      const forwardedHeader = [
+        '<br><br>',
+        '<div style="border-top:1px solid #dadce0;margin-top:12px;padding-top:12px;color:#5f6368">',
+        '<div><strong>---------- Forwarded message ---------</strong></div>',
+        `<div><strong>From:</strong> ${escapeForwardHeader(message.from)}</div>`,
+        `<div><strong>Date:</strong> ${escapeForwardHeader(formatDate(message.date))}</div>`,
+        `<div><strong>Subject:</strong> ${escapeForwardHeader(originalSubject)}</div>`,
+        `<div><strong>To:</strong> ${escapeForwardHeader(message.to)}</div>`,
+        '</div>',
+        '<br>',
+        originalBody,
+      ].join('');
+      const attachmentFiles = (await Promise.all(
+        (message.attachments || [])
+          .filter((attachment) => !attachment.inline)
+          .map(dataUrlToFile),
+      )).filter((file): file is File => Boolean(file));
+
+      setForwardDraft({
+        subject: forwardSubject,
+        content: forwardedHeader,
+        attachments: attachmentFiles,
+      });
+    } catch (error) {
+      setMessageActionError(
+        error instanceof Error ? error.message : '准备转发邮件失败，请稍后重试。',
+      );
+    }
+  };
+
   const sanitizeEmailHtml = (html: string) => {
     if (typeof window === 'undefined') return '';
 
@@ -356,6 +418,19 @@ export function EmailDetail({ thread, onBack, onThreadUpdated }: EmailDetailProp
                     </div>
 
                     <div className="flex items-center gap-2 flex-shrink-0">
+                      <Button
+                        variant="ghost"
+                        size="icon"
+                        className="h-8 w-8"
+                        title="转发这封邮件"
+                        onClick={(event) => {
+                          event.stopPropagation();
+                          handleForward(message);
+                        }}
+                      >
+                        <Forward className="h-4 w-4" />
+                        <span className="sr-only">转发这封邮件</span>
+                      </Button>
                       <Button
                         variant="ghost"
                         size="icon"
@@ -515,6 +590,17 @@ export function EmailDetail({ thread, onBack, onThreadUpdated }: EmailDetailProp
           />
         )}
       </div>
+      <NewEmailComposer
+        open={Boolean(forwardDraft)}
+        onOpenChange={(nextOpen) => {
+          if (!nextOpen) setForwardDraft(null);
+        }}
+        title="转发邮件"
+        description="填写新的收件人后转发这封邮件"
+        initialSubject={forwardDraft?.subject || ''}
+        initialContent={forwardDraft?.content || ''}
+        initialAttachments={forwardDraft?.attachments || []}
+      />
     </div>
   );
 }
