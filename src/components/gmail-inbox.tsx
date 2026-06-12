@@ -39,6 +39,7 @@ interface GmailInboxProps {
 
 const MAILBOX_LABELS: Record<GmailMailbox, string> = {
   inbox: '\u6536\u4ef6\u7bb1',
+  unread: '\u672a\u8bfb\u90ae\u4ef6',
   starred: '\u5df2\u6807\u661f',
   sent: '\u5df2\u53d1\u9001',
   drafts: '\u8349\u7a3f',
@@ -62,6 +63,7 @@ const CATEGORY_QUERIES: Record<GmailCategory, string> = {
 
 const MAILBOX_API_LABELS: Record<GmailMailbox, string[]> = {
   inbox: ['INBOX'],
+  unread: ['INBOX', 'UNREAD'],
   starred: ['STARRED'],
   sent: ['SENT'],
   drafts: ['DRAFT'],
@@ -261,10 +263,13 @@ export function GmailInbox({
 
   useEffect(() => {
     if (!updatedThread) return;
-    setThreads((current) =>
-      current.map((thread) => thread.id === updatedThread.id ? updatedThread : thread),
-    );
-  }, [updatedThread]);
+    setThreads((current) => {
+      if (mailbox === 'unread' && !updatedThread.hasUnread) {
+        return current.filter((thread) => thread.id !== updatedThread.id);
+      }
+      return current.map((thread) => thread.id === updatedThread.id ? updatedThread : thread);
+    });
+  }, [mailbox, updatedThread]);
 
   useEffect(() => {
     const params = new URLSearchParams(window.location.search);
@@ -528,7 +533,7 @@ export function GmailInbox({
       <div className="flex shrink-0 items-center justify-between border-b px-4 py-3">
         <div className="flex min-w-0 items-center gap-2">
           <h2 className="truncate font-semibold">{MAILBOX_LABELS[mailbox]}</h2>
-          {mailbox === 'inbox' && (
+          {(mailbox === 'inbox' || mailbox === 'unread') && (
             <Badge variant="secondary">
               {threads.filter((thread) => thread.hasUnread).length} {'\u672a\u8bfb'}
             </Badge>
@@ -556,14 +561,16 @@ export function GmailInbox({
             className="h-9 pl-9"
           />
         </div>
-        <Button
-          variant={showUnreadOnly ? 'secondary' : 'ghost'}
-          size="sm"
-          className="mt-1 h-7 px-2 text-xs"
-          onClick={() => setShowUnreadOnly((current) => !current)}
-        >
-          {showUnreadOnly ? '\u663e\u793a\u5168\u90e8' : '\u53ea\u770b\u672a\u8bfb'}
-        </Button>
+        {mailbox !== 'unread' && (
+          <Button
+            variant={showUnreadOnly ? 'secondary' : 'ghost'}
+            size="sm"
+            className="mt-1 h-7 px-2 text-xs"
+            onClick={() => setShowUnreadOnly((current) => !current)}
+          >
+            {showUnreadOnly ? '\u663e\u793a\u5168\u90e8' : '\u53ea\u770b\u672a\u8bfb'}
+          </Button>
+        )}
       </div>
 
       {mailbox === 'inbox' && (

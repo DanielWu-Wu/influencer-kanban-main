@@ -9,7 +9,7 @@ import { useEmailTranslations, useGmailAuth, useSettings } from '@/lib/data';
 import { 
   ArrowLeft, Reply, MoreHorizontal, Globe, Languages,
   Copy, Sparkles, ChevronDown, Loader2,
-  Paperclip, Download, Mail
+  Paperclip, Download, Mail, MailOpen
 } from 'lucide-react';
 import { EmailComposer } from './email-composer';
 
@@ -23,7 +23,7 @@ export function EmailDetail({ thread, onBack, onThreadUpdated }: EmailDetailProp
   const [expandedMessages, setExpandedMessages] = useState<Set<string>>(new Set([thread.messages[thread.messages.length - 1].id]));
   const [showComposer, setShowComposer] = useState(false);
   const [replyMode, setReplyMode] = useState<'compose' | 'ai'>('compose');
-  const [markingUnreadId, setMarkingUnreadId] = useState<string | null>(null);
+  const [changingReadStateId, setChangingReadStateId] = useState<string | null>(null);
   const [messageActionError, setMessageActionError] = useState<string | null>(null);
   const { addTranslation, getTranslation } = useEmailTranslations();
   const { auth, connect } = useGmailAuth();
@@ -62,9 +62,10 @@ export function EmailDetail({ thread, onBack, onThreadUpdated }: EmailDetailProp
     return result.data.accessToken as string;
   };
 
-  const markMessageUnread = async (message: GmailMessage) => {
-    if (!message.isRead || markingUnreadId) return;
-    setMarkingUnreadId(message.id);
+  const toggleMessageReadState = async (message: GmailMessage) => {
+    if (changingReadStateId) return;
+    const markAsUnread = message.isRead;
+    setChangingReadStateId(message.id);
     setMessageActionError(null);
 
     try {
@@ -77,31 +78,48 @@ export function EmailDetail({ thread, onBack, onThreadUpdated }: EmailDetailProp
             Authorization: `Bearer ${accessToken}`,
             'Content-Type': 'application/json',
           },
-          body: JSON.stringify({ addLabelIds: ['UNREAD'], removeLabelIds: [] }),
+          body: JSON.stringify({
+            addLabelIds: markAsUnread ? ['UNREAD'] : [],
+            removeLabelIds: markAsUnread ? [] : ['UNREAD'],
+          }),
         },
       );
       if (!response.ok) {
         const result = await response.json().catch(() => ({}));
-        throw new Error(result.error?.message || '\u6807\u8bb0\u672a\u8bfb\u5931\u8d25');
+        throw new Error(
+          result.error?.message || (markAsUnread ? '\u6807\u8bb0\u672a\u8bfb\u5931\u8d25' : '\u6807\u8bb0\u5df2\u8bfb\u5931\u8d25'),
+        );
       }
 
+      const updatedMessages = thread.messages.map((item) => item.id === message.id
+        ? {
+            ...item,
+            isRead: !markAsUnread,
+            labels: markAsUnread
+              ? Array.from(new Set([...item.labels, 'UNREAD']))
+              : item.labels.filter((label) => label !== 'UNREAD'),
+          }
+        : item);
+      const hasUnread = updatedMessages.some((item) => !item.isRead);
       const updatedThread: GmailThread = {
         ...thread,
-        hasUnread: true,
-        labels: Array.from(new Set([...thread.labels, 'UNREAD'])),
-        messages: thread.messages.map((item) => item.id === message.id
-          ? {
-              ...item,
-              isRead: false,
-              labels: Array.from(new Set([...item.labels, 'UNREAD'])),
-            }
-          : item),
+        hasUnread,
+        labels: hasUnread
+          ? Array.from(new Set([...thread.labels, 'UNREAD']))
+          : thread.labels.filter((label) => label !== 'UNREAD'),
+        messages: updatedMessages,
       };
       onThreadUpdated?.(updatedThread);
     } catch (error) {
-      setMessageActionError(error instanceof Error ? error.message : '\u6807\u8bb0\u672a\u8bfb\u5931\u8d25');
+      setMessageActionError(
+        error instanceof Error
+          ? error.message
+          : markAsUnread
+            ? '\u6807\u8bb0\u672a\u8bfb\u5931\u8d25'
+            : '\u6807\u8bb0\u5df2\u8bfb\u5931\u8d25',
+      );
     } finally {
-      setMarkingUnreadId(null);
+      setChangingReadStateId(null);
     }
   };
 
@@ -341,19 +359,23 @@ export function EmailDetail({ thread, onBack, onThreadUpdated }: EmailDetailProp
                         variant="ghost"
                         size="icon"
                         className="h-8 w-8"
-                        title={message.isRead ? '\u6807\u8bb0\u4e3a\u672a\u8bfb' : '\u5df2\u662f\u672a\u8bfb\u90ae\u4ef6'}
-                        disabled={!message.isRead || markingUnreadId === message.id}
+                        title={message.isRead ? '\u6807\u8bb0\u4e3a\u672a\u8bfb' : '\u6807\u8bb0\u4e3a\u5df2\u8bfb'}
+                        disabled={changingReadStateId !== null}
                         onClick={(e) => {
                           e.stopPropagation();
-                          markMessageUnread(message);
+                          toggleMessageReadState(message);
                         }}
                       >
-                        {markingUnreadId === message.id ? (
+                        {changingReadStateId === message.id ? (
                           <Loader2 className="h-4 w-4 animate-spin" />
+                        ) : message.isRead ? (
+                          <Mail className="h-4 w-4" />
                         ) : (
-                          <Mail className={`h-4 w-4 ${message.isRead ? '' : 'text-primary'}`} />
+                          <MailOpen className="h-4 w-4 text-primary" />
                         )}
-                        <span className="sr-only">{'\u6807\u8bb0\u4e3a\u672a\u8bfb'}</span>
+                        <span className="sr-only">
+                          {message.isRead ? '\u6807\u8bb0\u4e3a\u672a\u8bfb' : '\u6807\u8bb0\u4e3a\u5df2\u8bfb'}
+                        </span>
                       </Button>
                       {message.hasAttachments && (
                         <Badge variant="secondary" className="text-xs">有附件</Badge>

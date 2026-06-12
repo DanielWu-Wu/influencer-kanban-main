@@ -238,7 +238,7 @@ export interface GmailThread {
   isStarred: boolean;
 }
 
-export type GmailMailbox = 'inbox' | 'starred' | 'sent' | 'drafts';
+export type GmailMailbox = 'inbox' | 'unread' | 'starred' | 'sent' | 'drafts';
 export type GmailCategory = 'primary' | 'promotions' | 'social';
 
 export interface EmailTranslation {

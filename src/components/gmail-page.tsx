@@ -1,7 +1,7 @@
 'use client';
 
 import { useState } from 'react';
-import { FileText, Inbox, Mail, Send, Settings, Star } from 'lucide-react';
+import { FileText, Inbox, Mail, MailOpen, Send, Settings, Star } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { GmailCategory, GmailMailbox, GmailThread } from '@/lib/types';
 import { EmailDetail } from './email-detail';
@@ -14,6 +14,7 @@ const MAILBOXES: Array<{
   icon: typeof Inbox;
 }> = [
   { id: 'inbox', label: '\u6536\u4ef6\u7bb1', icon: Inbox },
+  { id: 'unread', label: '\u672a\u8bfb\u90ae\u4ef6', icon: MailOpen },
   { id: 'starred', label: '\u5df2\u6807\u661f', icon: Star },
   { id: 'sent', label: '\u5df2\u53d1\u9001', icon: Send },
   { id: 'drafts', label: '\u8349\u7a3f', icon: FileText },
