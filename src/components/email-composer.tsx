@@ -1,6 +1,6 @@
 'use client';
 
-import { useEffect, useMemo, useState, type ReactNode } from 'react';
+import { useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 import {
   AlertCircle,
   ArrowRight,
@@ -8,6 +8,7 @@ import {
   Copy,
   Globe,
   Loader2,
+  Paperclip,
   RefreshCw,
   Save,
   Sparkles,
@@ -59,6 +60,8 @@ const LANGUAGE_OPTIONS = [
   ['zh', '中文'],
 ] as const;
 
+const MAX_ATTACHMENT_BYTES = 18 * 1024 * 1024;
+
 function extractEmail(value: string) {
   return value.match(/<([^>]+)>/)?.[1] || value.split(',')[0]?.trim() || value;
 }
@@ -70,6 +73,95 @@ function buildThreadMessages(thread: GmailThread) {
     date: message.date,
     body: message.body,
   }));
+}
+
+function encodeUtf8Base64(value: string) {
+  const bytes = new TextEncoder().encode(value);
+  let binary = '';
+  const chunkSize = 32_768;
+  for (let index = 0; index < bytes.length; index += chunkSize) {
+    binary += String.fromCharCode(...bytes.subarray(index, index + chunkSize));
+  }
+  return btoa(binary);
+}
+
+function arrayBufferToBase64(buffer: ArrayBuffer) {
+  const bytes = new Uint8Array(buffer);
+  let binary = '';
+  const chunkSize = 32_768;
+  for (let index = 0; index < bytes.length; index += chunkSize) {
+    binary += String.fromCharCode(...bytes.subarray(index, index + chunkSize));
+  }
+  return btoa(binary);
+}
+
+function wrapBase64(value: string) {
+  return value.match(/.{1,76}/g)?.join('\r\n') || '';
+}
+
+async function buildRawEmail({
+  to,
+  subject,
+  body,
+  inReplyTo,
+  references,
+  attachments,
+}: {
+  to: string;
+  subject: string;
+  body: string;
+  inReplyTo?: string;
+  references?: string;
+  attachments: File[];
+}) {
+  const headers = [
+    `To: ${to}`,
+    `Subject: =?utf-8?B?${encodeUtf8Base64(subject)}?=`,
+    ...(inReplyTo ? [`In-Reply-To: ${inReplyTo}`] : []),
+    ...(references ? [`References: ${references}`] : []),
+    'MIME-Version: 1.0',
+  ];
+
+  if (attachments.length === 0) {
+    return [
+      ...headers,
+      'Content-Type: text/plain; charset=utf-8',
+      'Content-Transfer-Encoding: base64',
+      '',
+      wrapBase64(encodeUtf8Base64(body)),
+    ].join('\r\n');
+  }
+
+  const boundary = `influencer-kanban-${crypto.randomUUID()}`;
+  const parts = [
+    ...headers,
+    `Content-Type: multipart/mixed; boundary="${boundary}"`,
+    '',
+    `--${boundary}`,
+    'Content-Type: text/plain; charset=utf-8',
+    'Content-Transfer-Encoding: base64',
+    '',
+    wrapBase64(encodeUtf8Base64(body)),
+  ];
+
+  for (const file of attachments) {
+    const encodedName = encodeUtf8Base64(file.name.replace(/[\r\n]/g, ' '));
+    parts.push(
+      `--${boundary}`,
+      `Content-Type: ${file.type || 'application/octet-stream'}; name="=?utf-8?B?${encodedName}?="`,
+      `Content-Disposition: attachment; filename="=?utf-8?B?${encodedName}?="`,
+      'Content-Transfer-Encoding: base64',
+      '',
+      wrapBase64(arrayBufferToBase64(await file.arrayBuffer())),
+    );
+  }
+
+  parts.push(`--${boundary}--`, '');
+  return parts.join('\r\n');
+}
+
+function toBase64Url(value: string) {
+  return btoa(value).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
 }
 
 export function EmailComposer({ thread, mode, onClose, initialMessage }: EmailComposerProps) {
@@ -90,6 +182,9 @@ export function EmailComposer({ thread, mode, onClose, initialMessage }: EmailCo
   const [savingDraft, setSavingDraft] = useState(false);
   const [draftSaved, setDraftSaved] = useState(false);
   const [copied, setCopied] = useState(false);
+  const [attachments, setAttachments] = useState<File[]>([]);
+  const [attachmentError, setAttachmentError] = useState('');
+  const fileInputRef = useRef<HTMLInputElement>(null);
 
   const threadMessages = useMemo(() => buildThreadMessages(thread), [thread]);
   const lastMessage = thread.messages[thread.messages.length - 1];
@@ -217,28 +312,36 @@ export function EmailComposer({ thread, mode, onClose, initialMessage }: EmailCo
       const references = [externalMessage.references, externalMessage.rfcMessageId]
         .filter(Boolean)
         .join(' ');
-      const response = await fetch('/api/gmail', {
+      const subject = /^re:/i.test(thread.subject) ? thread.subject : `Re: ${thread.subject}`;
+      const rawEmail = await buildRawEmail({
+        to: extractEmail(externalMessage.from),
+        subject,
+        body: finalReply,
+        inReplyTo: externalMessage.rfcMessageId,
+        references,
+        attachments,
+      });
+      const response = await fetch('https://gmail.googleapis.com/gmail/v1/users/me/drafts', {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: {
+          Authorization: `Bearer ${accessToken}`,
+          'Content-Type': 'application/json',
+        },
         body: JSON.stringify({
-          action: 'draft',
-          accessToken,
-          to: extractEmail(externalMessage.from),
-          subject: /^re:/i.test(thread.subject) ? thread.subject : `Re: ${thread.subject}`,
-          body: finalReply,
-          threadId: thread.id,
-          inReplyTo: externalMessage.rfcMessageId,
-          references,
+          message: {
+            raw: toBase64Url(rawEmail),
+            threadId: thread.id,
+          },
         }),
       });
       const result = await response.json();
-      if (!response.ok || !result.success) {
-        throw new Error(result.error || '保存 Gmail 草稿失败');
+      if (!response.ok) {
+        throw new Error(result.error?.message || '保存 Gmail 草稿失败');
       }
 
       addDraft({
         to: extractEmail(externalMessage.from),
-        subject: /^re:/i.test(thread.subject) ? thread.subject : `Re: ${thread.subject}`,
+        subject,
         body: finalReply,
       });
       setDraftSaved(true);
@@ -247,6 +350,21 @@ export function EmailComposer({ thread, mode, onClose, initialMessage }: EmailCo
     } finally {
       setSavingDraft(false);
     }
+  };
+
+  const handleAttachmentSelection = (files: FileList | null) => {
+    if (!files?.length) return;
+    const nextFiles = [...attachments, ...Array.from(files)];
+    const totalSize = nextFiles.reduce((sum, file) => sum + file.size, 0);
+    if (totalSize > MAX_ATTACHMENT_BYTES) {
+      setAttachmentError('附件总大小不能超过 18 MB。');
+      if (fileInputRef.current) fileInputRef.current.value = '';
+      return;
+    }
+
+    setAttachments(nextFiles);
+    setAttachmentError('');
+    if (fileInputRef.current) fileInputRef.current.value = '';
   };
 
   const copyToClipboard = async () => {
@@ -301,6 +419,62 @@ export function EmailComposer({ thread, mode, onClose, initialMessage }: EmailCo
           <Button variant="outline" size="sm" onClick={analyzeThread}>重新分析</Button>
         </ErrorMessage>
       )}
+
+      <div className="space-y-2">
+        <input
+          ref={fileInputRef}
+          type="file"
+          multiple
+          className="hidden"
+          onChange={(event) => handleAttachmentSelection(event.target.files)}
+        />
+        <div className="flex items-center justify-between">
+          <label className="text-sm font-medium">附件</label>
+          <Button
+            type="button"
+            variant="outline"
+            size="sm"
+            className="h-8 gap-1.5"
+            onClick={() => fileInputRef.current?.click()}
+          >
+            <Paperclip className="h-3.5 w-3.5" />
+            添加附件
+          </Button>
+        </div>
+        {attachments.length > 0 && (
+          <div className="space-y-2 rounded-lg border p-2">
+            {attachments.map((file, index) => (
+              <div
+                key={`${file.name}-${file.size}-${index}`}
+                className="flex items-center gap-2 rounded-md bg-muted/40 px-3 py-2"
+              >
+                <Paperclip className="h-4 w-4 shrink-0 text-muted-foreground" />
+                <div className="min-w-0 flex-1">
+                  <p className="truncate text-sm">{file.name}</p>
+                  <p className="text-xs text-muted-foreground">{formatFileSize(file.size)}</p>
+                </div>
+                <Button
+                  type="button"
+                  variant="ghost"
+                  size="icon"
+                  className="h-7 w-7"
+                  title="移除附件"
+                  onClick={() => {
+                    setAttachments((current) => current.filter((_, fileIndex) => fileIndex !== index));
+                    setAttachmentError('');
+                  }}
+                >
+                  <X className="h-3.5 w-3.5" />
+                </Button>
+              </div>
+            ))}
+          </div>
+        )}
+        <p className="text-xs text-muted-foreground">
+          支持图片、PDF、文档等常见文件，附件总大小上限为 18 MB。
+        </p>
+        {attachmentError && <p className="text-xs text-destructive">{attachmentError}</p>}
+      </div>
 
       {mode === 'ai' && analysis && !suggestion && (
         <>
@@ -460,4 +634,10 @@ function ErrorMessage({ message, children }: { message: string; children?: React
       {children}
     </div>
   );
+}
+
+function formatFileSize(bytes: number) {
+  if (bytes < 1024) return `${bytes} B`;
+  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
+  return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
 }
