@@ -92,12 +92,14 @@ export function RichEmailEditor({
   onChange,
   placeholder = '输入邮件内容...',
   minHeight = '12rem',
+  fillHeight = false,
   className,
 }: {
   value: string;
   onChange: (value: string) => void;
   placeholder?: string;
   minHeight?: string;
+  fillHeight?: boolean;
   className?: string;
 }) {
   const editorRef = useRef<HTMLDivElement>(null);
@@ -192,8 +194,14 @@ export function RichEmailEditor({
   }, [emitChange, restoreSelection, saveSelection]);
 
   return (
-    <div className={cn('overflow-hidden rounded-md border bg-background', className)}>
-      <div className="relative">
+    <div
+      className={cn(
+        'overflow-hidden rounded-md border bg-background',
+        fillHeight && 'flex min-h-0 flex-col',
+        className,
+      )}
+    >
+      <div className={cn('relative', fillHeight && 'min-h-0 flex-1')}>
         {isEmailContentEmpty(value) && (
           <div className="pointer-events-none absolute left-3 top-3 text-sm text-muted-foreground">
             {placeholder}
@@ -206,8 +214,11 @@ export function RichEmailEditor({
           role="textbox"
           aria-label="邮件正文"
           aria-multiline="true"
-          className="overflow-y-auto px-3 py-3 text-sm leading-6 outline-none [&_a]:text-blue-600 [&_a]:underline [&_blockquote]:border-l-4 [&_blockquote]:border-muted-foreground/30 [&_blockquote]:pl-3 [&_blockquote]:text-muted-foreground [&_img]:my-2 [&_img]:max-w-full [&_ol]:ml-5 [&_ol]:list-decimal [&_ul]:ml-5 [&_ul]:list-disc"
-          style={{ minHeight }}
+          className={cn(
+            'overflow-y-auto px-3 py-3 text-sm leading-6 outline-none [&_a]:text-blue-600 [&_a]:underline [&_blockquote]:border-l-4 [&_blockquote]:border-muted-foreground/30 [&_blockquote]:pl-3 [&_blockquote]:text-muted-foreground [&_img]:my-2 [&_img]:max-w-full [&_ol]:ml-5 [&_ol]:list-decimal [&_ul]:ml-5 [&_ul]:list-disc',
+            fillHeight && 'absolute inset-0',
+          )}
+          style={fillHeight ? undefined : { minHeight }}
           onFocus={saveSelection}
           onInput={() => {
             emitChange();

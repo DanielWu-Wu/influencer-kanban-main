@@ -180,14 +180,14 @@ export function NewEmailComposer({
 
   return (
     <Dialog open={open} onOpenChange={handleOpenChange}>
-      <DialogContent className="flex max-h-[90vh] max-w-2xl flex-col gap-0 overflow-hidden p-0">
-        <DialogHeader className="border-b px-5 py-4">
+      <DialogContent className="bottom-4 left-auto right-4 top-auto flex h-[min(820px,calc(100vh-2rem))] w-[min(900px,calc(100vw-2rem))] max-w-[900px] translate-x-0 translate-y-0 flex-col gap-0 overflow-hidden rounded-md p-0 shadow-2xl sm:max-w-[900px] max-sm:inset-0 max-sm:h-dvh max-sm:w-full max-sm:max-w-none max-sm:rounded-none">
+        <DialogHeader className="shrink-0 border-b bg-muted/40 px-5 py-3">
           <DialogTitle>写新邮件</DialogTitle>
           <DialogDescription>向新的红人或联系人发送邮件</DialogDescription>
         </DialogHeader>
 
-        <div className="min-h-0 flex-1 space-y-3 overflow-y-auto px-5 py-4">
-          <div className="grid gap-3 sm:grid-cols-[72px_1fr] sm:items-center">
+        <div className="flex min-h-0 flex-1 flex-col gap-3 px-5 py-4">
+          <div className="grid shrink-0 gap-3 sm:grid-cols-[72px_1fr] sm:items-center">
             <label htmlFor="new-email-to" className="text-sm text-muted-foreground">收件人</label>
             <Input
               id="new-email-to"
@@ -208,7 +208,9 @@ export function NewEmailComposer({
           <RichEmailEditor
             value={content}
             placeholder="输入邮件正文..."
-            minHeight="16rem"
+            minHeight="20rem"
+            fillHeight
+            className="min-h-[24rem] flex-1"
             onChange={setContent}
           />
 
@@ -219,7 +221,7 @@ export function NewEmailComposer({
             className="hidden"
             onChange={(event) => addAttachments(event.target.files)}
           />
-          <div className="flex items-center justify-between">
+          <div className="flex shrink-0 items-center justify-between">
             <p className="text-xs text-muted-foreground">附件总大小上限 18 MB</p>
             <Button
               type="button"
@@ -234,7 +236,7 @@ export function NewEmailComposer({
           </div>
 
           {attachments.length > 0 && (
-            <div className="space-y-2 rounded-md border p-2">
+            <div className="max-h-28 shrink-0 space-y-2 overflow-y-auto rounded-md border p-2">
               {attachments.map((file, index) => (
                 <div key={`${file.name}-${index}`} className="flex items-center gap-2 px-2 py-1">
                   <Paperclip className="h-4 w-4 text-muted-foreground" />
@@ -255,10 +257,10 @@ export function NewEmailComposer({
             </div>
           )}
 
-          {error && <p className="text-sm text-destructive">{error}</p>}
+          {error && <p className="shrink-0 text-sm text-destructive">{error}</p>}
         </div>
 
-        <DialogFooter className="border-t px-5 py-4">
+        <DialogFooter className="shrink-0 border-t bg-background px-5 py-3">
           <Button
             variant="outline"
             className="gap-2"
