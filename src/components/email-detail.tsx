@@ -23,6 +23,7 @@ export function EmailDetail({ thread, onBack, onThreadUpdated }: EmailDetailProp
   const [expandedMessages, setExpandedMessages] = useState<Set<string>>(new Set([thread.messages[thread.messages.length - 1].id]));
   const [showComposer, setShowComposer] = useState(false);
   const [replyMode, setReplyMode] = useState<'compose' | 'ai'>('compose');
+  const [savedReplyDraft, setSavedReplyDraft] = useState('');
   const [changingReadStateId, setChangingReadStateId] = useState<string | null>(null);
   const [messageActionError, setMessageActionError] = useState<string | null>(null);
   const { addTranslation, getTranslation } = useEmailTranslations();
@@ -509,6 +510,8 @@ export function EmailDetail({ thread, onBack, onThreadUpdated }: EmailDetailProp
             thread={thread}
             mode={replyMode}
             onClose={() => setShowComposer(false)}
+            initialMessage={replyMode === 'compose' ? savedReplyDraft : undefined}
+            onDraftSaved={setSavedReplyDraft}
           />
         )}
       </div>

@@ -12,6 +12,7 @@ import {
   RefreshCw,
   Save,
   Sparkles,
+  Send,
   X,
 } from 'lucide-react';
 import { Badge } from '@/components/ui/badge';
@@ -25,6 +26,7 @@ interface EmailComposerProps {
   mode: 'compose' | 'ai';
   onClose: () => void;
   initialMessage?: string;
+  onDraftSaved?: (content: string) => void;
 }
 
 type CollaborationAnalysis = {
@@ -164,7 +166,13 @@ function toBase64Url(value: string) {
   return btoa(value).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
 }
 
-export function EmailComposer({ thread, mode, onClose, initialMessage }: EmailComposerProps) {
+export function EmailComposer({
+  thread,
+  mode,
+  onClose,
+  initialMessage,
+  onDraftSaved,
+}: EmailComposerProps) {
   const { addSuggestion } = useEmailAISuggestions();
   const { addDraft } = useEmailDrafts();
   const { auth, connect } = useGmailAuth();
@@ -180,7 +188,8 @@ export function EmailComposer({ thread, mode, onClose, initialMessage }: EmailCo
   const [aiError, setAiError] = useState('');
   const [suggestion, setSuggestion] = useState<AISuggestion | null>(null);
   const [savingDraft, setSavingDraft] = useState(false);
-  const [draftSaved, setDraftSaved] = useState(false);
+  const [sending, setSending] = useState(false);
+  const [completion, setCompletion] = useState<'draft' | 'sent' | null>(null);
   const [copied, setCopied] = useState(false);
   const [attachments, setAttachments] = useState<File[]>([]);
   const [attachmentError, setAttachmentError] = useState('');
@@ -297,30 +306,35 @@ export function EmailComposer({ thread, mode, onClose, initialMessage }: EmailCo
     return result.data.accessToken as string;
   };
 
-  const saveToGmailDrafts = async () => {
+  const createOutgoingEmail = async () => {
     const replyBody = replyContent.trim();
-    if (!replyBody) return;
+    if (!replyBody) throw new Error('请先填写回复内容。');
     const signature = settings.emailSignature?.trim();
     const finalReply = signature && !replyBody.endsWith(signature)
       ? `${replyBody}\n\n${signature}`
       : replyBody;
+    const accessToken = await getAccessToken();
+    const references = [externalMessage.references, externalMessage.rfcMessageId]
+      .filter(Boolean)
+      .join(' ');
+    const subject = /^re:/i.test(thread.subject) ? thread.subject : `Re: ${thread.subject}`;
+    const rawEmail = await buildRawEmail({
+      to: extractEmail(externalMessage.from),
+      subject,
+      body: finalReply,
+      inReplyTo: externalMessage.rfcMessageId,
+      references,
+      attachments,
+    });
+    return { accessToken, finalReply, rawEmail, subject };
+  };
+
+  const saveToGmailDrafts = async () => {
     setSavingDraft(true);
     setAiError('');
 
     try {
-      const accessToken = await getAccessToken();
-      const references = [externalMessage.references, externalMessage.rfcMessageId]
-        .filter(Boolean)
-        .join(' ');
-      const subject = /^re:/i.test(thread.subject) ? thread.subject : `Re: ${thread.subject}`;
-      const rawEmail = await buildRawEmail({
-        to: extractEmail(externalMessage.from),
-        subject,
-        body: finalReply,
-        inReplyTo: externalMessage.rfcMessageId,
-        references,
-        attachments,
-      });
+      const { accessToken, finalReply, rawEmail, subject } = await createOutgoingEmail();
       const response = await fetch('https://gmail.googleapis.com/gmail/v1/users/me/drafts', {
         method: 'POST',
         headers: {
@@ -344,11 +358,48 @@ export function EmailComposer({ thread, mode, onClose, initialMessage }: EmailCo
         subject,
         body: finalReply,
       });
-      setDraftSaved(true);
+      onDraftSaved?.(finalReply);
+      setCompletion('draft');
     } catch (error) {
       setAiError(error instanceof Error ? error.message : '保存 Gmail 草稿失败');
     } finally {
       setSavingDraft(false);
+    }
+  };
+
+  const sendEmail = async () => {
+    if (!replyContent.trim()) return;
+    const recipient = extractEmail(externalMessage.from);
+    const confirmed = window.confirm(
+      `确定要直接发送给 ${recipient} 吗？发送后将无法撤回。`,
+    );
+    if (!confirmed) return;
+
+    setSending(true);
+    setAiError('');
+    try {
+      const { accessToken, rawEmail } = await createOutgoingEmail();
+      const response = await fetch('https://gmail.googleapis.com/gmail/v1/users/me/messages/send', {
+        method: 'POST',
+        headers: {
+          Authorization: `Bearer ${accessToken}`,
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+          raw: toBase64Url(rawEmail),
+          threadId: thread.id,
+        }),
+      });
+      const result = await response.json();
+      if (!response.ok) {
+        throw new Error(result.error?.message || '邮件发送失败');
+      }
+      setCompletion('sent');
+      onDraftSaved?.('');
+    } catch (error) {
+      setAiError(error instanceof Error ? error.message : '邮件发送失败');
+    } finally {
+      setSending(false);
     }
   };
 
@@ -374,15 +425,21 @@ export function EmailComposer({ thread, mode, onClose, initialMessage }: EmailCo
     window.setTimeout(() => setCopied(false), 2000);
   };
 
-  if (draftSaved) {
+  if (completion) {
     return (
       <div className="space-y-4 py-2 text-center">
         <div className="mx-auto flex h-10 w-10 items-center justify-center rounded-full bg-green-100">
           <Check className="h-5 w-5 text-green-700" />
         </div>
         <div>
-          <p className="font-medium">已保存到 Gmail 官方草稿箱</p>
-          <p className="mt-1 text-sm text-muted-foreground">你可以在 Gmail 中检查并手动发送。</p>
+          <p className="font-medium">
+            {completion === 'draft' ? '已保存到 Gmail 官方草稿箱' : '邮件已发送'}
+          </p>
+          <p className="mt-1 text-sm text-muted-foreground">
+            {completion === 'draft'
+              ? '关闭助手后，手动回复框也会保留这份草稿。'
+              : `邮件已直接发送给 ${extractEmail(externalMessage.from)}。`}
+          </p>
         </div>
         <Button variant="outline" className="w-full" onClick={onClose}>关闭</Button>
       </div>
@@ -555,10 +612,9 @@ export function EmailComposer({ thread, mode, onClose, initialMessage }: EmailCo
             </div>
           </div>
           {aiError && <ErrorMessage message={aiError} />}
-          <div className="flex gap-2">
+          <div className="grid grid-cols-3 gap-2">
             <Button
               variant="outline"
-              className="flex-1"
               onClick={() => {
                 setSuggestion(null);
                 setAiError('');
@@ -567,13 +623,25 @@ export function EmailComposer({ thread, mode, onClose, initialMessage }: EmailCo
               <RefreshCw className="mr-2 h-4 w-4" />
               调整想法
             </Button>
-            <Button className="flex-1" onClick={saveToGmailDrafts} disabled={savingDraft || !replyContent.trim()}>
+            <Button
+              variant="outline"
+              onClick={sendEmail}
+              disabled={sending || savingDraft || !replyContent.trim()}
+            >
+              {sending ? (
+                <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+              ) : (
+                <Send className="mr-2 h-4 w-4" />
+              )}
+              直接发送
+            </Button>
+            <Button onClick={saveToGmailDrafts} disabled={savingDraft || sending || !replyContent.trim()}>
               {savingDraft ? (
                 <Loader2 className="mr-2 h-4 w-4 animate-spin" />
               ) : (
                 <Save className="mr-2 h-4 w-4" />
               )}
-              保存到 Gmail 草稿
+              保存为草稿
             </Button>
           </div>
         </div>
@@ -588,10 +656,20 @@ export function EmailComposer({ thread, mode, onClose, initialMessage }: EmailCo
             className="min-h-44 resize-y"
           />
           {aiError && <ErrorMessage message={aiError} />}
-          <Button className="w-full" onClick={saveToGmailDrafts} disabled={savingDraft || !replyContent.trim()}>
-            {savingDraft ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <ArrowRight className="mr-2 h-4 w-4" />}
-            保存到 Gmail 草稿
+          <div className="grid grid-cols-2 gap-2">
+          <Button
+            variant="outline"
+            onClick={sendEmail}
+            disabled={sending || savingDraft || !replyContent.trim()}
+          >
+            {sending ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <Send className="mr-2 h-4 w-4" />}
+            直接发送
           </Button>
+          <Button onClick={saveToGmailDrafts} disabled={savingDraft || sending || !replyContent.trim()}>
+            {savingDraft ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <ArrowRight className="mr-2 h-4 w-4" />}
+            保存为草稿
+          </Button>
+          </div>
         </div>
       )}
     </div>
