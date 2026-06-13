@@ -59,6 +59,36 @@ export interface Influencer {
   updatedAt: string;
 }
 
+export type ProductStatus = 'active' | 'paused' | 'archived';
+
+export interface ProductMarketProfile {
+  id: string;
+  targetMarket: string;
+  siteName: string;
+  localProductUrl: string;
+  targetInfluencerType: string;
+  promotionBudget: string;
+  cooperationRequirements: string;
+  mustMention: string;
+  prohibitedContent: string;
+  localAssetLinks: string;
+}
+
+export interface Product {
+  id: string;
+  name: string;
+  model: string;
+  productUrl: string;
+  sellingPoints: string;
+  technicalSpecifications: string;
+  imageAndResourceLinks: string;
+  notes: string;
+  status: ProductStatus;
+  marketProfiles: ProductMarketProfile[];
+  createdAt: string;
+  updatedAt: string;
+}
+
 export interface Collaboration {
   id: string;
   influencerId: string;

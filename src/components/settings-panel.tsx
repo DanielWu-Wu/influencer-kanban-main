@@ -8,6 +8,7 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/com
 import { Badge } from '@/components/ui/badge';
 import { Separator } from '@/components/ui/separator';
 import { useGmailAuth, useSettings } from '@/lib/data';
+import { ProductDatabaseSettings } from '@/components/product-database-settings';
 import {
   Settings, Database, Mail, FileSpreadsheet, Zap,
   CheckCircle2, AlertTriangle, ExternalLink,
@@ -28,7 +29,7 @@ export function SettingsPanel() {
   const [testingModel, setTestingModel] = useState(false);
   const [modelTestResult, setModelTestResult] = useState<{ success: boolean; message: string } | null>(null);
   const [saved, setSaved] = useState(false);
-  const [expandedSection, setExpandedSection] = useState<string | null>('feishu');
+  const [expandedSection, setExpandedSection] = useState<string | null>('products');
 
   useEffect(() => {
     if (settingsLoading) return;
@@ -122,7 +123,7 @@ export function SettingsPanel() {
             <Settings className="w-5 h-5" />
             设置
           </h2>
-          <p className="text-sm text-muted-foreground mt-0.5">管理集成连接、品牌信息和模型配置</p>
+          <p className="text-sm text-muted-foreground mt-0.5">管理产品资料、集成连接、品牌信息和模型配置</p>
         </div>
         <Button onClick={handleSaveAll} size="sm" className="gap-1.5">
           {saved ? (
@@ -143,6 +144,11 @@ export function SettingsPanel() {
 
       {/* 设置卡片列表 - 可滚动区域 */}
       <div className="flex-1 min-h-0 overflow-y-auto pr-1 space-y-4">
+        <ProductDatabaseSettings
+          expanded={expandedSection === 'products'}
+          onToggle={() => toggleSection('products')}
+        />
+
         {/* 飞书多维表格 */}
         <Card className="overflow-hidden">
           <button

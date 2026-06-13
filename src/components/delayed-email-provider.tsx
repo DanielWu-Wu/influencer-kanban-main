@@ -149,6 +149,20 @@ export function DelayedEmailProvider({ children }: { children: ReactNode }) {
     return () => window.clearInterval(intervalId);
   }, []);
 
+  useEffect(() => {
+    const hasPendingTask = tasks.some(
+      (task) => task.status === 'countdown' || task.status === 'sending',
+    );
+    if (!hasPendingTask) return;
+
+    const protectPendingSend = (event: BeforeUnloadEvent) => {
+      event.preventDefault();
+      event.returnValue = '';
+    };
+    window.addEventListener('beforeunload', protectPendingSend);
+    return () => window.removeEventListener('beforeunload', protectPendingSend);
+  }, [tasks]);
+
   useEffect(() => () => {
     pendingRef.current.forEach((pending) => {
       window.clearTimeout(pending.timeoutId);

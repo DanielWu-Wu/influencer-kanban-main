@@ -15,6 +15,7 @@ import {
   EmailTranslation,
   EmailDraftSuggestion,
   EmailDraft,
+  Product,
 } from './types';
 import type { PromptTemplate } from './ai-prompts';
 
@@ -26,6 +27,7 @@ const STORAGE_KEYS = {
   COLLABORATIONS: 'influencer-board-collaborations',
   TODOS: 'influencer-board-todos',
   CALENDAR_EVENTS: 'influencer-board-calendar-events',
+  PRODUCTS: 'influencer-board-products',
   SETTINGS: 'influencer-board-settings',
 };
 
@@ -296,6 +298,67 @@ export function useInfluencers() {
     updateStatus,
     batchUpdateStatus,
   };
+}
+
+export function useProducts() {
+  const [products, setProducts] = useState<Product[]>([]);
+  const [loading, setLoading] = useState(true);
+
+  useEffect(() => {
+    setProducts(loadData<Product[]>(STORAGE_KEYS.PRODUCTS, []));
+    setLoading(false);
+
+    const handleStorage = (event: StorageEvent) => {
+      if (event.key === STORAGE_KEYS.PRODUCTS) {
+        setProducts(event.newValue ? JSON.parse(event.newValue) : []);
+      }
+    };
+
+    window.addEventListener('storage', handleStorage);
+    return () => window.removeEventListener('storage', handleStorage);
+  }, []);
+
+  const saveProducts = useCallback((newData: Product[]) => {
+    setProducts(newData);
+    saveData(STORAGE_KEYS.PRODUCTS, newData);
+  }, []);
+
+  const addProduct = useCallback(
+    (product: Omit<Product, 'id' | 'createdAt' | 'updatedAt'>) => {
+      const now = new Date().toISOString();
+      const newProduct: Product = {
+        ...product,
+        id: generateId(),
+        createdAt: now,
+        updatedAt: now,
+      };
+      saveProducts([...products, newProduct]);
+      return newProduct;
+    },
+    [products, saveProducts],
+  );
+
+  const updateProduct = useCallback(
+    (id: string, updates: Partial<Product>) => {
+      saveProducts(
+        products.map((product) =>
+          product.id === id
+            ? { ...product, ...updates, updatedAt: new Date().toISOString() }
+            : product,
+        ),
+      );
+    },
+    [products, saveProducts],
+  );
+
+  const deleteProduct = useCallback(
+    (id: string) => {
+      saveProducts(products.filter((product) => product.id !== id));
+    },
+    [products, saveProducts],
+  );
+
+  return { products, loading, addProduct, updateProduct, deleteProduct };
 }
 
 export function useEmailTemplates() {
