@@ -1,5 +1,6 @@
 import type { Metadata } from 'next';
 import './globals.css';
+import { DelayedEmailProvider } from '@/components/delayed-email-provider';
 
 export const metadata: Metadata = {
   title: {
@@ -38,7 +39,9 @@ export default function RootLayout({
 }>) {
   return (
     <html lang="zh-CN" suppressHydrationWarning>
-      <body className="antialiased">{children}</body>
+      <body className="antialiased">
+        <DelayedEmailProvider>{children}</DelayedEmailProvider>
+      </body>
     </html>
   );
 }

@@ -21,6 +21,7 @@ import {
   toBase64Url,
 } from '@/lib/email-content';
 import { RichEmailEditor } from './rich-email-editor';
+import { useDelayedEmailSender } from './delayed-email-provider';
 
 const MAX_ATTACHMENT_BYTES = 18 * 1024 * 1024;
 const EMPTY_ATTACHMENTS: File[] = [];
@@ -51,6 +52,7 @@ export function NewEmailComposer({
   const { auth, connect } = useGmailAuth();
   const { settings } = useSettings();
   const { addDraft } = useEmailDrafts();
+  const { scheduleEmail } = useDelayedEmailSender();
   const [to, setTo] = useState('');
   const [subject, setSubject] = useState('');
   const [content, setContent] = useState('');
@@ -59,9 +61,14 @@ export function NewEmailComposer({
   const [saving, setSaving] = useState(false);
   const [sending, setSending] = useState(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
+  const preserveContentOnOpenRef = useRef(false);
 
   useEffect(() => {
     if (!open) return;
+    if (preserveContentOnOpenRef.current) {
+      preserveContentOnOpenRef.current = false;
+      return;
+    }
     setTo('');
     setSubject(initialSubject);
     setContent(initialContent);
@@ -160,23 +167,39 @@ export function NewEmailComposer({
       setError('请输入有效的收件人邮箱。');
       return;
     }
-    if (!window.confirm(`确定直接发送给 ${to.trim()} 吗？发送后无法撤回。`)) return;
+    const recipient = to.trim();
+    const delaySeconds = Math.min(60, Math.max(0, settings.emailSendDelaySeconds ?? 0));
+    const confirmed = window.confirm(
+      delaySeconds > 0
+        ? `确定发送给 ${recipient} 吗？邮件将在 ${delaySeconds} 秒后实际发出，倒计时结束前可以取消。`
+        : `确定直接发送给 ${recipient} 吗？邮件将立即发出。`,
+    );
+    if (!confirmed) return;
 
     setSending(true);
     setError('');
     try {
       const { accessToken, raw } = await createEmail();
-      const response = await fetch('https://gmail.googleapis.com/gmail/v1/users/me/messages/send', {
-        method: 'POST',
-        headers: {
-          Authorization: `Bearer ${accessToken}`,
-          'Content-Type': 'application/json',
+      scheduleEmail({
+        accessToken,
+        raw,
+        recipient,
+        delaySeconds,
+        onSent: () => {
+          reset();
+          onOpenChange(false);
         },
-        body: JSON.stringify({ raw }),
+        onCancel: () => {
+          setError('已取消发送，邮件内容仍保留。');
+          preserveContentOnOpenRef.current = true;
+          onOpenChange(true);
+        },
+        onError: (message) => {
+          setError(message);
+          preserveContentOnOpenRef.current = true;
+          onOpenChange(true);
+        },
       });
-      const result = await response.json();
-      if (!response.ok) throw new Error(result.error?.message || '邮件发送失败。');
-      reset();
       onOpenChange(false);
     } catch (caught) {
       setError(caught instanceof Error ? caught.message : '邮件发送失败。');

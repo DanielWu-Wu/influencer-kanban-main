@@ -43,6 +43,7 @@ export interface AppSettings {
   brandName?: string;
   senderName?: string;
   emailSignature?: string;
+  emailSendDelaySeconds?: number;
   gmailClientId?: string;
   gmailClientSecret?: string;
   translatePrompt?: string;

@@ -28,6 +28,7 @@ import {
 } from '@/lib/email-content';
 import { GmailThread } from '@/lib/types';
 import { RichEmailEditor } from './rich-email-editor';
+import { useDelayedEmailSender } from './delayed-email-provider';
 
 interface EmailComposerProps {
   thread: GmailThread;
@@ -115,6 +116,7 @@ export function EmailComposer({
   const { addDraft } = useEmailDrafts();
   const { auth, connect } = useGmailAuth();
   const { settings, loading: settingsLoading } = useSettings();
+  const { scheduleEmail } = useDelayedEmailSender();
   const [replyContent, setReplyContent] = useState(initialMessage || '');
   const [userIdeas, setUserIdeas] = useState('');
   const [analysis, setAnalysis] = useState<CollaborationAnalysis | null>(null);
@@ -128,7 +130,7 @@ export function EmailComposer({
   const [suggestion, setSuggestion] = useState<AISuggestion | null>(null);
   const [savingDraft, setSavingDraft] = useState(false);
   const [sending, setSending] = useState(false);
-  const [completion, setCompletion] = useState<'draft' | 'sent' | null>(null);
+  const [completion, setCompletion] = useState<'draft' | 'scheduled' | 'sent' | null>(null);
   const [copied, setCopied] = useState(false);
   const [attachments, setAttachments] = useState<File[]>([]);
   const [attachmentError, setAttachmentError] = useState('');
@@ -340,8 +342,11 @@ export function EmailComposer({
   const sendEmail = async () => {
     if (isEmailContentEmpty(replyContent)) return;
     const recipient = extractEmail(externalMessage.from);
+    const delaySeconds = Math.min(60, Math.max(0, settings.emailSendDelaySeconds ?? 0));
     const confirmed = window.confirm(
-      `确定要直接发送给 ${recipient} 吗？发送后将无法撤回。`,
+      delaySeconds > 0
+        ? `确定发送给 ${recipient} 吗？邮件将在 ${delaySeconds} 秒后实际发出，倒计时结束前可以取消。`
+        : `确定要直接发送给 ${recipient} 吗？邮件将立即发出。`,
     );
     if (!confirmed) return;
 
@@ -349,23 +354,26 @@ export function EmailComposer({
     setAiError('');
     try {
       const { accessToken, rawEmail } = await createOutgoingEmail();
-      const response = await fetch('https://gmail.googleapis.com/gmail/v1/users/me/messages/send', {
-        method: 'POST',
-        headers: {
-          Authorization: `Bearer ${accessToken}`,
-          'Content-Type': 'application/json',
+      scheduleEmail({
+        accessToken,
+        raw: toBase64Url(rawEmail),
+        threadId: thread.id,
+        recipient,
+        delaySeconds,
+        onSent: () => {
+          setCompletion('sent');
+          onDraftSaved?.('');
         },
-        body: JSON.stringify({
-          raw: toBase64Url(rawEmail),
-          threadId: thread.id,
-        }),
+        onCancel: () => {
+          setCompletion(null);
+          setAiError('已取消发送，邮件内容仍保留在编辑器中。');
+        },
+        onError: (message) => {
+          setCompletion(null);
+          setAiError(message);
+        },
       });
-      const result = await response.json();
-      if (!response.ok) {
-        throw new Error(result.error?.message || '邮件发送失败');
-      }
-      setCompletion('sent');
-      onDraftSaved?.('');
+      setCompletion('scheduled');
     } catch (error) {
       setAiError(error instanceof Error ? error.message : '邮件发送失败');
     } finally {
@@ -403,15 +411,23 @@ export function EmailComposer({
         </div>
         <div>
           <p className="font-medium">
-            {completion === 'draft' ? '已保存到 Gmail 官方草稿箱' : '邮件已发送'}
+            {completion === 'draft'
+              ? '已保存到 Gmail 官方草稿箱'
+              : completion === 'scheduled'
+                ? '邮件已进入发送倒计时'
+                : '邮件已发送'}
           </p>
           <p className="mt-1 text-sm text-muted-foreground">
             {completion === 'draft'
               ? '关闭助手后，手动回复框也会保留这份草稿。'
-              : `邮件已直接发送给 ${extractEmail(externalMessage.from)}。`}
+              : completion === 'scheduled'
+                ? '你可以在右下角查看真实倒计时，或在倒计时结束前取消发送。'
+                : `邮件已直接发送给 ${extractEmail(externalMessage.from)}。`}
           </p>
         </div>
-        <Button variant="outline" className="w-full" onClick={onClose}>关闭</Button>
+        {completion !== 'scheduled' && (
+          <Button variant="outline" className="w-full" onClick={onClose}>关闭</Button>
+        )}
       </div>
     );
   }
