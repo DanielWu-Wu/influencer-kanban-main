@@ -1,6 +1,7 @@
 'use client';
 
 import { useEffect, useState } from 'react';
+import { useRouter } from 'next/navigation';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Sheet, SheetContent } from '@/components/ui/sheet';
@@ -21,6 +22,8 @@ import {
   Sparkles,
   Inbox,
   MessageSquareText,
+  LogOut,
+  LoaderCircle,
 } from 'lucide-react';
 import {
   useInfluencers,
@@ -40,6 +43,7 @@ import { SettingsPanel } from '@/components/settings-panel';
 import { TodoBoard } from '@/components/todo-board';
 import { WorkCalendar } from '@/components/work-calendar';
 import { GmailPage } from '@/components/gmail-page';
+import { useAuth } from '@/components/auth-provider';
 
 type View = 'kanban' | 'list' | 'email' | 'reminders' | 'settings' | 'todo' | 'calendar' | 'gmail' | 'prompts';
 
@@ -85,6 +89,8 @@ const NAV_ITEMS = [
 ];
 
 export default function DashboardPage() {
+  const router = useRouter();
+  const { user, loading: authLoading, configured, signOut } = useAuth();
   const [currentView, setCurrentView] = useState<View>('todo');
   const [showAddDialog, setShowAddDialog] = useState(false);
   const [editingInfluencer, setEditingInfluencer] = useState<Influencer | null>(null);
@@ -93,6 +99,10 @@ export default function DashboardPage() {
   const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
 
   useEffect(() => {
+    if (!authLoading && configured && !user) {
+      router.replace('/login');
+      return;
+    }
     const params = new URLSearchParams(window.location.search);
     if (
       params.get('view') === 'gmail' ||
@@ -101,7 +111,7 @@ export default function DashboardPage() {
     ) {
       setCurrentView('gmail');
     }
-  }, []);
+  }, [authLoading, configured, router, user]);
 
   const { influencers, addInfluencer, updateInfluencer, deleteInfluencer, updateStatus } = useInfluencers();
   const { templates } = useEmailTemplates();
@@ -127,6 +137,27 @@ export default function DashboardPage() {
     upcoming: pendingReminders.length,
     todayTodos: todayTodos.length,
   };
+
+  if (authLoading || (configured && !user)) {
+    return (
+      <div className="flex min-h-screen items-center justify-center">
+        <LoaderCircle className="h-6 w-6 animate-spin text-muted-foreground" />
+      </div>
+    );
+  }
+
+  if (!configured) {
+    return (
+      <div className="flex min-h-screen items-center justify-center p-6">
+        <div className="max-w-md rounded-lg border p-6 text-center">
+          <h1 className="text-lg font-semibold">Supabase 尚未连接</h1>
+          <p className="mt-2 text-sm text-muted-foreground">
+            请确认 Vercel 中已经添加 Supabase URL 和 Publishable Key，并完成重新部署。
+          </p>
+        </div>
+      </div>
+    );
+  }
 
   const handleAddInfluencer = (data: Omit<Influencer, 'id' | 'createdAt' | 'updatedAt'>) => {
     addInfluencer(data);
@@ -234,6 +265,22 @@ export default function DashboardPage() {
               <span className="text-green-600">
                 {stats.published} {label.published}
               </span>
+            </div>
+            <div className="hidden items-center gap-2 border-l pl-3 md:flex">
+              <span className="max-w-40 truncate text-xs text-muted-foreground">
+                {user?.email}
+              </span>
+              <Button
+                variant="ghost"
+                size="icon"
+                title="退出登录"
+                onClick={async () => {
+                  await signOut();
+                  router.replace('/login');
+                }}
+              >
+                <LogOut className="h-4 w-4" />
+              </Button>
             </div>
             <Button size="sm" onClick={() => setShowAddDialog(true)} className="shadow-sm">
               <Plus className="w-4 h-4 mr-1" />

@@ -1,4 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server';
+import { saveStoredGmailAuth } from '@/lib/gmail-cloud-auth';
+import { getRequestUser } from '@/lib/supabase/server';
 
 function getRedirectUri(request: NextRequest) {
   return process.env.GOOGLE_REDIRECT_URI || `${new URL(request.url).origin}/api/auth/callback`;
@@ -21,6 +23,11 @@ export async function GET(request: NextRequest) {
   const state = requestUrl.searchParams.get('state');
   const expectedState = request.cookies.get('gmail_oauth_state')?.value;
   const redirectOrigin = requestUrl.origin;
+  const appAuth = await getRequestUser(request);
+
+  if (!appAuth) {
+    return NextResponse.redirect(new URL('/login', redirectOrigin));
+  }
 
   if (!state || !expectedState || state !== expectedState) {
     return NextResponse.redirect(new URL('/?view=gmail&auth_error=invalid_state', redirectOrigin));
@@ -68,16 +75,11 @@ export async function GET(request: NextRequest) {
       accessToken: tokenData.access_token,
       refreshToken: tokenData.refresh_token,
       expiresAt: Date.now() + tokenData.expires_in * 1000,
-    };
+    } as const;
+
+    await saveStoredGmailAuth(appAuth.supabase, authPayload);
 
     const response = NextResponse.redirect(new URL('/?view=gmail&gmail_connected=1', redirectOrigin));
-    response.cookies.set('gmail_oauth_result', Buffer.from(JSON.stringify(authPayload)).toString('base64url'), {
-      httpOnly: true,
-      secure: process.env.NODE_ENV === 'production',
-      sameSite: 'lax',
-      maxAge: 300,
-      path: '/',
-    });
     return response;
   } catch (err) {
     console.error('OAuth callback error:', err);

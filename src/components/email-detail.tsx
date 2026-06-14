@@ -48,14 +48,12 @@ export function EmailDetail({ thread, onBack, onThreadUpdated }: EmailDetailProp
 
   const getAccessToken = async () => {
     if (!auth?.accessToken) throw new Error('\u8bf7\u91cd\u65b0\u8fde\u63a5 Gmail\u3002');
-    if (!auth.refreshToken || !auth.expiresAt || auth.expiresAt > Date.now() + 60_000) {
+    if (auth.expiresAt && auth.expiresAt > Date.now() + 60_000) {
       return auth.accessToken;
     }
 
     const response = await fetch('/api/auth/refresh', {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ refreshToken: auth.refreshToken }),
     });
     const result = await response.json();
     if (!response.ok || !result.data?.accessToken) {
@@ -65,7 +63,7 @@ export function EmailDetail({ thread, onBack, onThreadUpdated }: EmailDetailProp
     connect({
       ...auth,
       accessToken: result.data.accessToken,
-      expiresAt: Date.now() + result.data.expiresIn * 1000,
+      expiresAt: result.data.expiresAt,
     });
     return result.data.accessToken as string;
   };
@@ -183,7 +181,6 @@ export function EmailDetail({ thread, onBack, onThreadUpdated }: EmailDetailProp
           customPrompt: settings.translatePrompt || '',
           modelProvider: settings.modelProvider || 'builtin',
           customApiUrl: settings.customApiUrl || '',
-          customApiKey: settings.customApiKey || '',
           customModelName: settings.customModelName || '',
         }),
       });

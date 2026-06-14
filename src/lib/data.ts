@@ -18,8 +18,9 @@ import {
   Product,
 } from './types';
 import type { PromptTemplate } from './ai-prompts';
+import { getSupabaseBrowserClient } from './supabase/client';
 
-const STORAGE_KEYS = {
+export const STORAGE_KEYS = {
   INFLUENCERS: 'influencer-board-influencers',
   TEMPLATES: 'influencer-board-templates',
   REMINDERS: 'influencer-board-reminders',
@@ -56,7 +57,9 @@ export interface AppSettings {
   modelProvider?: 'builtin' | 'custom';
   customApiUrl?: string;
   customApiKey?: string;
+  customApiKeyConfigured?: boolean;
   customModelName?: string;
+  gmailSettings?: GmailSettings;
 }
 
 export const generateId = () =>
@@ -177,7 +180,33 @@ function loadSettings(): AppSettings {
 }
 
 function saveSettings(settings: AppSettings): void {
-  saveData(STORAGE_KEYS.SETTINGS, settings);
+  const safeSettings = { ...settings };
+  delete safeSettings.customApiKey;
+  delete safeSettings.customApiKeyConfigured;
+  delete safeSettings.gmailClientSecret;
+  saveData(STORAGE_KEYS.SETTINGS, safeSettings);
+}
+
+function getCloudSafeSettings(settings: AppSettings) {
+  const safeSettings = { ...settings };
+  delete safeSettings.customApiKey;
+  delete safeSettings.customApiKeyConfigured;
+  delete safeSettings.gmailClientSecret;
+  return safeSettings;
+}
+
+async function syncSettingsToCloud(settings: AppSettings) {
+  const supabase = getSupabaseBrowserClient();
+  if (!supabase) return;
+  const { data: authData } = await supabase.auth.getUser();
+  if (!authData.user) return;
+
+  const { error } = await supabase.from('app_settings').upsert({
+    user_id: authData.user.id,
+    data: getCloudSafeSettings(settings),
+    updated_at: new Date().toISOString(),
+  });
+  if (error) console.error('云端设置保存失败:', error);
 }
 
 export function useSettings() {
@@ -185,8 +214,8 @@ export function useSettings() {
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
-    setSettings(loadSettings());
-    setLoading(false);
+    const localSettings = loadSettings();
+    setSettings(localSettings);
 
     const handleStorage = (event: StorageEvent) => {
       if (event.key === STORAGE_KEYS.SETTINGS) {
@@ -200,6 +229,47 @@ export function useSettings() {
 
     window.addEventListener('storage', handleStorage);
     window.addEventListener('settings-updated', handleCustom);
+
+    const loadCloudSettings = async () => {
+      const supabase = getSupabaseBrowserClient();
+      if (!supabase) {
+        setLoading(false);
+        return;
+      }
+
+      const { data: authData } = await supabase.auth.getUser();
+      if (!authData.user) {
+        setLoading(false);
+        return;
+      }
+
+      const [{ data: cloudRow }, secretStatus] = await Promise.all([
+        supabase
+          .from('app_settings')
+          .select('data')
+          .eq('user_id', authData.user.id)
+          .maybeSingle(),
+        fetch('/api/secrets/ai-key', { cache: 'no-store' })
+          .then((response) => response.ok ? response.json() : null)
+          .catch(() => null),
+      ]);
+
+      const cloudSettings =
+        cloudRow?.data && typeof cloudRow.data === 'object'
+          ? cloudRow.data as AppSettings
+          : null;
+      const nextSettings = {
+        ...localSettings,
+        ...(cloudSettings || {}),
+        customApiKey: localSettings.customApiKey,
+        customApiKeyConfigured: Boolean(secretStatus?.configured),
+      };
+      setSettings(nextSettings);
+      if (cloudSettings) saveSettings(nextSettings);
+      setLoading(false);
+    };
+
+    void loadCloudSettings();
     return () => {
       window.removeEventListener('storage', handleStorage);
       window.removeEventListener('settings-updated', handleCustom);
@@ -210,6 +280,7 @@ export function useSettings() {
     setSettings((prev) => {
       const next = { ...prev, ...updates };
       saveSettings(next);
+      void syncSettingsToCloud(next);
       setTimeout(() => {
         window.dispatchEvent(new CustomEvent('settings-updated', { detail: next }));
       }, 0);
@@ -305,8 +376,8 @@ export function useProducts() {
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
-    setProducts(loadData<Product[]>(STORAGE_KEYS.PRODUCTS, []));
-    setLoading(false);
+    const localProducts = loadData<Product[]>(STORAGE_KEYS.PRODUCTS, []);
+    setProducts(localProducts);
 
     const handleStorage = (event: StorageEvent) => {
       if (event.key === STORAGE_KEYS.PRODUCTS) {
@@ -315,7 +386,73 @@ export function useProducts() {
     };
 
     window.addEventListener('storage', handleStorage);
+
+    const loadCloudProducts = async () => {
+      const supabase = getSupabaseBrowserClient();
+      if (!supabase) {
+        setLoading(false);
+        return;
+      }
+      const { data: authData } = await supabase.auth.getUser();
+      if (!authData.user) {
+        setLoading(false);
+        return;
+      }
+
+      const { data, error } = await supabase
+        .from('products')
+        .select('*')
+        .eq('user_id', authData.user.id)
+        .order('updated_at', { ascending: false });
+      if (error) {
+        console.error('云端产品读取失败:', error);
+      } else if (data?.length) {
+        const cloudProducts: Product[] = data.map((row) => ({
+          id: row.id,
+          name: row.name,
+          model: row.model || '',
+          productUrl: row.product_url || '',
+          sellingPoints: row.selling_points || '',
+          technicalSpecifications: row.technical_specifications || '',
+          imageAndResourceLinks: row.image_and_resource_links || '',
+          notes: row.notes || '',
+          status: row.status,
+          marketProfiles: Array.isArray(row.market_profiles) ? row.market_profiles : [],
+          createdAt: row.created_at,
+          updatedAt: row.updated_at,
+        }));
+        setProducts(cloudProducts);
+        saveData(STORAGE_KEYS.PRODUCTS, cloudProducts);
+      }
+      setLoading(false);
+    };
+
+    void loadCloudProducts();
     return () => window.removeEventListener('storage', handleStorage);
+  }, []);
+
+  const saveProductToCloud = useCallback(async (product: Product) => {
+    const supabase = getSupabaseBrowserClient();
+    if (!supabase) return;
+    const { data: authData } = await supabase.auth.getUser();
+    if (!authData.user) return;
+
+    const { error } = await supabase.from('products').upsert({
+      id: product.id,
+      user_id: authData.user.id,
+      name: product.name,
+      model: product.model,
+      product_url: product.productUrl,
+      selling_points: product.sellingPoints,
+      technical_specifications: product.technicalSpecifications,
+      image_and_resource_links: product.imageAndResourceLinks,
+      notes: product.notes,
+      status: product.status,
+      market_profiles: product.marketProfiles,
+      created_at: product.createdAt,
+      updated_at: product.updatedAt,
+    });
+    if (error) console.error('云端产品保存失败:', error);
   }, []);
 
   const saveProducts = useCallback((newData: Product[]) => {
@@ -333,27 +470,35 @@ export function useProducts() {
         updatedAt: now,
       };
       saveProducts([...products, newProduct]);
+      void saveProductToCloud(newProduct);
       return newProduct;
     },
-    [products, saveProducts],
+    [products, saveProducts, saveProductToCloud],
   );
 
   const updateProduct = useCallback(
     (id: string, updates: Partial<Product>) => {
-      saveProducts(
-        products.map((product) =>
+      const nextProducts = products.map((product) =>
           product.id === id
             ? { ...product, ...updates, updatedAt: new Date().toISOString() }
             : product,
-        ),
-      );
+        );
+      saveProducts(nextProducts);
+      const updatedProduct = nextProducts.find((product) => product.id === id);
+      if (updatedProduct) void saveProductToCloud(updatedProduct);
     },
-    [products, saveProducts],
+    [products, saveProducts, saveProductToCloud],
   );
 
   const deleteProduct = useCallback(
     (id: string) => {
       saveProducts(products.filter((product) => product.id !== id));
+      const supabase = getSupabaseBrowserClient();
+      if (supabase) {
+        void supabase.from('products').delete().eq('id', id).then(({ error }) => {
+          if (error) console.error('云端产品删除失败:', error);
+        });
+      }
     },
     [products, saveProducts],
   );
@@ -660,8 +805,18 @@ export function useGmailAuth() {
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
-    setAuth(loadData<GmailAuth | null>(GMAIL_STORAGE_KEYS.AUTH, null));
-    setLoading(false);
+    const localAuth = loadData<GmailAuth | null>(GMAIL_STORAGE_KEYS.AUTH, null);
+    setAuth(localAuth);
+    fetch('/api/auth/session', { cache: 'no-store' })
+      .then(async (response) => {
+        if (!response.ok) return;
+        const result = await response.json();
+        if (result.success && result.data) {
+          setAuth(result.data);
+          saveData(GMAIL_STORAGE_KEYS.AUTH, result.data);
+        }
+      })
+      .finally(() => setLoading(false));
   }, []);
 
   const saveAuth = useCallback((newAuth: GmailAuth | null) => {
@@ -670,31 +825,32 @@ export function useGmailAuth() {
   }, []);
 
   const connect = useCallback((authData: GmailAuth) => saveAuth(authData), [saveAuth]);
-  const disconnect = useCallback(() => saveAuth(null), [saveAuth]);
+  const disconnect = useCallback(() => {
+    saveAuth(null);
+    void fetch('/api/auth/session', { method: 'DELETE' });
+  }, [saveAuth]);
 
   return { auth, loading, connect, disconnect };
 }
 
 export function useGmailSettings() {
-  const [settings, setSettings] = useState<GmailSettings>({
+  const defaultSettings: GmailSettings = {
     autoCheck: true,
     checkInterval: 5,
     notifyOnNewEmail: true,
     matchWithInfluencers: true,
-  });
-
-  useEffect(() => {
-    const stored = loadData<GmailSettings | null>(GMAIL_STORAGE_KEYS.SETTINGS, null);
-    if (stored) setSettings(stored);
-  }, []);
+  };
+  const { settings: appSettings, updateSettings: updateAppSettings } = useSettings();
+  const legacySettings = loadData<GmailSettings | null>(GMAIL_STORAGE_KEYS.SETTINGS, null);
+  const settings = appSettings.gmailSettings || legacySettings || defaultSettings;
 
   const updateSettings = useCallback(
     (updates: Partial<GmailSettings>) => {
       const next = { ...settings, ...updates };
-      setSettings(next);
       saveData(GMAIL_STORAGE_KEYS.SETTINGS, next);
+      updateAppSettings({ gmailSettings: next });
     },
-    [settings],
+    [settings, updateAppSettings],
   );
 
   return { settings, updateSettings };

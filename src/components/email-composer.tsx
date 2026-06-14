@@ -162,7 +162,6 @@ export function EmailComposer({
         draftPrompt: settings.aiDraftPrompt || settings.aiEmailPrompt || '',
         modelProvider: settings.modelProvider || 'builtin',
         customApiUrl: settings.customApiUrl || '',
-        customApiKey: settings.customApiKey || '',
         customModelName: settings.customModelName || '',
       }),
     });
@@ -260,14 +259,12 @@ export function EmailComposer({
 
   const getAccessToken = async () => {
     if (!auth?.accessToken) throw new Error('请重新连接 Gmail。');
-    if (!auth.refreshToken || !auth.expiresAt || auth.expiresAt > Date.now() + 60_000) {
+    if (auth.expiresAt && auth.expiresAt > Date.now() + 60_000) {
       return auth.accessToken;
     }
 
     const response = await fetch('/api/auth/refresh', {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ refreshToken: auth.refreshToken }),
     });
     const result = await response.json();
     if (!response.ok || !result.data?.accessToken) {
@@ -277,7 +274,7 @@ export function EmailComposer({
     connect({
       ...auth,
       accessToken: result.data.accessToken,
-      expiresAt: Date.now() + result.data.expiresIn * 1000,
+      expiresAt: result.data.expiresAt,
     });
     return result.data.accessToken as string;
   };

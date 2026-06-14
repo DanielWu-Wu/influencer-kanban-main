@@ -9,12 +9,15 @@ import { Badge } from '@/components/ui/badge';
 import { Separator } from '@/components/ui/separator';
 import { useGmailAuth, useSettings } from '@/lib/data';
 import { ProductDatabaseSettings } from '@/components/product-database-settings';
+import { CloudSyncSettings } from '@/components/cloud-sync-settings';
 import {
   Settings, Database, Mail, FileSpreadsheet, Zap,
   CheckCircle2, AlertTriangle, ExternalLink,
   Plug, RefreshCw, Trash2, Save, HelpCircle, Link2, Cpu,
   ChevronDown, ChevronUp, Info, User, Clock, Heart, LogOut
 } from 'lucide-react';
+
+const STORED_AI_KEY = '••••••••••••';
 
 export function SettingsPanel() {
   const { settings, updateSettings, loading: settingsLoading } = useSettings();
@@ -24,7 +27,9 @@ export function SettingsPanel() {
   const [senderName, setSenderName] = useState(settings.senderName || '');
   const [modelProvider, setModelProvider] = useState<'builtin' | 'custom'>(settings.modelProvider || 'builtin');
   const [customApiUrl, setCustomApiUrl] = useState(settings.customApiUrl || '');
-  const [customApiKey, setCustomApiKey] = useState(settings.customApiKey || '');
+  const [customApiKey, setCustomApiKey] = useState(
+    settings.customApiKey || (settings.customApiKeyConfigured ? STORED_AI_KEY : ''),
+  );
   const [customModelName, setCustomModelName] = useState(settings.customModelName || '');
   const [testingModel, setTestingModel] = useState(false);
   const [modelTestResult, setModelTestResult] = useState<{ success: boolean; message: string } | null>(null);
@@ -38,7 +43,9 @@ export function SettingsPanel() {
     setSenderName(settings.senderName || '');
     setModelProvider(settings.modelProvider || 'builtin');
     setCustomApiUrl(settings.customApiUrl || '');
-    setCustomApiKey(settings.customApiKey || '');
+    setCustomApiKey(
+      settings.customApiKey || (settings.customApiKeyConfigured ? STORED_AI_KEY : ''),
+    );
     setCustomModelName(settings.customModelName || '');
   }, [settings, settingsLoading]);
 
@@ -46,14 +53,35 @@ export function SettingsPanel() {
     setExpandedSection(expandedSection === section ? null : section);
   };
 
-  const handleSaveAll = () => {
+  const handleSaveAll = async () => {
+    if (
+      modelProvider === 'custom' &&
+      customApiKey &&
+      customApiKey !== STORED_AI_KEY
+    ) {
+      const response = await fetch('/api/secrets/ai-key', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ apiKey: customApiKey }),
+      });
+      const result = await response.json();
+      if (!response.ok) {
+        setModelTestResult({ success: false, message: result.error || 'AI API Key 保存失败' });
+        return;
+      }
+      setCustomApiKey(STORED_AI_KEY);
+    }
+
     updateSettings({
       feishuUrl,
       brandName,
       senderName,
       modelProvider,
       customApiUrl,
-      customApiKey,
+      customApiKey: undefined,
+      customApiKeyConfigured:
+        settings.customApiKeyConfigured ||
+        (modelProvider === 'custom' && Boolean(customApiKey)),
       customModelName,
     });
     setSaved(true);
@@ -66,7 +94,8 @@ export function SettingsPanel() {
   };
 
   const handleTestModel = async () => {
-    if (modelProvider === 'custom' && (!customApiUrl || !customApiKey || !customModelName)) {
+    const hasApiKey = customApiKey === STORED_AI_KEY || Boolean(customApiKey) || settings.customApiKeyConfigured;
+    if (modelProvider === 'custom' && (!customApiUrl || !hasApiKey || !customModelName)) {
       setModelTestResult({ success: false, message: '请先填写完整的 API 配置信息' });
       return;
     }
@@ -75,6 +104,23 @@ export function SettingsPanel() {
     setModelTestResult(null);
 
     try {
+      if (modelProvider === 'custom' && customApiKey && customApiKey !== STORED_AI_KEY) {
+        const saveResponse = await fetch('/api/secrets/ai-key', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ apiKey: customApiKey }),
+        });
+        const saveResult = await saveResponse.json();
+        if (!saveResponse.ok) {
+          throw new Error(saveResult.error || 'AI API Key 保存失败');
+        }
+        setCustomApiKey(STORED_AI_KEY);
+        updateSettings({
+          customApiKey: undefined,
+          customApiKeyConfigured: true,
+        });
+      }
+
       const res = await fetch('/api/ai', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -92,7 +138,6 @@ export function SettingsPanel() {
           targetLangName: '英语',
           modelProvider,
           customApiUrl,
-          customApiKey,
           customModelName,
         }),
       });
@@ -144,6 +189,8 @@ export function SettingsPanel() {
 
       {/* 设置卡片列表 - 可滚动区域 */}
       <div className="flex-1 min-h-0 overflow-y-auto pr-1 space-y-4">
+        <CloudSyncSettings />
+
         <ProductDatabaseSettings
           expanded={expandedSection === 'products'}
           onToggle={() => toggleSection('products')}
@@ -453,6 +500,9 @@ export function SettingsPanel() {
                       placeholder="sk-xxxxxxxxxx"
                       value={customApiKey}
                       onChange={(e) => setCustomApiKey(e.target.value)}
+                      onFocus={() => {
+                        if (customApiKey === STORED_AI_KEY) setCustomApiKey('');
+                      }}
                       className="text-sm"
                     />
                   </div>
@@ -471,7 +521,12 @@ export function SettingsPanel() {
                   <Button
                     variant="outline"
                     onClick={handleTestModel}
-                    disabled={testingModel || !customApiUrl || !customApiKey || !customModelName}
+                    disabled={
+                      testingModel ||
+                      !customApiUrl ||
+                      !(customApiKey || settings.customApiKeyConfigured) ||
+                      !customModelName
+                    }
                     className="w-full"
                   >
                     {testingModel ? (

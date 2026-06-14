@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { randomBytes } from 'node:crypto';
+import { getRequestUser } from '@/lib/supabase/server';
 
 const GMAIL_SCOPES = [
   'https://www.googleapis.com/auth/gmail.readonly',
@@ -13,6 +14,11 @@ function getRedirectUri(request: NextRequest) {
 }
 
 export async function GET(request: NextRequest) {
+  const appAuth = await getRequestUser(request);
+  if (!appAuth) {
+    return NextResponse.redirect(new URL('/login', request.url));
+  }
+
   const clientId = process.env.GOOGLE_CLIENT_ID;
 
   if (!clientId) {

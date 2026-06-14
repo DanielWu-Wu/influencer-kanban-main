@@ -1,5 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { DEFAULT_ANALYSIS_PROMPT, DEFAULT_DRAFT_PROMPT } from '@/lib/ai-prompts';
+import { getUserSecret } from '@/lib/user-private-storage';
+import { getRequestUser } from '@/lib/supabase/server';
 
 type ChatMessage = {
   role: 'system' | 'user' | 'assistant';
@@ -132,6 +134,13 @@ ${custom}
 export async function POST(request: NextRequest) {
   try {
     const body = await request.json() as Record<string, unknown>;
+    if (body.modelProvider === 'custom' && !body.customApiKey) {
+      const appAuth = await getRequestUser(request);
+      if (appAuth) {
+        body.customApiKey =
+          await getUserSecret<string>(appAuth.supabase, 'ai_api_key') || '';
+      }
+    }
     const action = String(body.action || 'draft');
     const threadSubject = String(body.threadSubject || '无主题');
     const threadMessages = Array.isArray(body.threadMessages)

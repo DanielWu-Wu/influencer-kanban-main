@@ -1,4 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server';
+import { getUserSecret } from '@/lib/user-private-storage';
+import { getRequestUser } from '@/lib/supabase/server';
 
 type ChatMessage = {
   role: 'system' | 'user' | 'assistant';
@@ -77,15 +79,24 @@ async function invokeOpenAICompatibleApi(
 
 export async function POST(request: NextRequest) {
   try {
+    const body = await request.json();
     const {
       text,
       sourceLang,
       customPrompt,
       modelProvider,
       customApiUrl,
-      customApiKey,
       customModelName,
-    } = await request.json();
+    } = body;
+    let { customApiKey } = body;
+
+    if (modelProvider === 'custom' && !customApiKey) {
+      const appAuth = await getRequestUser(request);
+      if (appAuth) {
+        customApiKey =
+          await getUserSecret<string>(appAuth.supabase, 'ai_api_key') || '';
+      }
+    }
 
     if (!text) {
       return NextResponse.json({ error: '缺少翻译文本。' }, { status: 400 });

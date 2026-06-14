@@ -95,14 +95,12 @@ export function NewEmailComposer({
 
   const getAccessToken = async () => {
     if (!auth?.accessToken) throw new Error('请先连接 Gmail。');
-    if (!auth.refreshToken || !auth.expiresAt || auth.expiresAt > Date.now() + 60_000) {
+    if (auth.expiresAt && auth.expiresAt > Date.now() + 60_000) {
       return auth.accessToken;
     }
 
     const response = await fetch('/api/auth/refresh', {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ refreshToken: auth.refreshToken }),
     });
     const result = await response.json();
     if (!response.ok || !result.data?.accessToken) {
@@ -111,7 +109,7 @@ export function NewEmailComposer({
     connect({
       ...auth,
       accessToken: result.data.accessToken,
-      expiresAt: Date.now() + result.data.expiresIn * 1000,
+      expiresAt: result.data.expiresAt,
     });
     return result.data.accessToken as string;
   };
