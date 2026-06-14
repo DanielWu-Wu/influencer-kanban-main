@@ -110,6 +110,12 @@ export default function DashboardPage() {
       params.get('auth_error')
     ) {
       setCurrentView('gmail');
+    } else if (
+      params.get('view') === 'settings' ||
+      params.get('feishu_connected') ||
+      params.get('feishu_error')
+    ) {
+      setCurrentView('settings');
     }
   }, [authLoading, configured, router, user]);
 

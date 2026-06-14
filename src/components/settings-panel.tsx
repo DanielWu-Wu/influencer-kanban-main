@@ -10,10 +10,11 @@ import { Separator } from '@/components/ui/separator';
 import { useGmailAuth, useSettings } from '@/lib/data';
 import { ProductDatabaseSettings } from '@/components/product-database-settings';
 import { CloudSyncSettings } from '@/components/cloud-sync-settings';
+import { FeishuSettings } from '@/components/feishu-settings';
 import {
-  Settings, Database, Mail, FileSpreadsheet, Zap,
-  CheckCircle2, AlertTriangle, ExternalLink,
-  Plug, RefreshCw, Trash2, Save, HelpCircle, Link2, Cpu,
+  Settings, Database, Mail, Zap,
+  CheckCircle2, AlertTriangle,
+  Plug, RefreshCw, Save, HelpCircle, Link2, Cpu,
   ChevronDown, ChevronUp, Info, User, Clock, Heart, LogOut
 } from 'lucide-react';
 
@@ -22,7 +23,6 @@ const STORED_AI_KEY = '••••••••••••';
 export function SettingsPanel() {
   const { settings, updateSettings, loading: settingsLoading } = useSettings();
   const { auth: gmailAuth, disconnect: disconnectGmail } = useGmailAuth();
-  const [feishuUrl, setFeishuUrl] = useState(settings.feishuUrl || '');
   const [brandName, setBrandName] = useState(settings.brandName || '');
   const [senderName, setSenderName] = useState(settings.senderName || '');
   const [modelProvider, setModelProvider] = useState<'builtin' | 'custom'>(settings.modelProvider || 'builtin');
@@ -38,7 +38,6 @@ export function SettingsPanel() {
 
   useEffect(() => {
     if (settingsLoading) return;
-    setFeishuUrl(settings.feishuUrl || '');
     setBrandName(settings.brandName || '');
     setSenderName(settings.senderName || '');
     setModelProvider(settings.modelProvider || 'builtin');
@@ -48,6 +47,13 @@ export function SettingsPanel() {
     );
     setCustomModelName(settings.customModelName || '');
   }, [settings, settingsLoading]);
+
+  useEffect(() => {
+    const params = new URLSearchParams(window.location.search);
+    if (params.get('feishu_connected') || params.get('feishu_error')) {
+      setExpandedSection('feishu');
+    }
+  }, []);
 
   const toggleSection = (section: string) => {
     setExpandedSection(expandedSection === section ? null : section);
@@ -73,7 +79,6 @@ export function SettingsPanel() {
     }
 
     updateSettings({
-      feishuUrl,
       brandName,
       senderName,
       modelProvider,
@@ -86,11 +91,6 @@ export function SettingsPanel() {
     });
     setSaved(true);
     setTimeout(() => setSaved(false), 2000);
-  };
-
-  const handleClearFeishu = () => {
-    setFeishuUrl('');
-    updateSettings({ feishuUrl: '' });
   };
 
   const handleTestModel = async () => {
@@ -196,96 +196,10 @@ export function SettingsPanel() {
           onToggle={() => toggleSection('products')}
         />
 
-        {/* 飞书多维表格 */}
-        <Card className="overflow-hidden">
-          <button
-            type="button"
-            onClick={() => toggleSection('feishu')}
-            className="w-full text-left"
-          >
-            <CardHeader className="pb-3">
-              <div className="flex items-center justify-between">
-                <div className="flex items-center gap-3">
-                  <div className="w-9 h-9 rounded-lg bg-blue-500/10 flex items-center justify-center">
-                    <FileSpreadsheet className="w-4 h-4 text-blue-500" />
-                  </div>
-                  <div>
-                    <CardTitle className="text-base">飞书多维表格</CardTitle>
-                    <CardDescription className="text-xs mt-0.5">内嵌飞书多维表格，在看板中直接查看</CardDescription>
-                  </div>
-                </div>
-                <div className="flex items-center gap-2">
-                  {settings.feishuUrl && (
-                    <Badge variant="secondary" className="text-xs">已连接</Badge>
-                  )}
-                  {expandedSection === 'feishu' ? (
-                    <ChevronUp className="w-4 h-4 text-muted-foreground" />
-                  ) : (
-                    <ChevronDown className="w-4 h-4 text-muted-foreground" />
-                  )}
-                </div>
-              </div>
-            </CardHeader>
-          </button>
-
-          {expandedSection === 'feishu' && (
-            <CardContent className="pt-0 space-y-4">
-              <div className="flex items-center justify-between">
-                <Badge variant="outline" className="text-xs gap-1">
-                  <Info className="w-3 h-3" />
-                  用于「红人列表」页面
-                </Badge>
-                {settings.feishuUrl && (
-                  <Button variant="ghost" size="sm" className="h-7 text-xs gap-1 text-muted-foreground" onClick={handleClearFeishu}>
-                    <Trash2 className="w-3 h-3" />
-                    清除
-                  </Button>
-                )}
-              </div>
-
-              {settings.feishuUrl ? (
-                <div className="space-y-2">
-                  <div className="flex items-center gap-2 text-green-600">
-                    <CheckCircle2 className="w-4 h-4" />
-                    <span className="text-sm">已配置</span>
-                  </div>
-                  <p className="text-sm text-muted-foreground break-all bg-muted/50 p-2 rounded">
-                    {settings.feishuUrl}
-                  </p>
-                  <Button variant="outline" size="sm" onClick={() => window.open(settings.feishuUrl, '_blank')}>
-                    <ExternalLink className="w-4 h-4 mr-1" />
-                    测试打开
-                  </Button>
-                </div>
-              ) : (
-                <div className="rounded-lg bg-muted/50 p-3 space-y-2">
-                  <h4 className="text-xs font-medium text-foreground flex items-center gap-1.5">
-                    <HelpCircle className="w-3.5 h-3.5 text-primary" />
-                    如何获取飞书多维表格链接？
-                  </h4>
-                  <ol className="text-xs text-muted-foreground space-y-1 list-decimal list-inside">
-                    <li>打开你的飞书多维表格</li>
-                    <li>点击右上角「分享」按钮</li>
-                    <li>开启「互联网可访问」权限</li>
-                    <li>复制浏览器地址栏中的 URL</li>
-                    <li>粘贴到下方输入框</li>
-                  </ol>
-                </div>
-              )}
-
-              <div className="space-y-2">
-                <Label htmlFor="feishu-url" className="text-xs">飞书多维表格 URL</Label>
-                <Input
-                  id="feishu-url"
-                  value={feishuUrl}
-                  onChange={(e) => setFeishuUrl(e.target.value)}
-                  placeholder="https://xxx.feishu.cn/base/xxx?embed=true"
-                  className="text-sm"
-                />
-              </div>
-            </CardContent>
-          )}
-        </Card>
+        <FeishuSettings
+          expanded={expandedSection === 'feishu'}
+          onToggle={() => toggleSection('feishu')}
+        />
 
         {/* Gmail 邮件 */}
         <Card className="overflow-hidden">
