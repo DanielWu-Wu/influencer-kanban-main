@@ -10,6 +10,7 @@ const FEISHU_SCOPES = [
   'base:record:read',
   'base:record:create',
   'base:record:update',
+  'wiki:wiki:readonly',
 ];
 
 function getRedirectUri(request: NextRequest) {

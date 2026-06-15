@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { fetchFeishuApi, parseFeishuBaseUrl } from '@/lib/feishu-base';
+import { fetchFeishuApi, resolveFeishuBaseUrl } from '@/lib/feishu-base';
 import { refreshStoredFeishuAuth } from '@/lib/feishu-cloud-auth';
 import { getRequestUser } from '@/lib/supabase/server';
 
@@ -32,8 +32,8 @@ export async function POST(request: NextRequest) {
     const { url } = await request.json() as { url?: string };
     if (!url) return NextResponse.json({ error: '请先粘贴飞书多维表格网址。' }, { status: 400 });
 
-    const location = parseFeishuBaseUrl(url);
     const auth = await refreshStoredFeishuAuth(appAuth.supabase);
+    const location = await resolveFeishuBaseUrl(url, auth.accessToken);
     const tablesData = await fetchFeishuApi<ListData<FeishuTable>>(
       `/bitable/v1/apps/${encodeURIComponent(location.appToken)}/tables?page_size=100`,
       auth.accessToken,
@@ -73,4 +73,3 @@ export async function POST(request: NextRequest) {
     );
   }
 }
-

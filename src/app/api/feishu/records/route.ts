@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { parseFeishuBaseUrl, requestFeishuApi } from '@/lib/feishu-base';
+import { requestFeishuApi, resolveFeishuBaseUrl } from '@/lib/feishu-base';
 import { refreshStoredFeishuAuth } from '@/lib/feishu-cloud-auth';
 import { getRequestUser } from '@/lib/supabase/server';
 
@@ -44,8 +44,8 @@ export async function POST(request: NextRequest) {
     };
     if (!body.url) return NextResponse.json({ error: '缺少多维表格网址。' }, { status: 400 });
 
-    const location = parseFeishuBaseUrl(body.url);
     const auth = await refreshStoredFeishuAuth(appAuth.supabase);
+    const location = await resolveFeishuBaseUrl(body.url, auth.accessToken);
     const tableId = await resolveTableId(
       location.appToken,
       location.tableId,
@@ -111,4 +111,3 @@ export async function POST(request: NextRequest) {
     );
   }
 }
-
