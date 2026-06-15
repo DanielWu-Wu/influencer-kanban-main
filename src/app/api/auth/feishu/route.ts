@@ -3,6 +3,7 @@ import { NextRequest, NextResponse } from 'next/server';
 import { getRequestUser } from '@/lib/supabase/server';
 
 const FEISHU_SCOPES = [
+  'offline_access',
   'base:app:read',
   'base:table:read',
   'base:field:read',
@@ -42,4 +43,3 @@ export async function GET(request: NextRequest) {
   });
   return response;
 }
-

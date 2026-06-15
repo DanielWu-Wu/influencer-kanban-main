@@ -6,7 +6,7 @@ const FEISHU_TOKEN_ENDPOINT = 'https://open.feishu.cn/open-apis/authen/v2/oauth/
 export interface StoredFeishuAuth {
   isConnected: true;
   accessToken: string;
-  refreshToken: string;
+  refreshToken?: string;
   expiresAt: number;
   refreshExpiresAt?: number;
   name?: string;
@@ -21,18 +21,27 @@ type FeishuTokenResponse = {
   refresh_token?: string;
   expires_in?: number;
   refresh_token_expires_in?: number;
+  refresh_expires_in?: number;
+  scope?: string;
+  token_type?: string;
   data?: {
     access_token?: string;
     refresh_token?: string;
     expires_in?: number;
     refresh_token_expires_in?: number;
+    refresh_expires_in?: number;
+    scope?: string;
+    token_type?: string;
   };
 };
 
 function normalizeTokenResponse(payload: FeishuTokenResponse) {
   const source = payload.data || payload;
-  if (!source.access_token || !source.refresh_token || !source.expires_in) {
-    throw new Error(payload.msg || '飞书没有返回完整的授权令牌。');
+  if (!source.access_token || !source.expires_in) {
+    throw new Error(
+      payload.msg
+        || `飞书令牌响应不完整（返回字段：${Object.keys(source).join(', ') || '无'}）。`,
+    );
   }
   return source;
 }
@@ -91,6 +100,9 @@ export async function refreshStoredFeishuAuth(supabase: SupabaseClient) {
   const auth = await getStoredFeishuAuth(supabase);
   if (!auth) throw new Error('尚未连接飞书。');
   if (auth.expiresAt > Date.now() + 60_000) return auth;
+  if (!auth.refreshToken) {
+    throw new Error('飞书授权已过期且没有刷新令牌，请重新连接飞书。');
+  }
 
   const clientId = process.env.FEISHU_APP_ID;
   const clientSecret = process.env.FEISHU_APP_SECRET;
@@ -115,10 +127,10 @@ export async function refreshStoredFeishuAuth(supabase: SupabaseClient) {
   const updated: StoredFeishuAuth = {
     ...auth,
     accessToken: token.access_token!,
-    refreshToken: token.refresh_token!,
+    refreshToken: token.refresh_token || auth.refreshToken,
     expiresAt: Date.now() + token.expires_in! * 1000,
-    refreshExpiresAt: token.refresh_token_expires_in
-      ? Date.now() + token.refresh_token_expires_in * 1000
+    refreshExpiresAt: token.refresh_token_expires_in || token.refresh_expires_in
+      ? Date.now() + (token.refresh_token_expires_in || token.refresh_expires_in)! * 1000
       : auth.refreshExpiresAt,
   };
   await saveStoredFeishuAuth(supabase, updated);
@@ -132,4 +144,3 @@ export function toBrowserFeishuAuth(auth: StoredFeishuAuth) {
     expiresAt: auth.expiresAt,
   };
 }
-

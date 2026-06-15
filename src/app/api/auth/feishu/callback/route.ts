@@ -39,10 +39,10 @@ export async function GET(request: NextRequest) {
     await saveStoredFeishuAuth(appAuth.supabase, {
       isConnected: true,
       accessToken: token.access_token!,
-      refreshToken: token.refresh_token!,
+      refreshToken: token.refresh_token,
       expiresAt: Date.now() + token.expires_in! * 1000,
-      refreshExpiresAt: token.refresh_token_expires_in
-        ? Date.now() + token.refresh_token_expires_in * 1000
+      refreshExpiresAt: token.refresh_token_expires_in || token.refresh_expires_in
+        ? Date.now() + (token.refresh_token_expires_in || token.refresh_expires_in)! * 1000
         : undefined,
       ...user,
     });
@@ -59,4 +59,3 @@ export async function GET(request: NextRequest) {
     );
   }
 }
-
