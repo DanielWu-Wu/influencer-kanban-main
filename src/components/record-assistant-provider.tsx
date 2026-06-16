@@ -12,13 +12,17 @@ import {
 import { usePathname } from 'next/navigation';
 import {
   AlertCircle,
+  Bot,
   CheckCircle2,
   ClipboardList,
+  Database,
   History,
   Loader2,
   Save,
+  Send,
   Settings2,
   Sparkles,
+  UserRound,
   X,
 } from 'lucide-react';
 import { Badge } from '@/components/ui/badge';
@@ -33,8 +37,9 @@ import {
 import { Switch } from '@/components/ui/switch';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { Textarea } from '@/components/ui/textarea';
-import { useSettings } from '@/lib/data';
+import { useGmailAuth, useProducts, useSettings } from '@/lib/data';
 import type { FeishuFieldMapping } from '@/lib/feishu-mapping';
+import type { AgentAction, AgentFeishuRecord, AgentGmailContext } from '@/lib/agent-assistant';
 import {
   DEFAULT_RECORD_ASSISTANT_SETTINGS,
   FEISHU_FIELD_LABELS,
@@ -69,10 +74,27 @@ type FeishuRecordListResponse = {
   };
 };
 
+type AgentChatMessage = {
+  id: string;
+  role: 'user' | 'assistant';
+  content: string;
+  summaryBullets?: string[];
+  warnings?: string[];
+  actions?: AgentAction[];
+};
+
 const RecordAssistantContext = createContext<RecordAssistantContextValue | null>(null);
 
 const PENDING_STORAGE_KEY = 'record-assistant-pending-syncs';
 const LOG_STORAGE_KEY = 'record-assistant-logs';
+const AGENT_RECORD_LIMIT = 140;
+
+const AGENT_EXAMPLES = [
+  '看看目前西班牙合作中的红人进度，给我一个简短汇报',
+  '把红人 A 标记为合作中',
+  '添加这个地址到红人 B 的资料里面，并整理好地址信息',
+  '帮我找出 3 天没回复的西班牙红人',
+];
 
 function readStoredList<T>(key: string) {
   if (typeof window === 'undefined') return [];
@@ -110,6 +132,115 @@ function stringifyFeishuValue(value: unknown): string {
 
 function normalizeText(value?: string) {
   return (value || '').trim().toLowerCase();
+}
+
+function getMappedValue(
+  record: FeishuRecord,
+  mapping: FeishuFieldMapping,
+  key: keyof FeishuFieldMapping,
+) {
+  const fieldName = mapping[key];
+  if (!fieldName) return '';
+  return stringifyFeishuValue(record.fields[fieldName]);
+}
+
+function toAgentRecord(record: FeishuRecord, mapping: FeishuFieldMapping): AgentFeishuRecord {
+  const fields: Record<string, string> = {};
+  Object.entries(mapping).forEach(([fieldKey, fieldName]) => {
+    if (!fieldName) return;
+    const label = FEISHU_FIELD_LABELS[fieldKey as keyof typeof FEISHU_FIELD_LABELS] || fieldKey;
+    fields[label] = stringifyFeishuValue(record.fields[fieldName]);
+  });
+
+  return {
+    recordId: record.record_id,
+    channelName: getMappedValue(record, mapping, 'channelName'),
+    email: getMappedValue(record, mapping, 'email'),
+    region: getMappedValue(record, mapping, 'region'),
+    collaborationStatus: getMappedValue(record, mapping, 'collaborationStatus'),
+    hasReply: getMappedValue(record, mapping, 'hasReply'),
+    progress: getMappedValue(record, mapping, 'collaborationProgress'),
+    notes: getMappedValue(record, mapping, 'notes'),
+    fields,
+  };
+}
+
+function scoreAgentRecord(record: AgentFeishuRecord, query: string) {
+  const normalizedQuery = normalizeText(query);
+  const haystack = normalizeText([
+    record.channelName,
+    record.email,
+    record.region,
+    record.collaborationStatus,
+    record.hasReply,
+    record.progress,
+    record.notes,
+    Object.values(record.fields).join(' '),
+  ].join(' '));
+  let score = 0;
+
+  if (record.channelName && normalizedQuery.includes(normalizeText(record.channelName))) score += 80;
+  if (record.email && normalizedQuery.includes(normalizeText(record.email))) score += 80;
+  if (/西班牙|spain|spanish|españa/i.test(query) && /西班牙|spain|españa|spanish|es/i.test(record.region)) {
+    score += 35;
+  }
+  if (/荷兰|netherlands|dutch|nl/i.test(query) && /荷兰|netherlands|dutch|nl/i.test(record.region)) {
+    score += 35;
+  }
+  if (/德国|germany|deutsch|de/i.test(query) && /德国|germany|deutsch|de/i.test(record.region)) {
+    score += 35;
+  }
+  if (/合作中|合作|洽谈|确认/i.test(query) && /合作中|洽谈|确认|interested|negotiat/i.test(record.collaborationStatus)) {
+    score += 20;
+  }
+  if (/没回复|未回复|没有回复|no reply|3 天|三天/i.test(query) && !/已回复|有回复|replied/i.test(record.hasReply)) {
+    score += 20;
+  }
+  if (haystack.includes(normalizedQuery) && normalizedQuery.length > 1) score += 15;
+
+  const tokens = normalizedQuery
+    .split(/[\s,，。:：;；]+/)
+    .map((token) => token.trim())
+    .filter((token) => token.length >= 2);
+  score += tokens.filter((token) => haystack.includes(token)).length * 3;
+  return score;
+}
+
+function selectAgentRecords(
+  records: FeishuRecord[],
+  mapping: FeishuFieldMapping,
+  query: string,
+) {
+  const agentRecords = records.map((record) => toAgentRecord(record, mapping));
+  const scored = agentRecords
+    .map((record) => ({ record, score: scoreAgentRecord(record, query) }))
+    .sort((a, b) => b.score - a.score);
+  const relevant = scored.filter((item) => item.score > 0).map((item) => item.record);
+  return (relevant.length ? relevant : agentRecords).slice(0, AGENT_RECORD_LIMIT);
+}
+
+function getGmailHeader(headers: Array<{ name: string; value: string }> = [], name: string) {
+  return headers.find((header) => header.name.toLowerCase() === name.toLowerCase())?.value || '';
+}
+
+function toAgentProducts(products: ReturnType<typeof useProducts>['products']) {
+  return products.slice(0, 20).map((product) => ({
+    name: product.name,
+    model: product.model,
+    status: product.status,
+    productUrl: product.productUrl,
+    sellingPoints: product.sellingPoints,
+    technicalSpecifications: product.technicalSpecifications,
+    notes: product.notes,
+    markets: product.marketProfiles.slice(0, 8).map((market) => ({
+      targetMarket: market.targetMarket,
+      siteName: market.siteName,
+      promotionBudget: market.promotionBudget,
+      cooperationRequirements: market.cooperationRequirements,
+      mustMention: market.mustMention,
+      prohibitedContent: market.prohibitedContent,
+    })),
+  }));
 }
 
 function findMatchingRecord(
@@ -208,6 +339,8 @@ export function useRecordAssistant() {
 export function RecordAssistantProvider({ children }: { children: ReactNode }) {
   const pathname = usePathname();
   const { settings, updateSettings } = useSettings();
+  const { products } = useProducts();
+  const { auth: gmailAuth, connect: connectGmail } = useGmailAuth();
   const assistantSettings = useMemo(
     () => mergeRecordAssistantSettings(settings.recordAssistantSettings),
     [settings.recordAssistantSettings],
@@ -218,9 +351,14 @@ export function RecordAssistantProvider({ children }: { children: ReactNode }) {
   const [pending, setPending] = useState<PendingRecordSync[]>([]);
   const [logs, setLogs] = useState<RecordAssistantLog[]>([]);
   const [open, setOpen] = useState(false);
-  const [activeTab, setActiveTab] = useState('pending');
+  const [activeTab, setActiveTab] = useState('agent');
   const [notice, setNotice] = useState('');
   const [storageReady, setStorageReady] = useState(false);
+  const [agentMessages, setAgentMessages] = useState<AgentChatMessage[]>([]);
+  const [agentInput, setAgentInput] = useState('');
+  const [agentLoading, setAgentLoading] = useState(false);
+  const [agentError, setAgentError] = useState('');
+  const [agentActionStatus, setAgentActionStatus] = useState<Record<string, 'running' | 'done' | 'failed'>>({});
 
   useEffect(() => {
     setDraftSettings(assistantSettings);
@@ -251,6 +389,223 @@ export function RecordAssistantProvider({ children }: { children: ReactNode }) {
     setActiveTab('pending');
     setOpen(true);
   }, [settings]);
+
+  const getAgentGmailAccessToken = useCallback(async () => {
+    if (!gmailAuth?.accessToken) return '';
+    if (gmailAuth.expiresAt && gmailAuth.expiresAt > Date.now() + 60_000) {
+      return gmailAuth.accessToken;
+    }
+
+    const response = await fetch('/api/auth/refresh', { method: 'POST' });
+    const result = await response.json();
+    if (!response.ok || !result.data?.accessToken) return '';
+    connectGmail({
+      ...gmailAuth,
+      accessToken: result.data.accessToken,
+      expiresAt: result.data.expiresAt,
+    });
+    return result.data.accessToken as string;
+  }, [connectGmail, gmailAuth]);
+
+  const fetchAgentGmailContext = useCallback(async (
+    query: string,
+    records: AgentFeishuRecord[],
+  ): Promise<AgentGmailContext> => {
+    const accessToken = await getAgentGmailAccessToken();
+    if (!accessToken) {
+      return { connected: false, recentThreads: [], contactHistories: [] };
+    }
+
+    const recentThreads: AgentGmailContext['recentThreads'] = [];
+    try {
+      const params = new URLSearchParams({
+        action: 'threads',
+        token: accessToken,
+        maxResults: '8',
+      });
+      const response = await fetch(`/api/gmail?${params.toString()}`);
+      const result = await response.json();
+      const threads = (result?.data?.threads || []) as Array<{
+        messages?: Array<{ payload?: { headers?: Array<{ name: string; value: string }> } }>;
+      }>;
+      threads.forEach((thread) => {
+        const lastMessage = thread.messages?.[thread.messages.length - 1];
+        const headers = lastMessage?.payload?.headers || [];
+        recentThreads.push({
+          subject: getGmailHeader(headers, 'Subject'),
+          from: getGmailHeader(headers, 'From'),
+          to: getGmailHeader(headers, 'To'),
+          date: getGmailHeader(headers, 'Date'),
+        });
+      });
+    } catch {
+      // Gmail context is helpful, but the Agent can still work from Feishu and product data.
+    }
+
+    const shouldReadContacts = /邮件|回复|没回复|未回复|地址|合作|进度|follow|reply|address/i.test(query);
+    const contactEmails = shouldReadContacts
+      ? Array.from(new Set(records.map((record) => normalizeEmail(record.email)).filter(Boolean))).slice(0, 5)
+      : [];
+    const contactHistories: AgentGmailContext['contactHistories'] = [];
+
+    for (const email of contactEmails) {
+      try {
+        const response = await fetch('/api/gmail', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            action: 'contactHistory',
+            accessToken,
+            contactEmail: email,
+            maxResults: 8,
+          }),
+        });
+        const result = await response.json();
+        if (response.ok && result.success) {
+          contactHistories.push({
+            email,
+            messages: (result.data || []).slice(-8).map((message: {
+              subject?: string;
+              from?: string;
+              to?: string;
+              date?: string;
+              body?: string;
+            }) => ({
+              subject: message.subject || '',
+              from: message.from || '',
+              to: message.to || '',
+              date: message.date || '',
+              body: String(message.body || '').slice(0, 1000),
+            })),
+          });
+        }
+      } catch {
+        // Keep the rest of the Agent context available even if one contact lookup fails.
+      }
+    }
+
+    return { connected: true, recentThreads, contactHistories };
+  }, [getAgentGmailAccessToken]);
+
+  const sendAgentMessage = useCallback(async (overrideMessage?: string) => {
+    const message = (overrideMessage || agentInput).trim();
+    if (!message || agentLoading) return;
+
+    const userMessage: AgentChatMessage = {
+      id: `agent-user-${Date.now()}`,
+      role: 'user',
+      content: message,
+    };
+    setAgentMessages((current) => [...current, userMessage]);
+    setAgentInput('');
+    setAgentError('');
+    setAgentLoading(true);
+    setActiveTab('agent');
+    setOpen(true);
+
+    try {
+      const mapping = settings.feishuFieldMapping || {};
+      const records = settings.feishuUrl ? await fetchFeishuRecords(settings.feishuUrl) : [];
+      const selectedRecords = selectAgentRecords(records, mapping, message);
+      const gmailContext = await fetchAgentGmailContext(message, selectedRecords);
+
+      const response = await fetch('/api/agent', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          message,
+          feishuRecords: selectedRecords,
+          fieldMapping: mapping,
+          products: toAgentProducts(products),
+          gmail: gmailContext,
+          modelProvider: settings.modelProvider || 'builtin',
+          customApiUrl: settings.customApiUrl || '',
+          customModelName: settings.customModelName || '',
+        }),
+      });
+      const result = await response.json();
+      if (!response.ok || !result.success) {
+        throw new Error(result.error || 'AI Agent 没有成功返回。');
+      }
+
+      const assistantMessage: AgentChatMessage = {
+        id: `agent-assistant-${Date.now()}`,
+        role: 'assistant',
+        content: result.data.reply,
+        summaryBullets: result.data.summaryBullets || [],
+        warnings: result.data.warnings || [],
+        actions: result.data.actions || [],
+      };
+      setAgentMessages((current) => [...current, assistantMessage]);
+      if (assistantMessage.actions?.length) {
+        setNotice('Agent 已生成操作预览，请确认后再执行。');
+      }
+    } catch (error) {
+      const messageText = error instanceof Error ? error.message : 'AI Agent 调用失败。';
+      setAgentError(messageText);
+      setAgentMessages((current) => [
+        ...current,
+        {
+          id: `agent-assistant-error-${Date.now()}`,
+          role: 'assistant',
+          content: messageText,
+          warnings: ['这次没有执行任何写入操作。'],
+          actions: [],
+        },
+      ]);
+    } finally {
+      setAgentLoading(false);
+    }
+  }, [
+    agentInput,
+    agentLoading,
+    fetchAgentGmailContext,
+    products,
+    settings.customApiUrl,
+    settings.customModelName,
+    settings.feishuFieldMapping,
+    settings.feishuUrl,
+    settings.modelProvider,
+  ]);
+
+  const executeAgentAction = async (action: AgentAction) => {
+    if (!settings.feishuUrl) {
+      setAgentError('请先在设置里连接飞书资源库。');
+      return;
+    }
+
+    const actionKey = action.id;
+    setAgentActionStatus((current) => ({ ...current, [actionKey]: 'running' }));
+    setAgentError('');
+
+    try {
+      const fields = Object.fromEntries(
+        action.fields
+          .filter((field) => field.fieldName && field.value !== undefined)
+          .map((field) => [field.fieldName, field.value]),
+      );
+      const response = await fetch('/api/feishu/records', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          action: 'update',
+          url: settings.feishuUrl,
+          recordId: action.recordId,
+          fields,
+        }),
+      });
+      const result = await response.json() as { success?: boolean; error?: string };
+      if (!response.ok || !result.success) {
+        throw new Error(result.error || '写入飞书失败。');
+      }
+
+      setAgentActionStatus((current) => ({ ...current, [actionKey]: 'done' }));
+      setNotice(`已执行：${action.influencerName || action.recordId}`);
+    } catch (error) {
+      setAgentActionStatus((current) => ({ ...current, [actionKey]: 'failed' }));
+      setAgentError(error instanceof Error ? error.message : '写入飞书失败。');
+    }
+  };
 
   const saveRules = () => {
     updateSettings({ recordAssistantSettings: draftSettings });
@@ -397,7 +752,7 @@ export function RecordAssistantProvider({ children }: { children: ReactNode }) {
               onClick={() => setOpen(true)}
             >
               <Sparkles className="mr-2 h-4 w-4" />
-              AI 记录
+              AI 助手
               {pendingCount > 0 && (
                 <Badge variant="secondary" className="ml-2 bg-white text-primary">
                   {pendingCount}
@@ -412,10 +767,10 @@ export function RecordAssistantProvider({ children }: { children: ReactNode }) {
                 <div>
                   <div className="flex items-center gap-2">
                     <Sparkles className="h-4 w-4 text-primary" />
-                    <h2 className="text-sm font-semibold">AI 辅助记录</h2>
+                    <h2 className="text-sm font-semibold">悬浮 AI Agent 助手</h2>
                     {pendingCount > 0 && <Badge variant="outline">{pendingCount} 待确认</Badge>}
                   </div>
-                  <p className="mt-1 text-xs text-muted-foreground">写入飞书前，必须由你确认。</p>
+                  <p className="mt-1 text-xs text-muted-foreground">先读取和预览，写入飞书前必须由你确认。</p>
                 </div>
                 <Button variant="ghost" size="icon" className="h-8 w-8" onClick={() => setOpen(false)}>
                   <X className="h-4 w-4" />
@@ -429,7 +784,11 @@ export function RecordAssistantProvider({ children }: { children: ReactNode }) {
               )}
 
               <Tabs value={activeTab} onValueChange={setActiveTab} className="min-h-0 flex-1 p-4">
-                <TabsList className="grid w-full grid-cols-3">
+                <TabsList className="grid w-full grid-cols-4">
+                  <TabsTrigger value="agent">
+                    <Bot className="h-3.5 w-3.5" />
+                    对话
+                  </TabsTrigger>
                   <TabsTrigger value="pending">
                     <ClipboardList className="h-3.5 w-3.5" />
                     待确认
@@ -443,6 +802,151 @@ export function RecordAssistantProvider({ children }: { children: ReactNode }) {
                     记录
                   </TabsTrigger>
                 </TabsList>
+
+                <TabsContent value="agent" className="min-h-0 overflow-hidden pt-3">
+                  <div className="flex h-full min-h-0 flex-col">
+                    <div className="min-h-0 flex-1 space-y-3 overflow-y-auto pr-1">
+                      {agentMessages.length === 0 && (
+                        <div className="rounded-md border bg-muted/30 p-3">
+                          <div className="flex items-center gap-2 text-sm font-medium">
+                            <Database className="h-4 w-4 text-primary" />
+                            可以直接问我运营问题
+                          </div>
+                          <p className="mt-2 text-xs text-muted-foreground">
+                            我会读取飞书红人库、Gmail 摘要和产品资料。涉及写入时，会先列出操作预览，等你确认才执行。
+                          </p>
+                          <div className="mt-3 grid gap-2">
+                            {AGENT_EXAMPLES.map((example) => (
+                              <button
+                                key={example}
+                                type="button"
+                                className="rounded-md border bg-background px-3 py-2 text-left text-xs transition-colors hover:bg-accent"
+                                onClick={() => void sendAgentMessage(example)}
+                              >
+                                {example}
+                              </button>
+                            ))}
+                          </div>
+                        </div>
+                      )}
+
+                      {agentMessages.map((message) => (
+                        <div
+                          key={message.id}
+                          className={`rounded-md border p-3 ${
+                            message.role === 'user' ? 'bg-primary text-primary-foreground' : 'bg-background'
+                          }`}
+                        >
+                          <div className="mb-2 flex items-center gap-2 text-xs font-medium">
+                            {message.role === 'user'
+                              ? <UserRound className="h-3.5 w-3.5" />
+                              : <Bot className="h-3.5 w-3.5 text-primary" />}
+                            {message.role === 'user' ? '你' : 'AI Agent'}
+                          </div>
+                          <p className="whitespace-pre-wrap text-sm leading-relaxed">{message.content}</p>
+
+                          {Boolean(message.summaryBullets?.length) && (
+                            <ul className="mt-3 space-y-1 text-xs">
+                              {message.summaryBullets?.map((item, index) => (
+                                <li key={`${message.id}-summary-${index}`}>· {item}</li>
+                              ))}
+                            </ul>
+                          )}
+
+                          {Boolean(message.warnings?.length) && (
+                            <div className="mt-3 rounded-md bg-amber-50 px-3 py-2 text-xs text-amber-700">
+                              {message.warnings?.map((warning) => (
+                                <p key={warning}>· {warning}</p>
+                              ))}
+                            </div>
+                          )}
+
+                          {Boolean(message.actions?.length) && (
+                            <div className="mt-3 space-y-3 rounded-md border bg-muted/30 p-3 text-foreground">
+                              <p className="text-xs font-semibold">操作预览：确认后才会写入飞书</p>
+                              {message.actions?.map((action) => {
+                                const status = agentActionStatus[action.id];
+                                return (
+                                  <div key={action.id} className="rounded-md bg-background p-3">
+                                    <div className="flex items-start justify-between gap-2">
+                                      <div className="min-w-0">
+                                        <p className="truncate text-sm font-medium">
+                                          {action.influencerName || action.recordId}
+                                        </p>
+                                        <p className="mt-1 text-xs text-muted-foreground">{action.reason}</p>
+                                      </div>
+                                      {status === 'done' && <Badge variant="secondary">已执行</Badge>}
+                                      {status === 'failed' && <Badge variant="destructive">失败</Badge>}
+                                    </div>
+
+                                    <div className="mt-3 space-y-2">
+                                      {action.fields.map((field) => (
+                                        <div key={`${action.id}-${field.fieldName}`} className="rounded-md bg-muted/50 px-3 py-2">
+                                          <div className="flex items-center justify-between gap-2">
+                                            <span className="text-xs font-medium">
+                                              {field.fieldLabel || field.fieldName}
+                                            </span>
+                                            <span className="truncate text-[11px] text-muted-foreground">
+                                              {field.fieldName}
+                                            </span>
+                                          </div>
+                                          <p className="mt-1 whitespace-pre-wrap text-xs">{field.value}</p>
+                                        </div>
+                                      ))}
+                                    </div>
+
+                                    <div className="mt-3 flex justify-end">
+                                      <Button
+                                        size="sm"
+                                        disabled={status === 'running' || status === 'done'}
+                                        onClick={() => void executeAgentAction(action)}
+                                      >
+                                        {status === 'running' && <Loader2 className="mr-2 h-3.5 w-3.5 animate-spin" />}
+                                        {status === 'done' ? '已执行' : '确认执行'}
+                                      </Button>
+                                    </div>
+                                  </div>
+                                );
+                              })}
+                            </div>
+                          )}
+                        </div>
+                      ))}
+
+                      {agentLoading && (
+                        <div className="flex items-center gap-2 rounded-md border bg-background p-3 text-sm text-muted-foreground">
+                          <Loader2 className="h-4 w-4 animate-spin" />
+                          正在读取飞书、Gmail 和产品资料...
+                        </div>
+                      )}
+
+                      {agentError && (
+                        <div className="rounded-md bg-red-50 px-3 py-2 text-xs text-red-700">
+                          {agentError}
+                        </div>
+                      )}
+                    </div>
+
+                    <form
+                      className="mt-3 shrink-0 space-y-2 border-t pt-3"
+                      onSubmit={(event) => {
+                        event.preventDefault();
+                        void sendAgentMessage();
+                      }}
+                    >
+                      <Textarea
+                        value={agentInput}
+                        placeholder="例如：把某个红人标记为合作中，或汇报西班牙合作进度..."
+                        className="min-h-20 resize-none text-sm"
+                        onChange={(event) => setAgentInput(event.target.value)}
+                      />
+                      <Button className="w-full" disabled={agentLoading || !agentInput.trim()}>
+                        {agentLoading ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <Send className="mr-2 h-4 w-4" />}
+                        发送给 Agent
+                      </Button>
+                    </form>
+                  </div>
+                </TabsContent>
 
                 <TabsContent value="pending" className="min-h-0 overflow-y-auto pt-3">
                   {pending.length === 0 ? (
