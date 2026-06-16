@@ -38,7 +38,7 @@ import { Switch } from '@/components/ui/switch';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { Textarea } from '@/components/ui/textarea';
 import { useGmailAuth, useProducts, useSettings } from '@/lib/data';
-import type { FeishuFieldMapping } from '@/lib/feishu-mapping';
+import type { FeishuFieldKey, FeishuFieldMapping } from '@/lib/feishu-mapping';
 import type { AgentAction, AgentFeishuRecord, AgentGmailContext } from '@/lib/agent-assistant';
 import {
   DEFAULT_RECORD_ASSISTANT_SETTINGS,
@@ -142,6 +142,81 @@ function getMappedValue(
   const fieldName = mapping[key];
   if (!fieldName) return '';
   return stringifyFeishuValue(record.fields[fieldName]);
+}
+
+function resolveAgentFieldName(fieldName: string, mapping: FeishuFieldMapping) {
+  const directMappedName = mapping[fieldName as keyof FeishuFieldMapping];
+  if (directMappedName) return directMappedName;
+
+  const labelEntry = Object.entries(FEISHU_FIELD_LABELS).find(([fieldKey, label]) =>
+    fieldName === fieldKey || fieldName === label,
+  );
+  if (labelEntry) {
+    const mappedName = mapping[labelEntry[0] as keyof FeishuFieldMapping];
+    if (mappedName) return mappedName;
+  }
+
+  return fieldName;
+}
+
+function resolveAgentFieldKey(
+  fieldName: string,
+  fieldLabel: string | undefined,
+  mapping: FeishuFieldMapping,
+): FeishuFieldKey {
+  const mappingEntry = Object.entries(mapping).find(([fieldKey, mappedFieldName]) =>
+    fieldName === fieldKey || fieldName === mappedFieldName,
+  );
+  if (mappingEntry) return mappingEntry[0] as FeishuFieldKey;
+
+  const labelEntry = Object.entries(FEISHU_FIELD_LABELS).find(([fieldKey, label]) =>
+    fieldName === fieldKey || fieldName === label || fieldLabel === label,
+  );
+  if (labelEntry) return labelEntry[0] as FeishuFieldKey;
+
+  return 'notes';
+}
+
+function buildAgentActionLog(
+  action: AgentAction,
+  status: 'synced' | 'failed',
+  mapping: FeishuFieldMapping,
+  error?: string,
+): RecordAssistantLog {
+  const now = new Date().toISOString();
+  const influencerName = action.influencerName || action.recordId || '未命名红人';
+
+  return {
+    id: `agent-action-${action.id}-${Date.now()}`,
+    event: {
+      type: 'status_changed',
+      source: 'manual',
+      title: `AI Agent 操作：${influencerName}`,
+      summary: action.reason || 'AI Agent 写入飞书记录',
+      occurredAt: now,
+      influencer: {
+        channelName: influencerName,
+      },
+    },
+    updates: action.fields.map((field) => {
+      const fieldKey = resolveAgentFieldKey(field.fieldName, field.fieldLabel, mapping);
+      const fieldName = resolveAgentFieldName(field.fieldName, mapping);
+      return {
+        fieldKey,
+        fieldLabel: field.fieldLabel || FEISHU_FIELD_LABELS[fieldKey] || field.fieldName,
+        fieldName,
+        value: field.value,
+        valueTemplate: field.value,
+        enabled: true,
+      };
+    }),
+    createdAt: now,
+    finishedAt: now,
+    status,
+    error,
+    recordId: action.recordId,
+    matchedBy: 'AI Agent 确认执行',
+  };
 }
 
 function toAgentRecord(record: FeishuRecord, mapping: FeishuFieldMapping): AgentFeishuRecord {
@@ -569,8 +644,11 @@ export function RecordAssistantProvider({ children }: { children: ReactNode }) {
   ]);
 
   const executeAgentAction = async (action: AgentAction) => {
+    const mapping = settings.feishuFieldMapping || {};
     if (!settings.feishuUrl) {
-      setAgentError('请先在设置里连接飞书资源库。');
+      const errorMessage = '请先在设置里连接飞书资源库。';
+      setAgentError(errorMessage);
+      setLogs((current) => [buildAgentActionLog(action, 'failed', mapping, errorMessage), ...current].slice(0, 50));
       return;
     }
 
@@ -582,8 +660,11 @@ export function RecordAssistantProvider({ children }: { children: ReactNode }) {
       const fields = Object.fromEntries(
         action.fields
           .filter((field) => field.fieldName && field.value !== undefined)
-          .map((field) => [field.fieldName, field.value]),
+          .map((field) => [resolveAgentFieldName(field.fieldName, mapping), field.value]),
       );
+      if (Object.keys(fields).length === 0) {
+        throw new Error('这次操作没有可写入的字段，请重新让 Agent 生成操作预览。');
+      }
       const response = await fetch('/api/feishu/records', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -601,9 +682,12 @@ export function RecordAssistantProvider({ children }: { children: ReactNode }) {
 
       setAgentActionStatus((current) => ({ ...current, [actionKey]: 'done' }));
       setNotice(`已执行：${action.influencerName || action.recordId}`);
+      setLogs((current) => [buildAgentActionLog(action, 'synced', mapping), ...current].slice(0, 50));
     } catch (error) {
+      const errorMessage = error instanceof Error ? error.message : '写入飞书失败。';
       setAgentActionStatus((current) => ({ ...current, [actionKey]: 'failed' }));
-      setAgentError(error instanceof Error ? error.message : '写入飞书失败。');
+      setAgentError(errorMessage);
+      setLogs((current) => [buildAgentActionLog(action, 'failed', mapping, errorMessage), ...current].slice(0, 50));
     }
   };
 
@@ -866,6 +950,7 @@ export function RecordAssistantProvider({ children }: { children: ReactNode }) {
                               <p className="text-xs font-semibold">操作预览：确认后才会写入飞书</p>
                               {message.actions?.map((action) => {
                                 const status = agentActionStatus[action.id];
+                                const mapping = settings.feishuFieldMapping || {};
                                 return (
                                   <div key={action.id} className="rounded-md bg-background p-3">
                                     <div className="flex items-start justify-between gap-2">
@@ -887,7 +972,7 @@ export function RecordAssistantProvider({ children }: { children: ReactNode }) {
                                               {field.fieldLabel || field.fieldName}
                                             </span>
                                             <span className="truncate text-[11px] text-muted-foreground">
-                                              {field.fieldName}
+                                              {resolveAgentFieldName(field.fieldName, mapping)}
                                             </span>
                                           </div>
                                           <p className="mt-1 whitespace-pre-wrap text-xs">{field.value}</p>
@@ -1118,11 +1203,18 @@ export function RecordAssistantProvider({ children }: { children: ReactNode }) {
                         <div key={`${log.id}-${log.finishedAt}`} className="rounded-md border px-3 py-2">
                           <div className="flex items-center justify-between gap-2">
                             <p className="truncate text-sm font-medium">{log.event.title}</p>
-                            <Badge variant={log.status === 'synced' ? 'secondary' : 'outline'}>
-                              {log.status === 'synced' ? '已同步' : '已忽略'}
+                            <Badge variant={log.status === 'failed' ? 'destructive' : log.status === 'synced' ? 'secondary' : 'outline'}>
+                              {log.status === 'synced'
+                                ? '已同步'
+                                : log.status === 'failed'
+                                  ? '失败'
+                                  : '已忽略'}
                             </Badge>
                           </div>
                           <p className="mt-1 text-xs text-muted-foreground">{log.matchedBy || log.event.summary}</p>
+                          {log.error && (
+                            <p className="mt-1 text-xs text-destructive">{log.error}</p>
+                          )}
                         </div>
                       ))}
                     </div>

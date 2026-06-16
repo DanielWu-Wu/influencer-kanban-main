@@ -3,6 +3,8 @@
 import { useCallback, useEffect, useState } from 'react';
 import {
   AlertCircle,
+  ChevronLeft,
+  ChevronRight,
   Inbox,
   Loader2,
   LogOut,
@@ -26,6 +28,8 @@ import {
   GmailMessage,
   GmailThread,
 } from '@/lib/types';
+
+const GMAIL_PAGE_SIZE = 50;
 
 interface GmailInboxProps {
   onSelectThread: (thread: GmailThread) => void;
@@ -103,6 +107,12 @@ type ParsedMimeContent = {
   textParts: string[];
   htmlParts: string[];
   attachments: GmailAttachment[];
+};
+
+type GmailThreadListResult = {
+  threads?: { id: string }[];
+  nextPageToken?: string;
+  resultSizeEstimate?: number;
 };
 
 function parseMimeParts(payload: Record<string, unknown>, result: ParsedMimeContent) {
@@ -262,6 +272,19 @@ export function GmailInbox({
   const [searchQuery, setSearchQuery] = useState('');
   const [showUnreadOnly, setShowUnreadOnly] = useState(false);
   const [authProcessing, setAuthProcessing] = useState(false);
+  const paginationKey = `${mailbox}:${category}:${refreshKey}`;
+  const [activePaginationKey, setActivePaginationKey] = useState(paginationKey);
+  const [pageTokens, setPageTokens] = useState<string[]>(['']);
+  const [pageIndex, setPageIndex] = useState(0);
+  const [nextPageToken, setNextPageToken] = useState<string | null>(null);
+
+  useEffect(() => {
+    setActivePaginationKey(paginationKey);
+    setPageTokens(['']);
+    setPageIndex(0);
+    setNextPageToken(null);
+    setThreads([]);
+  }, [paginationKey]);
 
   useEffect(() => {
     if (!updatedThread) return;
@@ -333,15 +356,18 @@ export function GmailInbox({
 
   const fetchThreads = useCallback(async () => {
     if (!auth?.accessToken) return;
+    if (activePaginationKey !== paginationKey) return;
     setLoading(true);
     setError(null);
 
     try {
       const accessToken = await getAccessToken();
       const headers = { Authorization: `Bearer ${accessToken}` };
-      const params = new URLSearchParams({ maxResults: '30' });
+      const pageToken = pageTokens[pageIndex] || '';
+      const params = new URLSearchParams({ maxResults: String(GMAIL_PAGE_SIZE) });
       MAILBOX_API_LABELS[mailbox].forEach((label) => params.append('labelIds', label));
       if (mailbox === 'inbox') params.set('q', CATEGORY_QUERIES[category]);
+      if (pageToken) params.set('pageToken', pageToken);
 
       const listResponse = await fetchWithTimeout(
         `https://gmail.googleapis.com/gmail/v1/users/me/threads?${params.toString()}`,
@@ -352,8 +378,9 @@ export function GmailInbox({
         throw new Error(result.error?.message || '\u83b7\u53d6\u90ae\u4ef6\u5217\u8868\u5931\u8d25');
       }
 
-      const listResult = await listResponse.json();
-      const threadRefs = (listResult.threads || []) as { id: string }[];
+      const listResult = await listResponse.json() as GmailThreadListResult;
+      const threadRefs = listResult.threads || [];
+      setNextPageToken(listResult.nextPageToken || null);
       const details: Record<string, unknown>[] = [];
 
       // Keep Gmail API requests in small batches to avoid rate limiting and long stalls.
@@ -389,11 +416,38 @@ export function GmailInbox({
     } finally {
       setLoading(false);
     }
-  }, [auth?.accessToken, category, getAccessToken, mailbox]);
+  }, [
+    activePaginationKey,
+    auth?.accessToken,
+    category,
+    getAccessToken,
+    mailbox,
+    pageIndex,
+    pageTokens,
+    paginationKey,
+  ]);
 
   useEffect(() => {
     if (auth?.isConnected && auth.accessToken) fetchThreads();
   }, [auth?.isConnected, auth?.accessToken, fetchThreads, refreshKey]);
+
+  const goToPreviousPage = () => {
+    if (loading || pageIndex === 0) return;
+    setThreads([]);
+    setNextPageToken(null);
+    setPageIndex((current) => Math.max(0, current - 1));
+  };
+
+  const goToNextPage = () => {
+    if (loading || !nextPageToken) return;
+    setThreads([]);
+    setPageTokens((current) => {
+      const next = [...current];
+      next[pageIndex + 1] = nextPageToken;
+      return next;
+    });
+    setPageIndex((current) => current + 1);
+  };
 
   const modifyThread = async (
     thread: GmailThread,
@@ -693,6 +747,33 @@ export function GmailInbox({
           })
         )}
       </ScrollArea>
+
+      <div className="flex shrink-0 items-center justify-between gap-2 border-t px-3 py-2 text-xs text-muted-foreground">
+        <Button
+          variant="outline"
+          size="sm"
+          className="h-7 gap-1 px-2 text-xs"
+          onClick={goToPreviousPage}
+          disabled={loading || pageIndex === 0}
+        >
+          <ChevronLeft className="h-3.5 w-3.5" />
+          上一页
+        </Button>
+        <div className="flex min-w-0 flex-col items-center text-center leading-tight">
+          <span>第 {pageIndex + 1} 页</span>
+          <span className="text-[11px]">每页最多 {GMAIL_PAGE_SIZE} 封</span>
+        </div>
+        <Button
+          variant="outline"
+          size="sm"
+          className="h-7 gap-1 px-2 text-xs"
+          onClick={goToNextPage}
+          disabled={loading || !nextPageToken}
+        >
+          下一页
+          <ChevronRight className="h-3.5 w-3.5" />
+        </Button>
+      </div>
 
       <div className="flex shrink-0 items-center justify-between border-t px-3 py-2 text-xs text-muted-foreground">
         <span className="truncate">{auth.email || 'Gmail'}</span>
