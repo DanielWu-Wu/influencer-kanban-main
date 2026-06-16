@@ -1,6 +1,6 @@
 'use client';
 
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import {
   AlertCircle,
   ChevronLeft,
@@ -30,6 +30,8 @@ import {
 } from '@/lib/types';
 
 const GMAIL_PAGE_SIZE = 50;
+const GMAIL_DETAIL_BATCH_SIZE = 16;
+const GMAIL_AUTO_REFRESH_MS = 60_000;
 
 interface GmailInboxProps {
   onSelectThread: (thread: GmailThread) => void;
@@ -40,6 +42,7 @@ interface GmailInboxProps {
   mailbox: GmailMailbox;
   category: GmailCategory;
   refreshKey?: number;
+  compact?: boolean;
 }
 
 const MAILBOX_LABELS: Record<GmailMailbox, string> = {
@@ -155,7 +158,7 @@ async function loadAttachmentData(
 
   const response = await fetch(
     `https://gmail.googleapis.com/gmail/v1/users/me/messages/${messageId}/attachments/${attachment.id}`,
-    { headers: { Authorization: `Bearer ${accessToken}` } },
+    { cache: 'no-store', headers: { Authorization: `Bearer ${accessToken}` } },
   );
   if (!response.ok) return attachment;
 
@@ -203,6 +206,12 @@ async function parseGmailThread(
     const htmlBody = replaceInlineContentIds(parsed.htmlParts.join('\n'), attachments);
     const body = parsed.textParts.join('\n\n') || htmlBody.replace(/<[^>]+>/g, ' ');
     const rawDate = getHeader(headers, 'Date');
+    const internalDate = Number(message.internalDate);
+    const date = Number.isFinite(internalDate)
+      ? new Date(internalDate).toISOString()
+      : rawDate
+        ? new Date(rawDate).toISOString()
+        : '';
 
     return {
       id: String(message.id),
@@ -214,7 +223,7 @@ async function parseGmailThread(
       body,
       htmlBody,
       attachments,
-      date: rawDate ? new Date(rawDate).toISOString() : '',
+      date,
       isRead: !labels.includes('UNREAD'),
       labels,
       hasAttachments: attachments.some((attachment) => !attachment.inline),
@@ -225,6 +234,12 @@ async function parseGmailThread(
 
   const participantCount = new Set(messages.map((message) => message.from).filter(Boolean)).size;
   const rawDate = getHeader(lastHeaders, 'Date');
+  const lastInternalDate = Number(apiMessages[apiMessages.length - 1]?.internalDate);
+  const lastMessageDate = Number.isFinite(lastInternalDate)
+    ? new Date(lastInternalDate).toISOString()
+    : rawDate
+      ? new Date(rawDate).toISOString()
+      : new Date().toISOString();
 
   return {
     id: String(apiThread.id),
@@ -232,7 +247,7 @@ async function parseGmailThread(
     snippet: String(apiThread.snippet || ''),
     messages,
     participantCount,
-    lastMessageDate: rawDate ? new Date(rawDate).toISOString() : new Date().toISOString(),
+    lastMessageDate,
     hasUnread: allLabels.includes('UNREAD'),
     labels: allLabels,
     isStarred: allLabels.includes('STARRED'),
@@ -248,7 +263,7 @@ async function fetchWithTimeout(
   const timeout = window.setTimeout(() => controller.abort(), timeoutMs);
 
   try {
-    return await fetch(input, { ...init, signal: controller.signal });
+    return await fetch(input, { cache: 'no-store', ...init, signal: controller.signal });
   } finally {
     window.clearTimeout(timeout);
   }
@@ -263,8 +278,10 @@ export function GmailInbox({
   mailbox,
   category,
   refreshKey = 0,
+  compact = true,
 }: GmailInboxProps) {
   const { auth, connect, disconnect } = useGmailAuth();
+  const latestFetchIdRef = useRef(0);
   const [threads, setThreads] = useState<GmailThread[]>([]);
   const [loading, setLoading] = useState(false);
   const [actionThreadId, setActionThreadId] = useState<string | null>(null);
@@ -277,6 +294,7 @@ export function GmailInbox({
   const [pageTokens, setPageTokens] = useState<string[]>(['']);
   const [pageIndex, setPageIndex] = useState(0);
   const [nextPageToken, setNextPageToken] = useState<string | null>(null);
+  const [lastSyncedAt, setLastSyncedAt] = useState<string | null>(null);
 
   useEffect(() => {
     setActivePaginationKey(paginationKey);
@@ -357,6 +375,8 @@ export function GmailInbox({
   const fetchThreads = useCallback(async () => {
     if (!auth?.accessToken) return;
     if (activePaginationKey !== paginationKey) return;
+    const fetchId = latestFetchIdRef.current + 1;
+    latestFetchIdRef.current = fetchId;
     setLoading(true);
     setError(null);
 
@@ -379,13 +399,17 @@ export function GmailInbox({
       }
 
       const listResult = await listResponse.json() as GmailThreadListResult;
+      if (fetchId !== latestFetchIdRef.current) return;
       const threadRefs = listResult.threads || [];
       setNextPageToken(listResult.nextPageToken || null);
-      const details: Record<string, unknown>[] = [];
+      if (threadRefs.length === 0) {
+        setThreads([]);
+        setLastSyncedAt(new Date().toISOString());
+        return;
+      }
 
-      // Keep Gmail API requests in small batches to avoid rate limiting and long stalls.
-      for (let index = 0; index < threadRefs.length; index += 8) {
-        const batch = threadRefs.slice(index, index + 8);
+      for (let index = 0; index < threadRefs.length; index += GMAIL_DETAIL_BATCH_SIZE) {
+        const batch = threadRefs.slice(index, index + GMAIL_DETAIL_BATCH_SIZE);
         const batchResults = await Promise.all(
           batch.map(async (thread) => {
             try {
@@ -400,21 +424,26 @@ export function GmailInbox({
             }
           }),
         );
-        details.push(
-          ...batchResults.filter(
-            (thread): thread is Record<string, unknown> => Boolean(thread),
-          ),
-        );
-      }
+        if (fetchId !== latestFetchIdRef.current) return;
 
-      const parsed = await Promise.all(
-        details.map((thread) => parseGmailThread(thread, accessToken, false)),
-      );
-      setThreads(parsed);
+        const parsedBatch = await Promise.all(
+          batchResults
+            .filter((thread): thread is Record<string, unknown> => Boolean(thread))
+            .map((thread) => parseGmailThread(thread, accessToken, false)),
+        );
+        if (fetchId !== latestFetchIdRef.current) return;
+
+        setThreads((current) => index === 0 ? parsedBatch : [...current, ...parsedBatch]);
+      }
+      setLastSyncedAt(new Date().toISOString());
     } catch (caughtError) {
-      setError((caughtError as Error).message);
+      if (fetchId === latestFetchIdRef.current) {
+        setError((caughtError as Error).message);
+      }
     } finally {
-      setLoading(false);
+      if (fetchId === latestFetchIdRef.current) {
+        setLoading(false);
+      }
     }
   }, [
     activePaginationKey,
@@ -430,6 +459,35 @@ export function GmailInbox({
   useEffect(() => {
     if (auth?.isConnected && auth.accessToken) fetchThreads();
   }, [auth?.isConnected, auth?.accessToken, fetchThreads, refreshKey]);
+
+  useEffect(() => {
+    if (!auth?.isConnected || !auth.accessToken) return undefined;
+    const timer = window.setInterval(() => {
+      if (document.visibilityState === 'visible' && !loading && !actionThreadId) {
+        void fetchThreads();
+      }
+    }, GMAIL_AUTO_REFRESH_MS);
+
+    return () => window.clearInterval(timer);
+  }, [actionThreadId, auth?.accessToken, auth?.isConnected, fetchThreads, loading]);
+
+  useEffect(() => {
+    if (!auth?.isConnected || !auth.accessToken) return undefined;
+
+    const refreshWhenActive = () => {
+      if (document.visibilityState === 'visible' && !loading && !actionThreadId) {
+        void fetchThreads();
+      }
+    };
+
+    window.addEventListener('focus', refreshWhenActive);
+    document.addEventListener('visibilitychange', refreshWhenActive);
+
+    return () => {
+      window.removeEventListener('focus', refreshWhenActive);
+      document.removeEventListener('visibilitychange', refreshWhenActive);
+    };
+  }, [actionThreadId, auth?.accessToken, auth?.isConnected, fetchThreads, loading]);
 
   const goToPreviousPage = () => {
     if (loading || pageIndex === 0) return;
@@ -557,6 +615,9 @@ export function GmailInbox({
     return date.toLocaleDateString('zh-CN', { month: 'numeric', day: 'numeric' });
   };
 
+  const formatSyncTime = (dateString: string) =>
+    new Date(dateString).toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit' });
+
   if (authProcessing) {
     return (
       <div className="flex h-full flex-col items-center justify-center p-6 text-center">
@@ -585,12 +646,19 @@ export function GmailInbox({
   return (
     <div className="flex h-full min-h-0 flex-col overflow-hidden">
       <div className="flex shrink-0 items-center justify-between border-b px-4 py-3">
-        <div className="flex min-w-0 items-center gap-2">
-          <h2 className="truncate font-semibold">{MAILBOX_LABELS[mailbox]}</h2>
-          {(mailbox === 'inbox' || mailbox === 'unread') && (
-            <Badge variant="secondary">
-              {threads.filter((thread) => thread.hasUnread).length} {'\u672a\u8bfb'}
-            </Badge>
+        <div className="flex min-w-0 flex-col">
+          <div className="flex min-w-0 items-center gap-2">
+            <h2 className="truncate font-semibold">{MAILBOX_LABELS[mailbox]}</h2>
+            {(mailbox === 'inbox' || mailbox === 'unread') && (
+              <Badge variant="secondary">
+                {threads.filter((thread) => thread.hasUnread).length} {'\u672a\u8bfb'}
+              </Badge>
+            )}
+          </div>
+          {lastSyncedAt && (
+            <span className="mt-0.5 text-[11px] text-muted-foreground">
+              {'\u4e0a\u6b21\u540c\u6b65'} {formatSyncTime(lastSyncedAt)}
+            </span>
           )}
         </div>
         <Button
@@ -684,7 +752,7 @@ export function GmailInbox({
                   if (event.key === 'Enter') handleOpenThread(thread);
                 }}
               >
-                <div className="flex items-start gap-2">
+                <div className={`flex gap-2 ${compact ? 'items-start' : 'items-center'}`}>
                   <Button
                     variant="ghost"
                     size="icon"
@@ -703,20 +771,37 @@ export function GmailInbox({
                     <Star className={`h-4 w-4 ${thread.isStarred ? 'fill-amber-400 text-amber-400' : 'text-muted-foreground'}`} />
                   </Button>
 
-                  <div className="min-w-0 flex-1">
-                    <div className="flex items-center gap-2">
-                      <span className={`min-w-0 flex-1 truncate text-sm ${thread.hasUnread ? 'font-semibold' : 'text-muted-foreground'}`}>
+                  {compact ? (
+                    <div className="min-w-0 flex-1">
+                      <div className="flex items-center gap-2">
+                        <span className={`min-w-0 flex-1 truncate text-sm ${thread.hasUnread ? 'font-semibold' : 'text-muted-foreground'}`}>
+                          {sender}
+                        </span>
+                        <span className="shrink-0 text-xs text-muted-foreground">
+                          {formatDate(thread.lastMessageDate)}
+                        </span>
+                      </div>
+                      <p className={`mt-0.5 truncate text-sm ${thread.hasUnread ? 'font-semibold' : ''}`}>
+                        {thread.subject}
+                      </p>
+                      <p className="mt-0.5 truncate text-xs text-muted-foreground">{thread.snippet}</p>
+                    </div>
+                  ) : (
+                    <div className="grid min-w-0 flex-1 grid-cols-[minmax(120px,220px)_minmax(0,1fr)_auto] items-center gap-3">
+                      <span className={`min-w-0 truncate text-sm ${thread.hasUnread ? 'font-semibold' : 'text-muted-foreground'}`}>
                         {sender}
                       </span>
+                      <div className="min-w-0 truncate text-sm">
+                        <span className={thread.hasUnread ? 'font-semibold' : ''}>{thread.subject}</span>
+                        {thread.snippet && (
+                          <span className="text-muted-foreground"> - {thread.snippet}</span>
+                        )}
+                      </div>
                       <span className="shrink-0 text-xs text-muted-foreground">
                         {formatDate(thread.lastMessageDate)}
                       </span>
                     </div>
-                    <p className={`mt-0.5 truncate text-sm ${thread.hasUnread ? 'font-semibold' : ''}`}>
-                      {thread.subject}
-                    </p>
-                    <p className="mt-0.5 truncate text-xs text-muted-foreground">{thread.snippet}</p>
-                  </div>
+                  )}
 
                   <Button
                     variant="ghost"

@@ -77,7 +77,9 @@ export function GmailPage() {
       </aside>
 
       {!showSettings && (
-      <div className={`${selectedThread ? 'hidden lg:flex' : 'flex'} min-h-0 w-full flex-col overflow-hidden border-r bg-card lg:w-[420px]`}>
+      <div
+        className={`${selectedThread ? 'hidden lg:flex lg:w-[420px] lg:flex-none' : 'flex flex-1'} min-h-0 flex-col overflow-hidden border-r bg-card transition-all duration-300 ease-out`}
+      >
         <div className="flex shrink-0 gap-1 overflow-x-auto border-b p-2 md:hidden">
           <Button
             size="sm"
@@ -118,6 +120,7 @@ export function GmailPage() {
           mailbox={mailbox}
           category={category}
           refreshKey={mailboxRefreshKey}
+          compact={Boolean(selectedThread)}
           onCategoryChange={setCategory}
           updatedThread={selectedThread}
           onThreadUpdated={(thread) => {
@@ -127,7 +130,7 @@ export function GmailPage() {
       </div>
       )}
 
-      <div className={`min-h-0 min-w-0 flex-1 ${selectedThread || showSettings ? 'flex' : 'hidden lg:flex'} flex-col overflow-hidden bg-background`}>
+      <div className={`min-h-0 min-w-0 flex-1 ${selectedThread || showSettings ? 'flex' : 'hidden'} flex-col overflow-hidden bg-background`}>
         {showSettings ? (
           <GmailSignatureSettings onBack={() => setShowSettings(false)} />
         ) : selectedThread ? (
