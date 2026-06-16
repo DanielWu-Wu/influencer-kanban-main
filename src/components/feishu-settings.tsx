@@ -1,24 +1,37 @@
 'use client';
 
-import { useEffect, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import {
   CheckCircle2,
   ChevronDown,
   ChevronUp,
   Database,
+  Eye,
   FileSpreadsheet,
   LoaderCircle,
   LogOut,
   Plug,
   RefreshCw,
+  Save,
   ShieldCheck,
+  Wand2,
 } from 'lucide-react';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
+import { Separator } from '@/components/ui/separator';
+import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table';
 import { useSettings } from '@/lib/data';
+import {
+  autoMapFeishuFields,
+  compactFeishuFieldMapping,
+  FEISHU_FIELD_TARGETS,
+  type FeishuFieldKey,
+  type FeishuFieldMapping,
+} from '@/lib/feishu-mapping';
 
 type ConnectionState = {
   loading: boolean;
@@ -52,11 +65,29 @@ export function FeishuSettings({
   });
   const [inspecting, setInspecting] = useState(false);
   const [inspection, setInspection] = useState<Inspection | null>(null);
+  const [fieldMapping, setFieldMapping] = useState<FeishuFieldMapping>({});
+  const [mappingSaved, setMappingSaved] = useState(false);
   const [message, setMessage] = useState('');
 
   useEffect(() => {
     if (!settingsLoading) setUrl(settings.feishuUrl || '');
   }, [settings.feishuUrl, settingsLoading]);
+
+  useEffect(() => {
+    if (!settingsLoading) setFieldMapping(settings.feishuFieldMapping || {});
+  }, [settings.feishuFieldMapping, settingsLoading]);
+
+  const mappedCount = useMemo(
+    () => Object.values(compactFeishuFieldMapping(fieldMapping)).length,
+    [fieldMapping],
+  );
+
+  const previewTargets = useMemo(
+    () => FEISHU_FIELD_TARGETS.filter((target) =>
+      ['channelName', 'email', 'region', 'followers', 'channelUrl', 'collaborationStatus', 'quote', 'notes'].includes(target.key),
+    ),
+    [],
+  );
 
   useEffect(() => {
     const params = new URLSearchParams(window.location.search);
@@ -105,6 +136,7 @@ export function FeishuSettings({
     await fetch('/api/auth/feishu/session', { method: 'DELETE' });
     setConnection((current) => ({ ...current, connected: false, name: undefined }));
     setInspection(null);
+    setMappingSaved(false);
     setMessage('飞书连接已断开。');
   };
 
@@ -125,6 +157,8 @@ export function FeishuSettings({
       const result = await response.json();
       if (!response.ok) throw new Error(result.error || '只读检查失败。');
       setInspection(result.data);
+      setFieldMapping(autoMapFeishuFields(result.data.fields || [], settings.feishuFieldMapping || fieldMapping));
+      setMappingSaved(false);
       updateSettings({ feishuUrl: url.trim() });
       setMessage('只读检查成功。当前没有修改任何飞书记录。');
     } catch (error) {
@@ -132,6 +166,29 @@ export function FeishuSettings({
     } finally {
       setInspecting(false);
     }
+  };
+
+  const updateMapping = (key: FeishuFieldKey, value: string) => {
+    setFieldMapping((current) => ({
+      ...current,
+      [key]: value === 'none' ? undefined : value,
+    }));
+    setMappingSaved(false);
+  };
+
+  const remapFields = () => {
+    if (!inspection) return;
+    setFieldMapping(autoMapFeishuFields(inspection.fields, fieldMapping));
+    setMappingSaved(false);
+    setMessage('已根据当前字段重新自动匹配，请检查后保存。');
+  };
+
+  const saveFieldMapping = () => {
+    const compacted = compactFeishuFieldMapping(fieldMapping);
+    updateSettings({ feishuUrl: url.trim(), feishuFieldMapping: compacted });
+    setFieldMapping(compacted);
+    setMappingSaved(true);
+    setMessage('字段映射已保存。后续 Gmail 匹配、AI 分析和写回飞书都会基于这套映射。');
   };
 
   return (
@@ -273,6 +330,103 @@ export function FeishuSettings({
                   )}
                 </div>
               </div>
+
+              <Separator />
+
+              <div className="space-y-3">
+                <div className="flex flex-wrap items-center justify-between gap-3">
+                  <div>
+                    <div className="flex items-center gap-2 text-sm font-medium">
+                      <Wand2 className="h-4 w-4 text-blue-600" />
+                      字段映射
+                    </div>
+                    <p className="mt-1 text-xs text-muted-foreground">
+                      已映射 {mappedCount}/{FEISHU_FIELD_TARGETS.length} 个业务字段。保存后，后续 Gmail 匹配和 AI 分析会按这里读取。
+                    </p>
+                  </div>
+                  <div className="flex gap-2">
+                    <Button type="button" variant="outline" size="sm" className="gap-1.5" onClick={remapFields}>
+                      <RefreshCw className="h-4 w-4" />
+                      重新识别
+                    </Button>
+                    <Button type="button" size="sm" className="gap-1.5" onClick={saveFieldMapping}>
+                      {mappingSaved ? <CheckCircle2 className="h-4 w-4" /> : <Save className="h-4 w-4" />}
+                      {mappingSaved ? '已保存' : '保存映射'}
+                    </Button>
+                  </div>
+                </div>
+
+                <div className="grid gap-2 md:grid-cols-2">
+                  {FEISHU_FIELD_TARGETS.map((target) => (
+                    <div key={target.key} className="rounded-md border bg-background p-3">
+                      <div className="mb-2 flex items-start justify-between gap-2">
+                        <div className="min-w-0">
+                          <div className="flex items-center gap-1.5">
+                            <p className="text-sm font-medium">{target.label}</p>
+                            {target.required && <Badge variant="secondary" className="text-[10px]">关键</Badge>}
+                          </div>
+                          <p className="mt-0.5 text-xs text-muted-foreground">{target.description}</p>
+                        </div>
+                      </div>
+                      <Select
+                        value={fieldMapping[target.key] || 'none'}
+                        onValueChange={(value) => updateMapping(target.key, value)}
+                      >
+                        <SelectTrigger className="w-full">
+                          <SelectValue placeholder="选择飞书字段" />
+                        </SelectTrigger>
+                        <SelectContent>
+                          <SelectItem value="none">暂不映射</SelectItem>
+                          {inspection.fields.map((field) => (
+                            <SelectItem key={`${target.key}-${field.field_id}`} value={field.field_name}>
+                              {field.field_name}
+                            </SelectItem>
+                          ))}
+                        </SelectContent>
+                      </Select>
+                    </div>
+                  ))}
+                </div>
+              </div>
+
+              <Separator />
+
+              <div className="space-y-3">
+                <div>
+                  <div className="flex items-center gap-2 text-sm font-medium">
+                    <Eye className="h-4 w-4 text-emerald-600" />
+                    红人资料预览
+                  </div>
+                  <p className="mt-1 text-xs text-muted-foreground">
+                    只展示前 {inspection.sampleRecords.length} 条样例，用于确认字段是否对应正确。
+                  </p>
+                </div>
+                <div className="rounded-md border">
+                  <Table>
+                    <TableHeader>
+                      <TableRow>
+                        {previewTargets.map((target) => (
+                          <TableHead key={target.key} className="min-w-[120px]">
+                            {target.label}
+                          </TableHead>
+                        ))}
+                      </TableRow>
+                    </TableHeader>
+                    <TableBody>
+                      {inspection.sampleRecords.map((record) => (
+                        <TableRow key={record.record_id}>
+                          {previewTargets.map((target) => (
+                            <TableCell key={`${record.record_id}-${target.key}`} className="max-w-[240px] truncate">
+                              {formatFeishuValue(getMappedRecordValue(record.fields, fieldMapping[target.key]))}
+                            </TableCell>
+                          ))}
+                        </TableRow>
+                      ))}
+                    </TableBody>
+                  </Table>
+                </div>
+              </div>
+
               <p className="text-xs text-muted-foreground">
                 已读取 {inspection.sampleRecords.length} 条样例用于连通性检查，未执行新增、更新或删除。
               </p>
@@ -293,3 +447,32 @@ function Metric({ label, value }: { label: string; value: string | number }) {
   );
 }
 
+function getMappedRecordValue(fields: Record<string, unknown>, fieldName?: string) {
+  if (!fieldName) return undefined;
+  return fields[fieldName];
+}
+
+function formatFeishuValue(value: unknown): string {
+  if (value === null || value === undefined || value === '') return '-';
+  if (typeof value === 'string' || typeof value === 'number' || typeof value === 'boolean') {
+    return String(value);
+  }
+  if (Array.isArray(value)) {
+    const text = value.map(formatFeishuValue).filter((item) => item && item !== '-').join(', ');
+    return text || '-';
+  }
+  if (typeof value === 'object') {
+    const objectValue = value as Record<string, unknown>;
+    const preferredKeys = ['text', 'name', 'email', 'link', 'url', 'value', 'title'];
+    for (const key of preferredKeys) {
+      if (objectValue[key]) return formatFeishuValue(objectValue[key]);
+    }
+
+    const text = Object.values(objectValue)
+      .map(formatFeishuValue)
+      .filter((item) => item && item !== '-')
+      .join(', ');
+    return text || '-';
+  }
+  return '-';
+}

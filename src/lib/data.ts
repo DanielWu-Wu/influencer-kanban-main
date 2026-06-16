@@ -18,6 +18,7 @@ import {
   Product,
 } from './types';
 import type { PromptTemplate } from './ai-prompts';
+import type { FeishuFieldMapping } from './feishu-mapping';
 import { getSupabaseBrowserClient } from './supabase/client';
 
 export const STORAGE_KEYS = {
@@ -43,6 +44,7 @@ const GMAIL_STORAGE_KEYS = {
 
 export interface AppSettings {
   feishuUrl?: string;
+  feishuFieldMapping?: FeishuFieldMapping;
   brandName?: string;
   senderName?: string;
   emailSignature?: string;
