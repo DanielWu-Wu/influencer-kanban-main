@@ -64,21 +64,47 @@ const CATEGORY_TABS: Array<{
 ];
 
 const CATEGORY_QUERIES: Record<GmailCategory, string> = {
-  primary: 'category:primary',
-  promotions: 'category:promotions',
-  social: 'category:social',
+  primary: 'in:inbox category:primary',
+  promotions: 'in:inbox category:promotions',
+  social: 'in:inbox category:social',
 };
 
 const MAILBOX_API_LABELS: Record<GmailMailbox, string[]> = {
-  inbox: ['INBOX'],
-  unread: ['INBOX', 'UNREAD'],
+  inbox: [],
+  unread: [],
   starred: ['STARRED'],
   sent: ['SENT'],
   drafts: ['DRAFT'],
 };
 
+const MAILBOX_QUERIES: Partial<Record<GmailMailbox, string>> = {
+  unread: 'in:inbox is:unread category:primary',
+};
+
 function getHeader(headers: { name: string; value: string }[], name: string): string {
   return headers?.find((header) => header.name.toLowerCase() === name.toLowerCase())?.value || '';
+}
+
+function getDateTimestamp(dateString: string | undefined): number {
+  const timestamp = Date.parse(dateString || '');
+  return Number.isFinite(timestamp) ? timestamp : 0;
+}
+
+function getApiMessageTimestamp(message: Record<string, unknown>): number {
+  const internalDate = Number(message.internalDate);
+  if (Number.isFinite(internalDate) && internalDate > 0) return internalDate;
+
+  const payload = (message.payload || {}) as Record<string, unknown>;
+  const headers = (payload.headers as { name: string; value: string }[]) || [];
+  return getDateTimestamp(getHeader(headers, 'Date'));
+}
+
+function getThreadTimestamp(thread: GmailThread): number {
+  return getDateTimestamp(thread.lastMessageDate);
+}
+
+function sortThreadsByLatest(threads: GmailThread[]): GmailThread[] {
+  return [...threads].sort((left, right) => getThreadTimestamp(right) - getThreadTimestamp(left));
 }
 
 function normalizeBase64(data: string) {
@@ -183,7 +209,8 @@ async function parseGmailThread(
   accessToken: string,
   loadAttachmentBodies = false,
 ): Promise<GmailThread> {
-  const apiMessages = (apiThread.messages || []) as Record<string, unknown>[];
+  const apiMessages = [...((apiThread.messages || []) as Record<string, unknown>[])]
+    .sort((left, right) => getApiMessageTimestamp(left) - getApiMessageTimestamp(right));
   const firstPayload = (apiMessages[0]?.payload || {}) as Record<string, unknown>;
   const lastPayload = (apiMessages[apiMessages.length - 1]?.payload || {}) as Record<string, unknown>;
   const firstHeaders = (firstPayload.headers as { name: string; value: string }[]) || [];
@@ -310,7 +337,9 @@ export function GmailInbox({
       if (mailbox === 'unread' && !updatedThread.hasUnread) {
         return current.filter((thread) => thread.id !== updatedThread.id);
       }
-      return current.map((thread) => thread.id === updatedThread.id ? updatedThread : thread);
+      return sortThreadsByLatest(
+        current.map((thread) => thread.id === updatedThread.id ? updatedThread : thread),
+      );
     });
   }, [mailbox, updatedThread]);
 
@@ -387,6 +416,7 @@ export function GmailInbox({
       const params = new URLSearchParams({ maxResults: String(GMAIL_PAGE_SIZE) });
       MAILBOX_API_LABELS[mailbox].forEach((label) => params.append('labelIds', label));
       if (mailbox === 'inbox') params.set('q', CATEGORY_QUERIES[category]);
+      else if (MAILBOX_QUERIES[mailbox]) params.set('q', MAILBOX_QUERIES[mailbox]);
       if (pageToken) params.set('pageToken', pageToken);
 
       const listResponse = await fetchWithTimeout(
@@ -433,7 +463,7 @@ export function GmailInbox({
         );
         if (fetchId !== latestFetchIdRef.current) return;
 
-        setThreads((current) => index === 0 ? parsedBatch : [...current, ...parsedBatch]);
+        setThreads((current) => sortThreadsByLatest(index === 0 ? parsedBatch : [...current, ...parsedBatch]));
       }
       setLastSyncedAt(new Date().toISOString());
     } catch (caughtError) {
@@ -556,10 +586,15 @@ export function GmailInbox({
         })),
       };
 
-      if (mailbox === 'starred' && removeLabelIds.includes('STARRED')) {
+      if (
+        (mailbox === 'starred' && removeLabelIds.includes('STARRED'))
+        || (mailbox === 'unread' && removeLabelIds.includes('UNREAD'))
+      ) {
         setThreads((current) => current.filter((item) => item.id !== thread.id));
       } else {
-        setThreads((current) => current.map((item) => item.id === thread.id ? nextThread : item));
+        setThreads((current) =>
+          sortThreadsByLatest(current.map((item) => item.id === thread.id ? nextThread : item)),
+        );
       }
       onThreadUpdated?.(nextThread);
       return nextThread;
@@ -597,14 +632,16 @@ export function GmailInbox({
     onSelectThread(nextThread);
   };
 
-  const filteredThreads = threads.filter((thread) => {
-    const normalizedQuery = searchQuery.trim().toLowerCase();
-    const matchesSearch = !normalizedQuery
-      || thread.subject.toLowerCase().includes(normalizedQuery)
-      || thread.snippet.toLowerCase().includes(normalizedQuery)
-      || thread.messages.some((message) => message.from.toLowerCase().includes(normalizedQuery));
-    return matchesSearch && (!showUnreadOnly || thread.hasUnread);
-  });
+  const filteredThreads = sortThreadsByLatest(
+    threads.filter((thread) => {
+      const normalizedQuery = searchQuery.trim().toLowerCase();
+      const matchesSearch = !normalizedQuery
+        || thread.subject.toLowerCase().includes(normalizedQuery)
+        || thread.snippet.toLowerCase().includes(normalizedQuery)
+        || thread.messages.some((message) => message.from.toLowerCase().includes(normalizedQuery));
+      return matchesSearch && (!showUnreadOnly || thread.hasUnread);
+    }),
+  );
 
   const formatDate = (dateString: string) => {
     const date = new Date(dateString);
