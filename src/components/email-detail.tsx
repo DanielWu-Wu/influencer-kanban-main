@@ -1,6 +1,6 @@
 'use client';
 
-import { useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
 import { ScrollArea } from '@/components/ui/scroll-area';
@@ -9,16 +9,94 @@ import { useEmailTranslations, useGmailAuth, useSettings } from '@/lib/data';
 import { 
   ArrowLeft, Reply, MoreHorizontal, Globe, Languages,
   Copy, Sparkles, ChevronDown, Loader2,
-  Paperclip, Download, Forward, Mail, MailOpen
+  Paperclip, Download, Forward, Mail, MailOpen, UserRound
 } from 'lucide-react';
 import { EmailComposer } from './email-composer';
 import { NewEmailComposer } from './new-email-composer';
 import { textToEmailHtml } from '@/lib/email-content';
+import type { FeishuFieldMapping } from '@/lib/feishu-mapping';
+import { normalizeEmail } from '@/lib/record-assistant';
 
 interface EmailDetailProps {
   thread: GmailThread;
   onBack: () => void;
   onThreadUpdated?: (thread: GmailThread) => void;
+}
+
+type FeishuRecord = {
+  record_id: string;
+  fields: Record<string, unknown>;
+};
+
+type FeishuCreatorProfile = {
+  channelName: string;
+  region: string;
+  platform: string;
+  followers: string;
+  collaborationStatus: string;
+};
+
+function stringifyFeishuValue(value: unknown): string {
+  if (value === null || value === undefined) return '';
+  if (typeof value === 'string' || typeof value === 'number' || typeof value === 'boolean') {
+    return String(value);
+  }
+  if (Array.isArray(value)) {
+    return value.map(stringifyFeishuValue).filter(Boolean).join(' ');
+  }
+  if (typeof value === 'object') {
+    const record = value as Record<string, unknown>;
+    const preferred = ['text', 'name', 'email', 'link', 'url', 'value']
+      .map((key) => stringifyFeishuValue(record[key]))
+      .filter(Boolean);
+    if (preferred.length) return preferred.join(' ');
+    return Object.values(record).map(stringifyFeishuValue).filter(Boolean).join(' ');
+  }
+  return '';
+}
+
+function getMappedFeishuValue(
+  record: FeishuRecord,
+  mapping: FeishuFieldMapping,
+  key: keyof FeishuFieldMapping,
+) {
+  const fieldName = mapping[key];
+  if (!fieldName) return '';
+  return stringifyFeishuValue(record.fields[fieldName]).trim();
+}
+
+function extractEmails(value?: string) {
+  return (value || '')
+    .split(',')
+    .map((item) => normalizeEmail(item))
+    .filter(Boolean);
+}
+
+async function fetchFeishuRecords(url: string) {
+  const records: FeishuRecord[] = [];
+  let pageToken: string | undefined;
+
+  for (let page = 0; page < 10; page += 1) {
+    const response = await fetch('/api/feishu/records', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        action: 'list',
+        url,
+        pageSize: 500,
+        pageToken,
+      }),
+    });
+    const result = await response.json();
+    if (!response.ok || !result.success) {
+      throw new Error(result.error || '读取飞书红人资料失败。');
+    }
+    records.push(...(result.data?.items || []));
+    if (!result.data?.has_more || !result.data?.page_token) break;
+    pageToken = result.data.page_token;
+  }
+
+  return records;
 }
 
 export function EmailDetail({ thread, onBack, onThreadUpdated }: EmailDetailProps) {
@@ -151,7 +229,78 @@ export function EmailDetail({ thread, onBack, onThreadUpdated }: EmailDetailProp
   const [translatingIds, setTranslatingIds] = useState<Set<string>>(new Set());
   const [showingTranslationIds, setShowingTranslationIds] = useState<Set<string>>(new Set());
   const [translateErrors, setTranslateErrors] = useState<Record<string, string>>({});
+  const [creatorProfile, setCreatorProfile] = useState<FeishuCreatorProfile | null>(null);
+  const [creatorProfileLoading, setCreatorProfileLoading] = useState(false);
+  const [creatorProfileError, setCreatorProfileError] = useState('');
   const { settings } = useSettings();
+
+  const profileContactEmail = useMemo(() => {
+    const ownEmail = normalizeEmail(auth?.email);
+    const candidates = [...thread.messages]
+      .reverse()
+      .flatMap((message) => [
+        ...extractEmails(message.from),
+        ...extractEmails(message.to),
+      ]);
+
+    return candidates.find((email) => email && email !== ownEmail) || candidates[0] || '';
+  }, [auth?.email, thread.messages]);
+
+  useEffect(() => {
+    let cancelled = false;
+    const feishuUrl = settings.feishuUrl;
+    const mapping = settings.feishuFieldMapping || {};
+    const emailField = mapping.email;
+
+    if (!feishuUrl || !emailField || !profileContactEmail) {
+      setCreatorProfile(null);
+      setCreatorProfileError('');
+      setCreatorProfileLoading(false);
+      return;
+    }
+    const activeFeishuUrl = feishuUrl;
+    const activeEmailField = emailField;
+
+    async function loadCreatorProfile() {
+      setCreatorProfileLoading(true);
+      setCreatorProfileError('');
+
+      try {
+        const records = await fetchFeishuRecords(activeFeishuUrl);
+        const matchedRecord = records.find((record) => {
+          const recordEmail = stringifyFeishuValue(record.fields[activeEmailField]).toLowerCase();
+          return recordEmail.includes(profileContactEmail);
+        });
+
+        if (cancelled) return;
+
+        if (!matchedRecord) {
+          setCreatorProfile(null);
+          return;
+        }
+
+        setCreatorProfile({
+          channelName: getMappedFeishuValue(matchedRecord, mapping, 'channelName') || '未填写频道名',
+          region: getMappedFeishuValue(matchedRecord, mapping, 'region') || '未填写',
+          platform: getMappedFeishuValue(matchedRecord, mapping, 'platform') || '未填写',
+          followers: getMappedFeishuValue(matchedRecord, mapping, 'followers') || '未填写',
+          collaborationStatus: getMappedFeishuValue(matchedRecord, mapping, 'collaborationStatus') || '未填写',
+        });
+      } catch (error) {
+        if (cancelled) return;
+        setCreatorProfile(null);
+        setCreatorProfileError(error instanceof Error ? error.message : '读取飞书红人资料失败。');
+      } finally {
+        if (!cancelled) setCreatorProfileLoading(false);
+      }
+    }
+
+    void loadCreatorProfile();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [profileContactEmail, settings.feishuFieldMapping, settings.feishuUrl]);
 
   const handleTranslate = async (message: GmailMessage) => {
     if (showingTranslationIds.has(message.id)) {
@@ -367,6 +516,38 @@ export function EmailDetail({ thread, onBack, onThreadUpdated }: EmailDetailProp
       </div>
 
       {/* 邮件对话 */}
+      {(creatorProfileLoading || creatorProfile || creatorProfileError) && (
+        <div className="shrink-0 border-b bg-muted/20 px-4 py-2">
+          {creatorProfileLoading ? (
+            <div className="flex items-center gap-2 text-xs text-muted-foreground">
+              <Loader2 className="h-3.5 w-3.5 animate-spin" />
+              正在匹配飞书红人资料...
+            </div>
+          ) : creatorProfile ? (
+            <div className="flex flex-wrap items-center gap-x-4 gap-y-1 text-sm">
+              <div className="flex min-w-[180px] items-center gap-2 font-medium">
+                <UserRound className="h-4 w-4 text-primary" />
+                <span className="truncate">{creatorProfile.channelName}</span>
+              </div>
+              <span className="text-xs text-muted-foreground">
+                地区：<span className="text-foreground">{creatorProfile.region}</span>
+              </span>
+              <span className="text-xs text-muted-foreground">
+                平台：<span className="text-foreground">{creatorProfile.platform}</span>
+              </span>
+              <span className="text-xs text-muted-foreground">
+                粉丝数：<span className="text-foreground">{creatorProfile.followers}</span>
+              </span>
+              <Badge variant="secondary" className="h-5 rounded-md px-2 text-[11px]">
+                {creatorProfile.collaborationStatus}
+              </Badge>
+            </div>
+          ) : (
+            <div className="text-xs text-amber-600">{creatorProfileError}</div>
+          )}
+        </div>
+      )}
+
       {messageActionError && (
         <div className="shrink-0 border-b bg-destructive/5 px-4 py-2 text-xs text-destructive">
           {messageActionError}
