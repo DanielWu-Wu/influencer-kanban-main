@@ -4,9 +4,11 @@ import { getRequestUser } from '@/lib/supabase/server';
 
 const FEISHU_SCOPES = [
   'offline_access',
+  'bitable:app:readonly',
   'base:app:read',
   'base:table:read',
   'base:field:read',
+  'base:record:retrieve',
   'base:record:read',
   'base:record:create',
   'base:record:update',
