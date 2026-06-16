@@ -34,7 +34,7 @@ import {
   useGmailThreads,
 } from '@/lib/data';
 import PromptManager from '@/components/prompt-manager';
-import { Influencer, COUNTRY_OPTIONS } from '@/lib/types';
+import { Influencer, COUNTRY_OPTIONS, STATUS_LABELS } from '@/lib/types';
 import { InfluencerForm } from '@/components/influencer-form';
 import { KanbanBoard } from '@/components/kanban-board';
 import { EmailTemplateManager } from '@/components/email-template-manager';
@@ -44,6 +44,7 @@ import { TodoBoard } from '@/components/todo-board';
 import { WorkCalendar } from '@/components/work-calendar';
 import { GmailPage } from '@/components/gmail-page';
 import { useAuth } from '@/components/auth-provider';
+import { useRecordAssistant } from '@/components/record-assistant-provider';
 
 type View = 'kanban' | 'list' | 'email' | 'reminders' | 'settings' | 'todo' | 'calendar' | 'gmail' | 'prompts';
 
@@ -126,6 +127,7 @@ export default function DashboardPage() {
   const { events, addEvent, deleteEvent } = useCalendarEvents();
   const { settings } = useSettings();
   const { unreadCount } = useGmailThreads();
+  const { captureEvent } = useRecordAssistant();
 
   const filteredInfluencers = influencers.filter((influencer) => {
     const query = searchQuery.toLowerCase();
@@ -173,6 +175,28 @@ export default function DashboardPage() {
     if (!editingInfluencer) return;
     updateInfluencer(editingInfluencer.id, data);
     setEditingInfluencer(null);
+  };
+
+  const handleUpdateStatus = (id: string, status: Influencer['status']) => {
+    const influencer = influencers.find((item) => item.id === id);
+    updateStatus(id, status);
+
+    if (!influencer || influencer.status === status) return;
+    captureEvent({
+      type: 'status_changed',
+      source: 'kanban',
+      title: `${influencer.channelName} 状态变更`,
+      summary: `从「${STATUS_LABELS[influencer.status]}」更新为「${STATUS_LABELS[status]}」`,
+      influencer: {
+        id: influencer.id,
+        channelName: influencer.channelName,
+        email: influencer.email,
+        previousStatus: influencer.status,
+        previousStatusLabel: STATUS_LABELS[influencer.status],
+        newStatus: status,
+        statusLabel: STATUS_LABELS[status],
+      },
+    });
   };
 
   const renderNav = () => (
@@ -342,7 +366,7 @@ export default function DashboardPage() {
 
               <KanbanBoard
                 influencers={filteredInfluencers}
-                onUpdateStatus={updateStatus}
+                onUpdateStatus={handleUpdateStatus}
                 onEdit={(influencer) => setEditingInfluencer(influencer)}
                 onDelete={deleteInfluencer}
               />

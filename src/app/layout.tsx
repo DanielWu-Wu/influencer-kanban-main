@@ -2,6 +2,7 @@ import type { Metadata } from 'next';
 import './globals.css';
 import { DelayedEmailProvider } from '@/components/delayed-email-provider';
 import { AuthProvider } from '@/components/auth-provider';
+import { RecordAssistantProvider } from '@/components/record-assistant-provider';
 
 export const metadata: Metadata = {
   title: {
@@ -42,7 +43,9 @@ export default function RootLayout({
     <html lang="zh-CN" suppressHydrationWarning>
       <body className="antialiased">
         <AuthProvider>
-          <DelayedEmailProvider>{children}</DelayedEmailProvider>
+          <DelayedEmailProvider>
+            <RecordAssistantProvider>{children}</RecordAssistantProvider>
+          </DelayedEmailProvider>
         </AuthProvider>
       </body>
     </html>

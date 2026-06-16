@@ -29,6 +29,7 @@ import {
 import { GmailThread } from '@/lib/types';
 import { RichEmailEditor } from './rich-email-editor';
 import { useDelayedEmailSender } from './delayed-email-provider';
+import { useRecordAssistant } from './record-assistant-provider';
 
 interface EmailComposerProps {
   thread: GmailThread;
@@ -117,6 +118,7 @@ export function EmailComposer({
   const { auth, connect } = useGmailAuth();
   const { settings, loading: settingsLoading } = useSettings();
   const { scheduleEmail } = useDelayedEmailSender();
+  const { captureEvent } = useRecordAssistant();
   const [replyContent, setReplyContent] = useState(initialMessage || '');
   const [userIdeas, setUserIdeas] = useState('');
   const [analysis, setAnalysis] = useState<CollaborationAnalysis | null>(null);
@@ -350,7 +352,7 @@ export function EmailComposer({
     setSending(true);
     setAiError('');
     try {
-      const { accessToken, rawEmail } = await createOutgoingEmail();
+      const { accessToken, finalReply, rawEmail, subject } = await createOutgoingEmail();
       scheduleEmail({
         accessToken,
         raw: toBase64Url(rawEmail),
@@ -358,6 +360,17 @@ export function EmailComposer({
         recipient,
         delaySeconds,
         onSent: () => {
+          captureEvent({
+            type: 'email_sent',
+            source: 'gmail',
+            title: `已发送回复给 ${recipient}`,
+            summary: `主题：${subject}`,
+            email: {
+              to: recipient,
+              subject,
+              body: emailHtmlToText(finalReply),
+            },
+          });
           setCompletion('sent');
           onDraftSaved?.('');
         },

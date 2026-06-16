@@ -22,6 +22,7 @@ import {
 } from '@/lib/email-content';
 import { RichEmailEditor } from './rich-email-editor';
 import { useDelayedEmailSender } from './delayed-email-provider';
+import { useRecordAssistant } from './record-assistant-provider';
 
 const MAX_ATTACHMENT_BYTES = 18 * 1024 * 1024;
 const EMPTY_ATTACHMENTS: File[] = [];
@@ -53,6 +54,7 @@ export function NewEmailComposer({
   const { settings } = useSettings();
   const { addDraft } = useEmailDrafts();
   const { scheduleEmail } = useDelayedEmailSender();
+  const { captureEvent } = useRecordAssistant();
   const [to, setTo] = useState('');
   const [subject, setSubject] = useState('');
   const [content, setContent] = useState('');
@@ -127,7 +129,7 @@ export function NewEmailComposer({
       htmlBody: finalContent,
       attachments,
     }));
-    return { accessToken, finalContent, raw };
+    return { accessToken, finalContent, raw, subject: subject.trim() };
   };
 
   const saveDraft = async () => {
@@ -177,13 +179,24 @@ export function NewEmailComposer({
     setSending(true);
     setError('');
     try {
-      const { accessToken, raw } = await createEmail();
+      const { accessToken, finalContent, raw, subject: outgoingSubject } = await createEmail();
       scheduleEmail({
         accessToken,
         raw,
         recipient,
         delaySeconds,
         onSent: () => {
+          captureEvent({
+            type: 'email_sent',
+            source: 'gmail',
+            title: `已发送邮件给 ${recipient}`,
+            summary: `主题：${outgoingSubject}`,
+            email: {
+              to: recipient,
+              subject: outgoingSubject,
+              body: emailHtmlToText(finalContent),
+            },
+          });
           reset();
           onOpenChange(false);
         },
