@@ -6,6 +6,7 @@ import {
   ChevronLeft,
   ChevronRight,
   Inbox,
+  Languages,
   Loader2,
   LogOut,
   Mail,
@@ -21,7 +22,7 @@ import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { ScrollArea } from '@/components/ui/scroll-area';
-import { useGmailAuth } from '@/lib/data';
+import { useGmailAuth, useSettings } from '@/lib/data';
 import { repairTextEncoding } from '@/lib/email-text';
 import {
   GmailAttachment,
@@ -34,6 +35,7 @@ import {
 const GMAIL_PAGE_SIZE = 50;
 const GMAIL_DETAIL_BATCH_SIZE = 16;
 const GMAIL_AUTO_REFRESH_MS = 60_000;
+const SUBJECT_TRANSLATION_BATCH_SIZE = 12;
 
 interface GmailInboxProps {
   onSelectThread: (thread: GmailThread) => void;
@@ -109,6 +111,52 @@ function getThreadTimestamp(thread: GmailThread): number {
 
 function sortThreadsByLatest(threads: GmailThread[]): GmailThread[] {
   return [...threads].sort((left, right) => getThreadTimestamp(right) - getThreadTimestamp(left));
+}
+
+function detectSubjectLanguage(text: string): string {
+  if (/[\u4e00-\u9fa5]/.test(text)) return 'zh';
+  if (/[\u3040-\u30ff]/.test(text)) return 'ja';
+  if (/[\u0400-\u04ff]/.test(text)) return 'ru';
+  if (/[áéíóúñ¿¡ãõçàèìòùäöüß]/i.test(text)) return 'auto';
+  return 'auto';
+}
+
+function parseSubjectTranslations(rawText: string, expectedCount: number): string[] {
+  const trimmed = rawText.trim();
+
+  try {
+    const parsed = JSON.parse(trimmed);
+    if (Array.isArray(parsed)) {
+      return parsed.map((item) => String(item || '').trim()).filter(Boolean);
+    }
+  } catch {
+    // Fall through to line-based parsing for models that wrap or format JSON.
+  }
+
+  const jsonMatch = trimmed.match(/\[[\s\S]*\]/);
+  if (jsonMatch) {
+    try {
+      const parsed = JSON.parse(jsonMatch[0]);
+      if (Array.isArray(parsed)) {
+        return parsed.map((item) => String(item || '').trim()).filter(Boolean);
+      }
+    } catch {
+      // Fall through to line-based parsing.
+    }
+  }
+
+  const lines = trimmed
+    .split(/\r?\n/)
+    .map((line) =>
+      line
+        .replace(/^\s*[-*]\s*/, '')
+        .replace(/^\s*\d+[\).\uff09:：-]\s*/, '')
+        .replace(/^["']|["']$/g, '')
+        .trim(),
+    )
+    .filter(Boolean);
+
+  return lines.slice(0, expectedCount);
 }
 
 function normalizeEmailAddress(value?: string): string {
@@ -317,13 +365,19 @@ export function GmailInbox({
   compact = true,
 }: GmailInboxProps) {
   const { auth, connect, disconnect } = useGmailAuth();
+  const { settings } = useSettings();
   const latestFetchIdRef = useRef(0);
+  const subjectTranslationRunRef = useRef(0);
   const [threads, setThreads] = useState<GmailThread[]>([]);
   const [loading, setLoading] = useState(false);
+  const [translatingSubjects, setTranslatingSubjects] = useState(false);
   const [actionThreadId, setActionThreadId] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [subjectTranslationError, setSubjectTranslationError] = useState<string | null>(null);
   const [searchQuery, setSearchQuery] = useState('');
   const [showUnreadOnly, setShowUnreadOnly] = useState(false);
+  const [showTranslatedSubjects, setShowTranslatedSubjects] = useState(false);
+  const [subjectTranslations, setSubjectTranslations] = useState<Record<string, string>>({});
   const [authProcessing, setAuthProcessing] = useState(false);
   const paginationKey = `${mailbox}:${category}:${refreshKey}`;
   const [activePaginationKey, setActivePaginationKey] = useState(paginationKey);
@@ -672,6 +726,84 @@ export function GmailInbox({
     onSelectThread(nextThread);
   };
 
+  const translateThreadSubjects = useCallback(async (targetThreads: GmailThread[]) => {
+    const missingThreads = targetThreads.filter((thread) => {
+      const subject = repairTextEncoding(thread.subject || '').trim();
+      return subject && !subjectTranslations[thread.id];
+    });
+    if (missingThreads.length === 0) return;
+
+    const runId = subjectTranslationRunRef.current + 1;
+    subjectTranslationRunRef.current = runId;
+    setTranslatingSubjects(true);
+    setSubjectTranslationError(null);
+
+    try {
+      for (let index = 0; index < missingThreads.length; index += SUBJECT_TRANSLATION_BATCH_SIZE) {
+        if (runId !== subjectTranslationRunRef.current) return;
+
+        const batch = missingThreads.slice(index, index + SUBJECT_TRANSLATION_BATCH_SIZE);
+        const subjects = batch.map((thread) => repairTextEncoding(thread.subject || '').trim());
+        const titlePrompt = [
+          '\u4f60\u662f\u90ae\u4ef6\u6807\u9898\u7ffb\u8bd1\u52a9\u624b\u3002',
+          '\u8bf7\u628a\u7528\u6237\u63d0\u4f9b\u7684\u90ae\u4ef6\u6807\u9898\u9010\u6761\u7ffb\u8bd1\u6210\u81ea\u7136\u3001\u7b80\u6d01\u7684\u4e2d\u6587\u3002',
+          '\u4fdd\u7559\u54c1\u724c\u540d\u3001\u4ea7\u54c1\u578b\u53f7\u3001\u4eba\u540d\u3001\u94fe\u63a5\u3001\u8d27\u5e01\u548c\u6570\u5b57\u3002',
+          '\u53ea\u8fd4\u56de\u4e25\u683c JSON \u6570\u7ec4\uff0c\u6570\u7ec4\u957f\u5ea6\u5fc5\u987b\u7b49\u4e8e\u8f93\u5165\u6807\u9898\u6570\u91cf\uff0c\u4e0d\u8981 Markdown\uff0c\u4e0d\u8981\u89e3\u91ca\u3002',
+          settings.translatePrompt
+            ? `\u53ef\u53c2\u8003\u8fd9\u4e2a\u7ffb\u8bd1\u98ce\u683c\u8981\u6c42\uff1a${settings.translatePrompt}`
+            : '',
+        ].filter(Boolean).join('\n');
+
+        const response = await fetch('/api/translate', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            text: JSON.stringify(subjects),
+            sourceLang: detectSubjectLanguage(subjects.join('\n')),
+            customPrompt: titlePrompt,
+            modelProvider: settings.modelProvider || 'builtin',
+            customApiUrl: settings.customApiUrl || '',
+            customModelName: settings.customModelName || '',
+          }),
+        });
+        const result = await response.json();
+
+        if (!response.ok || !result.success) {
+          throw new Error(result.error || '\u6807\u9898\u7ffb\u8bd1\u5931\u8d25');
+        }
+
+        const translatedSubjects = parseSubjectTranslations(
+          String(result.data?.translatedText || ''),
+          subjects.length,
+        );
+        const nextTranslations = batch.reduce<Record<string, string>>((accumulator, thread, batchIndex) => {
+          const translated = repairTextEncoding(translatedSubjects[batchIndex] || '').trim();
+          if (translated) accumulator[thread.id] = translated;
+          return accumulator;
+        }, {});
+
+        if (runId !== subjectTranslationRunRef.current) return;
+        setSubjectTranslations((current) => ({ ...current, ...nextTranslations }));
+      }
+    } catch (caughtError) {
+      if (runId === subjectTranslationRunRef.current) {
+        setSubjectTranslationError(
+          caughtError instanceof Error ? caughtError.message : '\u6807\u9898\u7ffb\u8bd1\u5931\u8d25\uff0c\u8bf7\u7a0d\u540e\u91cd\u8bd5',
+        );
+      }
+    } finally {
+      if (runId === subjectTranslationRunRef.current) {
+        setTranslatingSubjects(false);
+      }
+    }
+  }, [
+    settings.customApiUrl,
+    settings.customModelName,
+    settings.modelProvider,
+    settings.translatePrompt,
+    subjectTranslations,
+  ]);
+
   const filteredThreads = sortThreadsByLatest(
     threads.filter((thread) => {
       const normalizedQuery = searchQuery.trim().toLowerCase();
@@ -682,6 +814,25 @@ export function GmailInbox({
       return matchesSearch && (!showUnreadOnly || thread.hasUnread);
     }),
   );
+
+  useEffect(() => {
+    if (!showTranslatedSubjects || translatingSubjects) return;
+    void translateThreadSubjects(filteredThreads);
+  }, [filteredThreads, showTranslatedSubjects, translateThreadSubjects, translatingSubjects]);
+
+  const handleToggleSubjectTranslations = () => {
+    setSubjectTranslationError(null);
+
+    if (showTranslatedSubjects) {
+      subjectTranslationRunRef.current += 1;
+      setShowTranslatedSubjects(false);
+      setTranslatingSubjects(false);
+      return;
+    }
+
+    setShowTranslatedSubjects(true);
+    void translateThreadSubjects(filteredThreads);
+  };
 
   const formatDate = (dateString: string) => {
     const date = new Date(dateString);
@@ -738,17 +889,38 @@ export function GmailInbox({
               {'\u4e0a\u6b21\u540c\u6b65'} {formatSyncTime(lastSyncedAt)}
             </span>
           )}
+          {subjectTranslationError && (
+            <span className="mt-0.5 text-[11px] text-destructive">
+              {subjectTranslationError}
+            </span>
+          )}
         </div>
-        <Button
-          variant="ghost"
-          size="icon"
-          className="h-8 w-8"
-          title={'\u5237\u65b0'}
-          onClick={fetchThreads}
-          disabled={loading}
-        >
-          <RefreshCw className={`h-4 w-4 ${loading ? 'animate-spin' : ''}`} />
-        </Button>
+        <div className="flex shrink-0 items-center gap-1">
+          <Button
+            variant={showTranslatedSubjects ? 'secondary' : 'ghost'}
+            size="icon"
+            className="h-8 w-8"
+            title={showTranslatedSubjects ? '\u6062\u590d\u539f\u6807\u9898' : '\u7ffb\u8bd1\u90ae\u4ef6\u6807\u9898'}
+            onClick={handleToggleSubjectTranslations}
+            disabled={translatingSubjects && !showTranslatedSubjects}
+          >
+            {translatingSubjects ? (
+              <Loader2 className="h-4 w-4 animate-spin" />
+            ) : (
+              <Languages className="h-4 w-4" />
+            )}
+          </Button>
+          <Button
+            variant="ghost"
+            size="icon"
+            className="h-8 w-8"
+            title={'\u5237\u65b0'}
+            onClick={fetchThreads}
+            disabled={loading}
+          >
+            <RefreshCw className={`h-4 w-4 ${loading ? 'animate-spin' : ''}`} />
+          </Button>
+        </div>
       </div>
 
       <div className="shrink-0 border-b px-3 py-2">
@@ -820,6 +992,9 @@ export function GmailInbox({
               && latestMessage?.from
               && normalizeEmailAddress(latestMessage.from) === normalizeEmailAddress(auth.email),
             );
+            const displaySubject = showTranslatedSubjects && subjectTranslations[thread.id]
+              ? subjectTranslations[thread.id]
+              : thread.subject;
             const actionLoading = actionThreadId === thread.id;
 
             return (
@@ -874,8 +1049,11 @@ export function GmailInbox({
                           {formatDate(thread.lastMessageDate)}
                         </span>
                       </div>
-                      <p className={`mt-0.5 truncate text-sm ${thread.hasUnread ? 'font-semibold' : ''}`}>
-                        {thread.subject}
+                      <p
+                        className={`mt-0.5 truncate text-sm ${thread.hasUnread ? 'font-semibold' : ''}`}
+                        title={showTranslatedSubjects && subjectTranslations[thread.id] ? thread.subject : undefined}
+                      >
+                        {displaySubject}
                       </p>
                       <p className="mt-0.5 truncate text-xs text-muted-foreground">{thread.snippet}</p>
                     </div>
@@ -895,7 +1073,12 @@ export function GmailInbox({
                         <span className="min-w-0 truncate">{sender}</span>
                       </span>
                       <div className="min-w-0 truncate text-sm">
-                        <span className={thread.hasUnread ? 'font-semibold' : ''}>{thread.subject}</span>
+                        <span
+                          className={thread.hasUnread ? 'font-semibold' : ''}
+                          title={showTranslatedSubjects && subjectTranslations[thread.id] ? thread.subject : undefined}
+                        >
+                          {displaySubject}
+                        </span>
                         {thread.snippet && (
                           <span className="text-muted-foreground"> - {thread.snippet}</span>
                         )}
