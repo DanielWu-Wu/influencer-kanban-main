@@ -67,25 +67,22 @@ const CATEGORY_TABS: Array<{
   { id: 'social', label: '\u793e\u4ea4', icon: Users },
 ];
 
-const CATEGORY_QUERIES: Record<GmailCategory, string> = {
-  primary: 'in:inbox -category:promotions -category:social',
-  promotions: 'in:inbox category:promotions',
-  social: 'in:inbox category:social',
+const CATEGORY_LABEL_IDS: Partial<Record<GmailCategory, string>> = {
+  promotions: 'CATEGORY_PROMOTIONS',
+  social: 'CATEGORY_SOCIAL',
 };
 
+const NORMAL_INBOX_EXCLUDED_LABELS = new Set(['CATEGORY_PROMOTIONS', 'CATEGORY_SOCIAL']);
+
 const MAILBOX_API_LABELS: Record<GmailMailbox, string[]> = {
-  inbox: [],
-  unread: [],
+  inbox: ['INBOX'],
+  unread: ['INBOX', 'UNREAD'],
   starred: ['STARRED'],
   sent: ['SENT'],
   drafts: ['DRAFT'],
 };
 
-const MAILBOX_QUERIES: Partial<Record<GmailMailbox, string>> = {
-  unread: 'in:inbox is:unread -category:promotions -category:social',
-};
-
-const NORMAL_UNREAD_QUERY = MAILBOX_QUERIES.unread || 'in:inbox is:unread';
+const NORMAL_UNREAD_QUERY = 'in:inbox is:unread -category:promotions -category:social';
 
 function getHeader(headers: { name: string; value: string }[], name: string): string {
   return headers?.find((header) => header.name.toLowerCase() === name.toLowerCase())?.value || '';
@@ -111,6 +108,21 @@ function getThreadTimestamp(thread: GmailThread): number {
 
 function sortThreadsByLatest(threads: GmailThread[]): GmailThread[] {
   return [...threads].sort((left, right) => getThreadTimestamp(right) - getThreadTimestamp(left));
+}
+
+function hasThreadLabel(thread: GmailThread, label: string): boolean {
+  return thread.labels.includes(label);
+}
+
+function isNormalInboxThread(thread: GmailThread): boolean {
+  return hasThreadLabel(thread, 'INBOX')
+    && !thread.labels.some((label) => NORMAL_INBOX_EXCLUDED_LABELS.has(label));
+}
+
+function shouldShowThreadInMailbox(thread: GmailThread, mailbox: GmailMailbox, category: GmailCategory): boolean {
+  if (mailbox === 'inbox' && category === 'primary') return isNormalInboxThread(thread);
+  if (mailbox === 'unread') return thread.hasUnread && isNormalInboxThread(thread);
+  return true;
 }
 
 function detectSubjectLanguage(text: string): string {
@@ -479,9 +491,10 @@ export function GmailInbox({
       const headers = { Authorization: `Bearer ${accessToken}` };
       const pageToken = pageTokens[pageIndex] || '';
       const params = new URLSearchParams({ maxResults: String(GMAIL_PAGE_SIZE) });
-      MAILBOX_API_LABELS[mailbox].forEach((label) => params.append('labelIds', label));
-      if (mailbox === 'inbox') params.set('q', CATEGORY_QUERIES[category]);
-      else if (MAILBOX_QUERIES[mailbox]) params.set('q', MAILBOX_QUERIES[mailbox]);
+      const requestLabelIds = [...MAILBOX_API_LABELS[mailbox]];
+      const categoryLabelId = mailbox === 'inbox' ? CATEGORY_LABEL_IDS[category] : undefined;
+      if (categoryLabelId) requestLabelIds.push(categoryLabelId);
+      requestLabelIds.forEach((label) => params.append('labelIds', label));
       if (pageToken) params.set('pageToken', pageToken);
 
       const unreadCountParams = new URLSearchParams({
@@ -549,9 +562,10 @@ export function GmailInbox({
             .filter((thread): thread is Record<string, unknown> => Boolean(thread))
             .map((thread) => parseGmailThread(thread, accessToken, false)),
         );
+        const visibleBatch = parsedBatch.filter((thread) => shouldShowThreadInMailbox(thread, mailbox, category));
         if (fetchId !== latestFetchIdRef.current) return;
 
-        setThreads((current) => sortThreadsByLatest(index === 0 ? parsedBatch : [...current, ...parsedBatch]));
+        setThreads((current) => sortThreadsByLatest(index === 0 ? visibleBatch : [...current, ...visibleBatch]));
       }
       setLastSyncedAt(new Date().toISOString());
     } catch (caughtError) {
@@ -673,10 +687,12 @@ export function GmailInbox({
               : message.isRead,
         })),
       };
-      if (thread.hasUnread !== nextThread.hasUnread) {
+      const wasCountedAsNormalUnread = thread.hasUnread && isNormalInboxThread(thread);
+      const isCountedAsNormalUnread = nextThread.hasUnread && isNormalInboxThread(nextThread);
+      if (wasCountedAsNormalUnread !== isCountedAsNormalUnread) {
         setNormalUnreadCount((current) => {
           if (current === null) return current;
-          return nextThread.hasUnread ? current + 1 : Math.max(0, current - 1);
+          return isCountedAsNormalUnread ? current + 1 : Math.max(0, current - 1);
         });
       }
 
