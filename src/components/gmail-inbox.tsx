@@ -66,7 +66,7 @@ const CATEGORY_TABS: Array<{
 ];
 
 const CATEGORY_QUERIES: Record<GmailCategory, string> = {
-  primary: 'in:inbox category:primary',
+  primary: 'in:inbox -category:promotions -category:social',
   promotions: 'in:inbox category:promotions',
   social: 'in:inbox category:social',
 };
@@ -80,8 +80,10 @@ const MAILBOX_API_LABELS: Record<GmailMailbox, string[]> = {
 };
 
 const MAILBOX_QUERIES: Partial<Record<GmailMailbox, string>> = {
-  unread: 'in:inbox is:unread category:primary',
+  unread: 'in:inbox is:unread -category:promotions -category:social',
 };
+
+const NORMAL_UNREAD_QUERY = MAILBOX_QUERIES.unread || 'in:inbox is:unread';
 
 function getHeader(headers: { name: string; value: string }[], name: string): string {
   return headers?.find((header) => header.name.toLowerCase() === name.toLowerCase())?.value || '';
@@ -329,6 +331,7 @@ export function GmailInbox({
   const [pageIndex, setPageIndex] = useState(0);
   const [nextPageToken, setNextPageToken] = useState<string | null>(null);
   const [lastSyncedAt, setLastSyncedAt] = useState<string | null>(null);
+  const [normalUnreadCount, setNormalUnreadCount] = useState<number | null>(null);
 
   useEffect(() => {
     setActivePaginationKey(paginationKey);
@@ -336,6 +339,7 @@ export function GmailInbox({
     setPageIndex(0);
     setNextPageToken(null);
     setThreads([]);
+    setNormalUnreadCount(null);
   }, [paginationKey]);
 
   useEffect(() => {
@@ -426,10 +430,33 @@ export function GmailInbox({
       else if (MAILBOX_QUERIES[mailbox]) params.set('q', MAILBOX_QUERIES[mailbox]);
       if (pageToken) params.set('pageToken', pageToken);
 
-      const listResponse = await fetchWithTimeout(
-        `https://gmail.googleapis.com/gmail/v1/users/me/threads?${params.toString()}`,
-        { headers },
-      );
+      const unreadCountParams = new URLSearchParams({
+        maxResults: '1',
+        q: NORMAL_UNREAD_QUERY,
+      });
+      const unreadCountRequest = mailbox === 'inbox' || mailbox === 'unread'
+        ? fetchWithTimeout(
+            `https://gmail.googleapis.com/gmail/v1/users/me/threads?${unreadCountParams.toString()}`,
+            { headers },
+            8_000,
+          )
+            .then(async (response) => {
+              if (!response.ok) return null;
+              const result = await response.json() as GmailThreadListResult;
+              return typeof result.resultSizeEstimate === 'number' ? result.resultSizeEstimate : null;
+            })
+            .catch(() => null)
+        : Promise.resolve(null);
+      const [listResponse, unreadCount] = await Promise.all([
+        fetchWithTimeout(
+          `https://gmail.googleapis.com/gmail/v1/users/me/threads?${params.toString()}`,
+          { headers },
+        ),
+        unreadCountRequest,
+      ]);
+      if (fetchId !== latestFetchIdRef.current) return;
+      if (unreadCount !== null) setNormalUnreadCount(unreadCount);
+
       if (!listResponse.ok) {
         const result = await listResponse.json().catch(() => ({}));
         throw new Error(result.error?.message || '\u83b7\u53d6\u90ae\u4ef6\u5217\u8868\u5931\u8d25');
@@ -592,6 +619,12 @@ export function GmailInbox({
               : message.isRead,
         })),
       };
+      if (thread.hasUnread !== nextThread.hasUnread) {
+        setNormalUnreadCount((current) => {
+          if (current === null) return current;
+          return nextThread.hasUnread ? current + 1 : Math.max(0, current - 1);
+        });
+      }
 
       if (
         (mailbox === 'starred' && removeLabelIds.includes('STARRED'))
@@ -661,6 +694,7 @@ export function GmailInbox({
 
   const formatSyncTime = (dateString: string) =>
     new Date(dateString).toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit' });
+  const unreadBadgeCount = normalUnreadCount ?? threads.filter((thread) => thread.hasUnread).length;
 
   if (authProcessing) {
     return (
@@ -695,7 +729,7 @@ export function GmailInbox({
             <h2 className="truncate font-semibold">{MAILBOX_LABELS[mailbox]}</h2>
             {(mailbox === 'inbox' || mailbox === 'unread') && (
               <Badge variant="secondary">
-                {threads.filter((thread) => thread.hasUnread).length} {'\u672a\u8bfb'}
+                {unreadBadgeCount} {'\u672a\u8bfb'}
               </Badge>
             )}
           </div>
