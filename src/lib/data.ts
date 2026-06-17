@@ -915,11 +915,6 @@ export function useEmailTranslations() {
     setTranslations(loadData<EmailTranslation[]>(GMAIL_STORAGE_KEYS.TRANSLATIONS, []));
   }, []);
 
-  const saveTranslations = useCallback((newTranslations: EmailTranslation[]) => {
-    setTranslations(newTranslations);
-    saveData(GMAIL_STORAGE_KEYS.TRANSLATIONS, newTranslations);
-  }, []);
-
   const addTranslation = useCallback(
     (translation: Omit<EmailTranslation, 'id' | 'createdAt'>) => {
       const newTranslation: EmailTranslation = {
@@ -927,10 +922,17 @@ export function useEmailTranslations() {
         id: generateId(),
         createdAt: new Date().toISOString(),
       };
-      saveTranslations([...translations, newTranslation]);
+      setTranslations((current) => {
+        const next = [
+          newTranslation,
+          ...current.filter((item) => item.messageId !== translation.messageId),
+        ];
+        saveData(GMAIL_STORAGE_KEYS.TRANSLATIONS, next);
+        return next;
+      });
       return newTranslation;
     },
-    [translations, saveTranslations],
+    [],
   );
 
   const getTranslation = useCallback(

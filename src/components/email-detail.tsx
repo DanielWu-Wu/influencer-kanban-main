@@ -14,6 +14,7 @@ import {
 import { EmailComposer } from './email-composer';
 import { NewEmailComposer } from './new-email-composer';
 import { textToEmailHtml } from '@/lib/email-content';
+import { repairTextEncoding, splitEmailForTranslation } from '@/lib/email-text';
 import type { FeishuFieldMapping } from '@/lib/feishu-mapping';
 import { normalizeEmail } from '@/lib/record-assistant';
 
@@ -72,6 +73,15 @@ function extractEmails(value?: string) {
     .filter(Boolean);
 }
 
+function getMessageTimestamp(message: GmailMessage): number {
+  const timestamp = Date.parse(message.date || '');
+  return Number.isFinite(timestamp) ? timestamp : 0;
+}
+
+function sortMessagesNewestFirst(messages: GmailMessage[]) {
+  return [...messages].sort((left, right) => getMessageTimestamp(right) - getMessageTimestamp(left));
+}
+
 async function fetchFeishuRecords(url: string) {
   const records: FeishuRecord[] = [];
   let pageToken: string | undefined;
@@ -100,7 +110,10 @@ async function fetchFeishuRecords(url: string) {
 }
 
 export function EmailDetail({ thread, onBack, onThreadUpdated }: EmailDetailProps) {
-  const [expandedMessages, setExpandedMessages] = useState<Set<string>>(new Set([thread.messages[thread.messages.length - 1].id]));
+  const [expandedMessages, setExpandedMessages] = useState<Set<string>>(() => {
+    const newestMessage = sortMessagesNewestFirst(thread.messages)[0];
+    return new Set(newestMessage ? [newestMessage.id] : []);
+  });
   const [showComposer, setShowComposer] = useState(false);
   const [replyMode, setReplyMode] = useState<'compose' | 'ai'>('compose');
   const [savedReplyDraft, setSavedReplyDraft] = useState('');
@@ -229,10 +242,17 @@ export function EmailDetail({ thread, onBack, onThreadUpdated }: EmailDetailProp
   const [translatingIds, setTranslatingIds] = useState<Set<string>>(new Set());
   const [showingTranslationIds, setShowingTranslationIds] = useState<Set<string>>(new Set());
   const [translateErrors, setTranslateErrors] = useState<Record<string, string>>({});
+  const [translationProgress, setTranslationProgress] = useState<Record<string, string>>({});
   const [creatorProfile, setCreatorProfile] = useState<FeishuCreatorProfile | null>(null);
   const [creatorProfileLoading, setCreatorProfileLoading] = useState(false);
   const [creatorProfileError, setCreatorProfileError] = useState('');
   const { settings } = useSettings();
+  const displayMessages = useMemo(() => sortMessagesNewestFirst(thread.messages), [thread.messages]);
+  const newestDisplayMessageId = displayMessages[0]?.id || '';
+
+  useEffect(() => {
+    setExpandedMessages(new Set(newestDisplayMessageId ? [newestDisplayMessageId] : []));
+  }, [newestDisplayMessageId, thread.id]);
 
   const profileContactEmail = useMemo(() => {
     const ownEmail = normalizeEmail(auth?.email);
@@ -302,7 +322,33 @@ export function EmailDetail({ thread, onBack, onThreadUpdated }: EmailDetailProp
     };
   }, [profileContactEmail, settings.feishuFieldMapping, settings.feishuUrl]);
 
-  const handleTranslate = async (message: GmailMessage) => {
+  const requestTranslation = async (text: string) => {
+    const response = await fetch('/api/translate', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        text,
+        sourceLang: detectLanguage(text),
+        customPrompt: settings.translatePrompt || '',
+        modelProvider: settings.modelProvider || 'builtin',
+        customApiUrl: settings.customApiUrl || '',
+        customModelName: settings.customModelName || '',
+      }),
+    });
+
+    const result = await response.json();
+
+    if (!response.ok || !result.success) {
+      throw new Error(result.error || '翻译失败');
+    }
+
+    return {
+      translatedText: String(result.data.translatedText || '').trim(),
+      sourceLang: String(result.data.sourceLang || 'auto'),
+    };
+  };
+
+  const handleTranslateLegacy = async (message: GmailMessage) => {
     if (showingTranslationIds.has(message.id)) {
       setShowingTranslationIds((current) => {
         const next = new Set(current);
@@ -319,6 +365,7 @@ export function EmailDetail({ thread, onBack, onThreadUpdated }: EmailDetailProp
 
     setTranslatingIds(prev => new Set(prev).add(message.id));
     setTranslateErrors(prev => { const next = { ...prev }; delete next[message.id]; return next; });
+    setTranslationProgress(prev => ({ ...prev, [message.id]: '正在优先翻译当前这封邮件...' }));
     
     try {
       const response = await fetch('/api/translate', {
@@ -366,6 +413,106 @@ export function EmailDetail({ thread, onBack, onThreadUpdated }: EmailDetailProp
     if (/[\u3040-\u309f\u30a0-\u30ff]/.test(text)) return 'ja';
     if (/[\u0400-\u04ff]/.test(text)) return 'ru';
     return 'en';
+  };
+
+  void handleTranslateLegacy;
+
+  const handleTranslate = async (message: GmailMessage) => {
+    if (showingTranslationIds.has(message.id)) {
+      setShowingTranslationIds((current) => {
+        const next = new Set(current);
+        next.delete(message.id);
+        return next;
+      });
+      return;
+    }
+
+    if (getTranslation(message.id)) {
+      setShowingTranslationIds((current) => new Set(current).add(message.id));
+      return;
+    }
+
+    setTranslatingIds((current) => new Set(current).add(message.id));
+    setTranslateErrors((current) => {
+      const next = { ...current };
+      delete next[message.id];
+      return next;
+    });
+    setTranslationProgress((current) => ({
+      ...current,
+      [message.id]: '正在优先翻译当前这封邮件...',
+    }));
+
+    try {
+      const originalText = repairTextEncoding(message.body);
+      const { currentText, quotedText } = splitEmailForTranslation(originalText);
+      if (!currentText) throw new Error('这封邮件没有可翻译的正文。');
+
+      const currentResult = await requestTranslation(currentText);
+      const hasQuotedHistory = Boolean(quotedText.trim());
+      const currentTranslation = hasQuotedHistory
+        ? `【当前邮件翻译】\n${currentResult.translatedText}`
+        : currentResult.translatedText;
+
+      addTranslation({
+        messageId: message.id,
+        originalText,
+        translatedText: hasQuotedHistory
+          ? `${currentTranslation}\n\n---\n【引用历史翻译】\n正在继续翻译邮件引用历史...`
+          : currentTranslation,
+        sourceLang: currentResult.sourceLang,
+        targetLang: 'zh',
+      });
+      setShowingTranslationIds((current) => new Set(current).add(message.id));
+
+      if (hasQuotedHistory) {
+        setTranslationProgress((current) => ({
+          ...current,
+          [message.id]: '当前邮件已翻译，正在继续翻译引用历史...',
+        }));
+
+        try {
+          const quotedResult = await requestTranslation(quotedText);
+          addTranslation({
+            messageId: message.id,
+            originalText,
+            translatedText: `${currentTranslation}\n\n---\n【引用历史翻译】\n${quotedResult.translatedText}`,
+            sourceLang: currentResult.sourceLang,
+            targetLang: 'zh',
+          });
+        } catch (quotedError) {
+          setTranslateErrors((current) => ({
+            ...current,
+            [message.id]: `当前邮件已翻译，引用历史翻译失败：${
+              quotedError instanceof Error ? quotedError.message : '请稍后重试'
+            }`,
+          }));
+          addTranslation({
+            messageId: message.id,
+            originalText,
+            translatedText: `${currentTranslation}\n\n---\n【引用历史翻译】\n引用历史暂时翻译失败，可以稍后再试。`,
+            sourceLang: currentResult.sourceLang,
+            targetLang: 'zh',
+          });
+        }
+      }
+    } catch (error) {
+      setTranslateErrors((current) => ({
+        ...current,
+        [message.id]: error instanceof Error ? error.message : '翻译失败，请稍后重试',
+      }));
+    } finally {
+      setTranslatingIds((current) => {
+        const next = new Set(current);
+        next.delete(message.id);
+        return next;
+      });
+      setTranslationProgress((current) => {
+        const next = { ...current };
+        delete next[message.id];
+        return next;
+      });
+    }
   };
 
   const copyToClipboard = (text: string) => {
@@ -555,14 +702,16 @@ export function EmailDetail({ thread, onBack, onThreadUpdated }: EmailDetailProp
       )}
       <ScrollArea className="min-h-0 flex-1">
         <div className="p-4 space-y-4">
-          {thread.messages.map((message, index) => {
+          {displayMessages.map((message, index) => {
             const sender = getDisplayEmail(message.from);
             const translation = getTranslation(message.id);
             const isExpanded = expandedMessages.has(message.id);
-            const isLast = index === thread.messages.length - 1;
+            const isNewest = index === 0;
             const visibleAttachments = (message.attachments || []).filter(
               (attachment) => !attachment.inline,
             );
+            const displayBody = repairTextEncoding(message.body);
+            const displayHtmlBody = message.htmlBody ? repairTextEncoding(message.htmlBody) : '';
 
             return (
               <div key={message.id} className="space-y-3">
@@ -570,7 +719,7 @@ export function EmailDetail({ thread, onBack, onThreadUpdated }: EmailDetailProp
                 <div 
                   className={`
                     rounded-2xl border p-4 transition-all cursor-pointer
-                    ${isLast ? 'bg-primary/5 border-primary/20' : 'bg-card'}
+                    ${isNewest ? 'bg-primary/5 border-primary/20' : 'bg-card'}
                   `}
                   onClick={() => toggleMessage(message.id)}
                 >
@@ -671,16 +820,22 @@ export function EmailDetail({ thread, onBack, onThreadUpdated }: EmailDetailProp
                           <pre className="max-w-full whitespace-pre-wrap break-words rounded-xl bg-blue-50 p-4 font-sans text-sm">
                             {translation.translatedText}
                           </pre>
+                          {translationProgress[message.id] && (
+                            <p className="mt-2 flex items-center gap-2 text-xs text-muted-foreground">
+                              <Loader2 className="h-3 w-3 animate-spin" />
+                              {translationProgress[message.id]}
+                            </p>
+                          )}
                         </div>
-                      ) : message.htmlBody ? (
+                      ) : displayHtmlBody ? (
                         <div
                           className="email-html-content max-w-full overflow-hidden rounded-xl bg-white p-4 text-sm"
-                          dangerouslySetInnerHTML={{ __html: sanitizeEmailHtml(message.htmlBody) }}
+                          dangerouslySetInnerHTML={{ __html: sanitizeEmailHtml(displayHtmlBody) }}
                         />
                       ) : (
                         <div className="prose prose-sm max-w-none">
                           <pre className="max-w-full whitespace-pre-wrap break-words rounded-xl bg-accent/30 p-4 font-sans text-sm">
-                            {message.body}
+                            {displayBody}
                           </pre>
                         </div>
                       )}
@@ -695,7 +850,7 @@ export function EmailDetail({ thread, onBack, onThreadUpdated }: EmailDetailProp
                           size="sm" 
                           variant="outline" 
                           className="h-8"
-                          onClick={() => copyToClipboard(message.body)}
+                          onClick={() => copyToClipboard(displayBody)}
                         >
                           <Copy className="w-3 h-3 mr-1" />
                           复制

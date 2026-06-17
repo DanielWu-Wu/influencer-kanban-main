@@ -11,6 +11,7 @@ import {
   Mail,
   MailOpen,
   RefreshCw,
+  Reply,
   Search,
   Star,
   Tag,
@@ -21,6 +22,7 @@ import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { ScrollArea } from '@/components/ui/scroll-area';
 import { useGmailAuth } from '@/lib/data';
+import { repairTextEncoding } from '@/lib/email-text';
 import {
   GmailAttachment,
   GmailCategory,
@@ -107,6 +109,11 @@ function sortThreadsByLatest(threads: GmailThread[]): GmailThread[] {
   return [...threads].sort((left, right) => getThreadTimestamp(right) - getThreadTimestamp(left));
 }
 
+function normalizeEmailAddress(value?: string): string {
+  const email = value?.match(/<([^>]+)>/)?.[1] || value || '';
+  return email.trim().replace(/^mailto:/i, '').toLowerCase();
+}
+
 function normalizeBase64(data: string) {
   const normalized = data.replace(/-/g, '+').replace(/_/g, '/');
   return normalized.padEnd(Math.ceil(normalized.length / 4) * 4, '=');
@@ -117,9 +124,9 @@ function decodeBase64Url(data: string, charset = 'utf-8'): string {
   const bytes = Uint8Array.from(binary, (char) => char.charCodeAt(0));
 
   try {
-    return new TextDecoder(charset).decode(bytes);
+    return repairTextEncoding(new TextDecoder(charset).decode(bytes));
   } catch {
-    return new TextDecoder('utf-8').decode(bytes);
+    return repairTextEncoding(new TextDecoder('utf-8').decode(bytes));
   }
 }
 
@@ -230,8 +237,8 @@ async function parseGmailThread(
           ),
         )
       : parsed.attachments;
-    const htmlBody = replaceInlineContentIds(parsed.htmlParts.join('\n'), attachments);
-    const body = parsed.textParts.join('\n\n') || htmlBody.replace(/<[^>]+>/g, ' ');
+    const htmlBody = repairTextEncoding(replaceInlineContentIds(parsed.htmlParts.join('\n'), attachments));
+    const body = repairTextEncoding(parsed.textParts.join('\n\n') || htmlBody.replace(/<[^>]+>/g, ' '));
     const rawDate = getHeader(headers, 'Date');
     const internalDate = Number(message.internalDate);
     const date = Number.isFinite(internalDate)
@@ -774,6 +781,11 @@ export function GmailInbox({
             const latestMessage = thread.messages[thread.messages.length - 1];
             const sender = latestMessage?.from?.split('<')[0]?.replaceAll('"', '').trim()
               || '\u672a\u77e5\u53d1\u4ef6\u4eba';
+            const hasReplied = Boolean(
+              auth.email
+              && latestMessage?.from
+              && normalizeEmailAddress(latestMessage.from) === normalizeEmailAddress(auth.email),
+            );
             const actionLoading = actionThreadId === thread.id;
 
             return (
@@ -811,8 +823,18 @@ export function GmailInbox({
                   {compact ? (
                     <div className="min-w-0 flex-1">
                       <div className="flex items-center gap-2">
-                        <span className={`min-w-0 flex-1 truncate text-sm ${thread.hasUnread ? 'font-semibold' : 'text-muted-foreground'}`}>
-                          {sender}
+                        <span
+                          className={`flex min-w-0 flex-1 items-center gap-1.5 text-sm ${
+                            thread.hasUnread ? 'font-semibold' : 'text-muted-foreground'
+                          }`}
+                        >
+                          {hasReplied && (
+                            <Reply
+                              className="h-3.5 w-3.5 shrink-0 text-emerald-600"
+                              aria-label={'\u5df2\u56de\u590d'}
+                            />
+                          )}
+                          <span className="min-w-0 truncate">{sender}</span>
                         </span>
                         <span className="shrink-0 text-xs text-muted-foreground">
                           {formatDate(thread.lastMessageDate)}
@@ -825,8 +847,18 @@ export function GmailInbox({
                     </div>
                   ) : (
                     <div className="grid min-w-0 flex-1 grid-cols-[minmax(120px,220px)_minmax(0,1fr)_auto] items-center gap-3">
-                      <span className={`min-w-0 truncate text-sm ${thread.hasUnread ? 'font-semibold' : 'text-muted-foreground'}`}>
-                        {sender}
+                      <span
+                        className={`flex min-w-0 items-center gap-1.5 text-sm ${
+                          thread.hasUnread ? 'font-semibold' : 'text-muted-foreground'
+                        }`}
+                      >
+                        {hasReplied && (
+                          <Reply
+                            className="h-3.5 w-3.5 shrink-0 text-emerald-600"
+                            aria-label={'\u5df2\u56de\u590d'}
+                          />
+                        )}
+                        <span className="min-w-0 truncate">{sender}</span>
                       </span>
                       <div className="min-w-0 truncate text-sm">
                         <span className={thread.hasUnread ? 'font-semibold' : ''}>{thread.subject}</span>

@@ -1,4 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server';
+import { repairTextEncoding } from '@/lib/email-text';
 
 type GmailHeader = { name: string; value: string };
 
@@ -10,9 +11,9 @@ function decodeBase64Url(data: string, charset = 'utf-8') {
   const normalized = data.replace(/-/g, '+').replace(/_/g, '/');
   const buffer = Buffer.from(normalized, 'base64');
   try {
-    return new TextDecoder(charset).decode(buffer);
+    return repairTextEncoding(new TextDecoder(charset).decode(buffer));
   } catch {
-    return buffer.toString('utf8');
+    return repairTextEncoding(buffer.toString('utf8'));
   }
 }
 
@@ -36,7 +37,7 @@ function parseHistoryMessage(message: Record<string, unknown>) {
   const text: string[] = [];
   const html: string[] = [];
   collectMessageBodies(payload, text, html);
-  const htmlFallback = html.join('\n')
+  const htmlFallback = repairTextEncoding(html.join('\n'))
     .replace(/<style[\s\S]*?<\/style>/gi, ' ')
     .replace(/<script[\s\S]*?<\/script>/gi, ' ')
     .replace(/<[^>]+>/g, ' ')
@@ -53,7 +54,7 @@ function parseHistoryMessage(message: Record<string, unknown>) {
     from: getHeader(headers, 'From'),
     to: getHeader(headers, 'To'),
     date: rawDate ? new Date(rawDate).toISOString() : '',
-    body: text.join('\n\n').trim() || htmlFallback || String(message.snippet || ''),
+    body: repairTextEncoding(text.join('\n\n').trim() || htmlFallback || String(message.snippet || '')),
   };
 }
 
