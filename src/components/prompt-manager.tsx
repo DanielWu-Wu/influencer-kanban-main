@@ -8,6 +8,7 @@ import {
   ChevronUp,
   FilePenLine,
   Languages,
+  MailPlus,
   Plus,
   RotateCcw,
   Save,
@@ -25,6 +26,7 @@ import {
   BUILT_IN_PROMPT_TEMPLATES,
   DEFAULT_ANALYSIS_PROMPT,
   DEFAULT_DRAFT_PROMPT,
+  DEFAULT_OUTREACH_PROMPT,
   DEFAULT_TRANSLATE_PROMPT,
   type PromptTemplate,
   type PromptType,
@@ -65,25 +67,38 @@ const PROMPT_SECTIONS: Array<{
     defaultValue: DEFAULT_DRAFT_PROMPT,
     rows: 13,
   },
+  {
+    type: 'outreach',
+    title: '冷开发信生成提示词',
+    description: '控制 AI 如何根据 YouTube 频道资料生成个性化首次开发信',
+    icon: MailPlus,
+    defaultValue: DEFAULT_OUTREACH_PROMPT,
+    rows: 13,
+  },
 ];
+
+const initialPrompts: PromptValues = {
+  translate: DEFAULT_TRANSLATE_PROMPT,
+  analysis: DEFAULT_ANALYSIS_PROMPT,
+  draft: DEFAULT_DRAFT_PROMPT,
+  outreach: DEFAULT_OUTREACH_PROMPT,
+};
 
 export default function PromptManager() {
   const { settings, updateSettings, loading } = useSettings();
-  const [prompts, setPrompts] = useState<PromptValues>({
-    translate: DEFAULT_TRANSLATE_PROMPT,
-    analysis: DEFAULT_ANALYSIS_PROMPT,
-    draft: DEFAULT_DRAFT_PROMPT,
-  });
+  const [prompts, setPrompts] = useState<PromptValues>(initialPrompts);
   const [customTemplates, setCustomTemplates] = useState<PromptTemplate[]>([]);
   const [templateNames, setTemplateNames] = useState<Record<PromptType, string>>({
     translate: '',
     analysis: '',
     draft: '',
+    outreach: '',
   });
   const [selectedTemplates, setSelectedTemplates] = useState<Record<PromptType, string>>({
     translate: 'builtin-translate-standard',
     analysis: 'builtin-analysis-youtube',
     draft: 'builtin-draft-business',
+    outreach: 'builtin-outreach-youtube',
   });
   const [expandedSection, setExpandedSection] = useState<PromptType | null>('analysis');
   const [saved, setSaved] = useState(false);
@@ -94,12 +109,14 @@ export default function PromptManager() {
       translate: settings.translatePrompt || DEFAULT_TRANSLATE_PROMPT,
       analysis: settings.aiAnalysisPrompt || DEFAULT_ANALYSIS_PROMPT,
       draft: settings.aiDraftPrompt || settings.aiEmailPrompt || DEFAULT_DRAFT_PROMPT,
+      outreach: settings.aiOutreachPrompt || DEFAULT_OUTREACH_PROMPT,
     });
   }, [
     loading,
     settings.aiAnalysisPrompt,
     settings.aiDraftPrompt,
     settings.aiEmailPrompt,
+    settings.aiOutreachPrompt,
     settings.translatePrompt,
   ]);
 
@@ -123,6 +140,7 @@ export default function PromptManager() {
       aiAnalysisPrompt: prompts.analysis,
       aiDraftPrompt: prompts.draft,
       aiEmailPrompt: prompts.draft,
+      aiOutreachPrompt: prompts.outreach,
       promptTemplates: customTemplates,
     });
     setSaved(true);
@@ -135,6 +153,7 @@ export default function PromptManager() {
       toast.error('请先填写模板名称');
       return;
     }
+
     const duplicate = customTemplates.find(
       (template) => template.type === type && template.name.toLowerCase() === name.toLowerCase(),
     );
@@ -145,11 +164,11 @@ export default function PromptManager() {
           ...customTemplates,
           { id: `prompt-${generateId()}`, name, type, content: prompts[type] },
         ];
+
     persistTemplates(nextTemplates);
-    if (duplicate) setSelectedTemplates((current) => ({ ...current, [type]: duplicate.id }));
-    else setSelectedTemplates((current) => ({
+    setSelectedTemplates((current) => ({
       ...current,
-      [type]: nextTemplates[nextTemplates.length - 1].id,
+      [type]: duplicate?.id || nextTemplates[nextTemplates.length - 1].id,
     }));
     setTemplateNames((current) => ({ ...current, [type]: '' }));
     toast.success(duplicate ? '模板已更新' : '模板已保存');
@@ -187,7 +206,7 @@ export default function PromptManager() {
             提示词管理
           </h2>
           <p className="mt-0.5 text-sm text-muted-foreground">
-            分别设置翻译、合作判断和邮件起草规则，并保存常用模板
+            分别设置翻译、合作判断、邮件起草和冷开发信规则，并保存常用模板
           </p>
         </div>
         <Button onClick={handleSaveAll} size="sm" className="h-9 gap-1.5 rounded-lg shadow-apple">

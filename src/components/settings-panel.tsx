@@ -26,7 +26,7 @@ export function SettingsPanel() {
   const { auth: gmailAuth, disconnect: disconnectGmail } = useGmailAuth();
   const [brandName, setBrandName] = useState(settings.brandName || '');
   const [senderName, setSenderName] = useState(settings.senderName || '');
-  const [modelProvider, setModelProvider] = useState<'builtin' | 'custom'>(settings.modelProvider || 'builtin');
+  const modelProvider = 'custom' as const;
   const [customApiUrl, setCustomApiUrl] = useState(settings.customApiUrl || '');
   const [customApiKey, setCustomApiKey] = useState(
     settings.customApiKey || (settings.customApiKeyConfigured ? STORED_AI_KEY : ''),
@@ -41,7 +41,6 @@ export function SettingsPanel() {
     if (settingsLoading) return;
     setBrandName(settings.brandName || '');
     setSenderName(settings.senderName || '');
-    setModelProvider(settings.modelProvider || 'builtin');
     setCustomApiUrl(settings.customApiUrl || '');
     setCustomApiKey(
       settings.customApiKey || (settings.customApiKeyConfigured ? STORED_AI_KEY : ''),
@@ -340,53 +339,18 @@ export function SettingsPanel() {
 
               <div className="space-y-3">
                 <Label className="text-xs">模型来源</Label>
-                <div className="grid grid-cols-2 gap-2">
-                  <button
-                    type="button"
-                    onClick={() => setModelProvider('builtin')}
-                    className={`rounded-lg border-2 p-3 text-left transition-all ${
-                      modelProvider === 'builtin'
-                        ? 'border-primary bg-primary/5'
-                        : 'border-white/70 bg-white/50 hover:border-primary/50'
-                    }`}
-                  >
-                    <div className="flex items-center gap-2 text-sm font-medium">
-                      <Zap className="w-4 h-4" />
-                      内置 DeepSeek
-                    </div>
-                    <p className="mt-1 text-xs text-muted-foreground">
-                      无需配置，开箱即用
-                    </p>
-                  </button>
-                  <button
-                    type="button"
-                    onClick={() => setModelProvider('custom')}
-                    className={`rounded-lg border-2 p-3 text-left transition-all ${
-                      modelProvider === 'custom'
-                        ? 'border-primary bg-primary/5'
-                        : 'border-white/70 bg-white/50 hover:border-primary/50'
-                    }`}
-                  >
-                    <div className="flex items-center gap-2 text-sm font-medium">
-                      <Link2 className="w-4 h-4" />
-                      自定义 API
-                    </div>
-                    <p className="mt-1 text-xs text-muted-foreground">
-                      OpenAI 兼容接口
-                    </p>
-                  </button>
+                <div className="rounded-lg border-2 border-primary bg-primary/5 p-3 text-left">
+                  <div className="flex items-center gap-2 text-sm font-medium">
+                    <Link2 className="w-4 h-4" />
+                    自定义 API
+                  </div>
+                  <p className="mt-1 text-xs text-muted-foreground">
+                    使用你自己申请的 DeepSeek / OpenAI / 其他 OpenAI 兼容接口
+                  </p>
                 </div>
               </div>
 
-              {modelProvider === 'builtin' && (
-                <div className="flex items-center gap-2 rounded-lg border border-green-200 bg-green-50/85 p-3">
-                  <CheckCircle2 className="w-4 h-4 text-green-600" />
-                  <span className="text-sm text-green-700">内置 DeepSeek AI 已启用，无需额外配置</span>
-                </div>
-              )}
-
-              {modelProvider === 'custom' && (
-                <div className="space-y-3">
+              <div className="space-y-3">
                   <div className="space-y-2 rounded-lg border border-white/65 bg-white/55 p-3">
                     <h4 className="flex items-center gap-1.5 text-xs font-medium text-foreground">
                       <HelpCircle className="w-3.5 h-3.5 text-primary" />
@@ -473,8 +437,7 @@ export function SettingsPanel() {
                       </span>
                     </div>
                   )}
-                </div>
-              )}
+              </div>
             </CardContent>
           )}
         </Card>
@@ -655,7 +618,7 @@ export function SettingsPanel() {
                 </h4>
                 <ul className="space-y-1 text-xs text-muted-foreground">
                   <li>Gmail 邮件集成</li>
-                  <li>DeepSeek AI 辅助写邮件</li>
+                  <li>AI 辅助写邮件（自定义 API）</li>
                   <li>邮件翻译功能</li>
                   <li>飞书多维表格内嵌</li>
                   <li>提示词自定义管理</li>

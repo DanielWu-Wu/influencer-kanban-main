@@ -1,7 +1,11 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { DEFAULT_ANALYSIS_PROMPT, DEFAULT_DRAFT_PROMPT } from '@/lib/ai-prompts';
-import { getUserSecret } from '@/lib/user-private-storage';
+import {
+  DEFAULT_ANALYSIS_PROMPT,
+  DEFAULT_DRAFT_PROMPT,
+  DEFAULT_OUTREACH_PROMPT,
+} from '@/lib/ai-prompts';
 import { getRequestUser } from '@/lib/supabase/server';
+import { getUserSecret } from '@/lib/user-private-storage';
 
 type ChatMessage = {
   role: 'system' | 'user' | 'assistant';
@@ -24,6 +28,25 @@ type ThreadMessage = {
   body?: string;
 };
 
+type OutreachVideo = {
+  title?: string;
+  description?: string;
+  publishedAt?: string;
+  url?: string;
+};
+
+type OutreachChannel = {
+  title?: string;
+  description?: string;
+  country?: string;
+  publicEmail?: string;
+  url?: string;
+  subscriberCount?: number | null;
+  videoCount?: number | null;
+  viewCount?: number | null;
+  recentVideos?: OutreachVideo[];
+};
+
 function resolveChatOptions(options: ChatOptions): Required<ChatOptions> {
   const apiKey =
     options.apiKey ||
@@ -32,9 +55,7 @@ function resolveChatOptions(options: ChatOptions): Required<ChatOptions> {
     process.env.OPENAI_API_KEY;
 
   if (!apiKey) {
-    throw new Error(
-      '缺少 AI API Key。请在网站设置中填写 API，或在 Vercel 环境变量中设置 AI_API_KEY。',
-    );
+    throw new Error('缺少 AI API Key。请先在网站设置或 Vercel 环境变量中配置 AI_API_KEY。');
   }
 
   return {
@@ -101,8 +122,7 @@ function buildConversation(messages: ThreadMessage[]) {
 时间：${message.date || '未知'}
 发件人：${message.from || '未知'}
 收件人：${message.to || '未知'}
-正文：
-${body}`;
+正文：${body}`;
     })
     .join('\n\n');
 }
@@ -131,21 +151,85 @@ ${custom}
 --- 用户专属提示词结束 ---`;
 }
 
+async function hydrateSecrets(request: NextRequest, body: Record<string, unknown>) {
+  if (body.modelProvider === 'custom' && !body.customApiKey) {
+    const appAuth = await getRequestUser(request);
+    if (appAuth) {
+      body.customApiKey = await getUserSecret<string>(appAuth.supabase, 'ai_api_key') || '';
+    }
+  }
+}
+
+function safeArray(value: unknown) {
+  return Array.isArray(value) ? value : [];
+}
+
 export async function POST(request: NextRequest) {
   try {
     const body = await request.json() as Record<string, unknown>;
-    if (body.modelProvider === 'custom' && !body.customApiKey) {
-      const appAuth = await getRequestUser(request);
-      if (appAuth) {
-        body.customApiKey =
-          await getUserSecret<string>(appAuth.supabase, 'ai_api_key') || '';
-      }
-    }
+    await hydrateSecrets(request, body);
+
     const action = String(body.action || 'draft');
     const threadSubject = String(body.threadSubject || '无主题');
     const threadMessages = Array.isArray(body.threadMessages)
       ? body.threadMessages as ThreadMessage[]
       : [];
+
+    if (action === 'outreach') {
+      const channel = (body.channel || {}) as OutreachChannel;
+      if (!channel.title && !channel.url) {
+        return NextResponse.json({ error: '缺少 YouTube 频道资料，无法生成开发信。' }, { status: 400 });
+      }
+
+      const systemPrompt = withCustomInstructions(
+        `${DEFAULT_OUTREACH_PROMPT}
+
+只返回以下 JSON，不要添加其他文字：
+{
+  "subject": "邮件主题",
+  "body": "用目标语言撰写的完整开发信正文",
+  "translatedSummary": "中文解释，包括邮件意图和主要内容",
+  "personalizationNotes": ["使用了哪些频道资料做个性化"],
+  "missingInfo": ["仍然缺少哪些信息"],
+  "language": "en",
+  "tone": "professional"
+}`,
+        body.outreachPrompt,
+        DEFAULT_OUTREACH_PROMPT,
+      );
+
+      const userPrompt = `请为下面这个 YouTube 频道生成首次冷开发邮件。
+
+频道资料：
+${JSON.stringify(channel, null, 2)}
+
+最近视频：
+${JSON.stringify(channel.recentVideos || [], null, 2)}
+
+产品数据库：
+${JSON.stringify(safeArray(body.products), null, 2)}
+
+品牌信息：
+${JSON.stringify({
+  brandName: body.brandName || '',
+  senderName: body.senderName || '',
+  preferredLanguage: body.preferredLanguage || '',
+  emailSignature: body.emailSignature || '',
+}, null, 2)}
+
+用户补充偏好：
+${String(body.userPreference || '').trim() || '无'}
+`;
+
+      const result = parseJson(await invokeOpenAICompatibleApi(
+        [
+          { role: 'system', content: systemPrompt },
+          { role: 'user', content: userPrompt },
+        ],
+        getModelOptions(body, 0.55),
+      ));
+      return NextResponse.json({ success: true, data: result });
+    }
 
     if (action === 'analyze') {
       if (threadMessages.length === 0) {
@@ -162,12 +246,12 @@ export async function POST(request: NextRequest) {
   "creatorIntent": "红人的真实意图和核心诉求",
   "stage": "当前合作阶段",
   "attitude": "红人的态度、积极程度和情绪",
-  "communicationStyle": "暂定沟通风格，例如 D型倾向：直接、重视效率和结果。必须说明判断依据，不要武断定义人格",
-  "currentEmotion": "对方当前情绪，例如热情、职业冷淡、防御焦虑、催促、谨慎或中性",
-  "statedPosition": "对方明确说出的要求或表面立场，用一句话概括",
-  "coreInterests": "要求背后的核心利益、主要卡点或真实顾虑；证据不足时明确说明需要确认",
+  "communicationStyle": "暂定沟通风格和判断依据",
+  "currentEmotion": "对方当前情绪",
+  "statedPosition": "对方明确说出的要求或表面立场",
+  "coreInterests": "要求背后的核心利益、主要卡点或真实顾虑",
   "communicationRisks": ["本轮回复不宜使用的表达、态度或谈判方式"],
-  "leverageOptions": ["在不擅自承诺的前提下，可用于推动合作的非现金条件或替代方案"],
+  "leverageOptions": ["可用于推动合作的非现金条件或替代方案"],
   "confirmedItems": ["已经确认的事项"],
   "openQuestions": ["尚待确认或解决的问题"],
   "risks": ["潜在风险或需要留意的地方"],
@@ -212,7 +296,7 @@ ${buildConversation(threadMessages)}`;
 目标语言：${targetLangName}
 只返回以下 JSON，不要添加其他文字：
 {
-  "suggestedReply": "使用${targetLangName}撰写的完整回复邮件",
+  "suggestedReply": "使用目标语言撰写的完整回复邮件",
   "translatedReply": "中文对照",
   "tone": "friendly",
   "keyPoints": ["本次回复落实的要点"]

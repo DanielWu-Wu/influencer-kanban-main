@@ -24,6 +24,7 @@ import {
   MessageSquareText,
   LogOut,
   LoaderCircle,
+  UserPlus,
 } from 'lucide-react';
 import {
   useInfluencers,
@@ -43,10 +44,11 @@ import { SettingsPanel } from '@/components/settings-panel';
 import { TodoBoard } from '@/components/todo-board';
 import { WorkCalendar } from '@/components/work-calendar';
 import { GmailPage } from '@/components/gmail-page';
+import { CreatorProspectingPage } from '@/components/creator-prospecting-page';
 import { useAuth } from '@/components/auth-provider';
 import { useRecordAssistant } from '@/components/record-assistant-provider';
 
-type View = 'kanban' | 'list' | 'email' | 'reminders' | 'settings' | 'todo' | 'calendar' | 'gmail' | 'prompts';
+type View = 'kanban' | 'list' | 'email' | 'reminders' | 'settings' | 'todo' | 'calendar' | 'prospecting' | 'gmail' | 'prompts';
 
 const label = {
   appShort: '\u7ea2\u4eba\u63a8\u5e7f',
@@ -56,6 +58,7 @@ const label = {
   tools: '\u5de5\u5177',
   todo: '\u6bcf\u65e5\u5f85\u529e',
   calendar: '\u5de5\u4f5c\u65e5\u5386',
+  prospecting: '\u7ea2\u4eba\u5f00\u53d1\u53f0',
   gmail: 'Gmail \u90ae\u4ef6',
   kanban: '\u5408\u4f5c\u770b\u677f',
   list: '\u7ea2\u4eba\u5217\u8868',
@@ -80,6 +83,7 @@ const label = {
 const NAV_ITEMS = [
   { id: 'todo', label: label.todo, icon: CheckSquare, group: label.dailyWork },
   { id: 'calendar', label: label.calendar, icon: CalendarDays, group: label.dailyWork },
+  { id: 'prospecting', label: label.prospecting, icon: UserPlus, group: label.dailyWork },
   { id: 'gmail', label: label.gmail, icon: Inbox, group: label.dailyWork },
   { id: 'kanban', label: label.kanban, icon: LayoutDashboard, group: label.influencerManage },
   { id: 'list', label: label.list, icon: Users, group: label.influencerManage },
@@ -477,6 +481,12 @@ export default function DashboardPage() {
           {currentView === 'calendar' && (
             <div className="glass-panel-strong min-h-0 flex-1 rounded-lg p-4">
               <WorkCalendar events={events} todos={todos} onAddEvent={addEvent} onDeleteEvent={deleteEvent} />
+            </div>
+          )}
+
+          {currentView === 'prospecting' && (
+            <div className="glass-panel-strong min-h-0 flex-1 overflow-hidden rounded-lg p-4">
+              <CreatorProspectingPage />
             </div>
           )}
 
