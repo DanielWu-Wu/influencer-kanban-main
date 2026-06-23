@@ -57,6 +57,7 @@ import {
 
 type RecordAssistantContextValue = {
   captureEvent: (event: RecordAssistantEvent) => void;
+  appendLog: (log: RecordAssistantLog) => void;
 };
 
 type FeishuRecord = {
@@ -465,6 +466,10 @@ export function RecordAssistantProvider({ children }: { children: ReactNode }) {
     setOpen(true);
   }, [settings]);
 
+  const appendLog = useCallback((log: RecordAssistantLog) => {
+    setLogs((current) => [log, ...current].slice(0, 50));
+  }, []);
+
   const getAgentGmailAccessToken = useCallback(async () => {
     if (!gmailAuth?.accessToken) return '';
     if (gmailAuth.expiresAt && gmailAuth.expiresAt > Date.now() + 60_000) {
@@ -821,7 +826,7 @@ export function RecordAssistantProvider({ children }: { children: ReactNode }) {
     }
   };
 
-  const contextValue = useMemo(() => ({ captureEvent }), [captureEvent]);
+  const contextValue = useMemo(() => ({ captureEvent, appendLog }), [appendLog, captureEvent]);
   const pendingCount = pending.length;
   const shouldRenderAssistant = pathname !== '/login';
 

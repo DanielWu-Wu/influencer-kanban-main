@@ -9,14 +9,16 @@ import { useEmailTranslations, useGmailAuth, useSettings } from '@/lib/data';
 import { 
   ArrowLeft, Reply, MoreHorizontal, Globe, Languages,
   Copy, Sparkles, ChevronDown, Loader2,
-  Paperclip, Download, Forward, Mail, MailOpen, UserRound
+  Paperclip, Download, Forward, Mail, MailOpen, UserRound,
+  Database, Save, CheckCircle2, XCircle,
 } from 'lucide-react';
 import { EmailComposer } from './email-composer';
 import { NewEmailComposer } from './new-email-composer';
 import { textToEmailHtml } from '@/lib/email-content';
 import { repairTextEncoding, splitEmailForTranslation } from '@/lib/email-text';
-import type { FeishuFieldMapping } from '@/lib/feishu-mapping';
-import { normalizeEmail } from '@/lib/record-assistant';
+import type { FeishuFieldKey, FeishuFieldMapping } from '@/lib/feishu-mapping';
+import { normalizeEmail, type RecordAssistantLog } from '@/lib/record-assistant';
+import { useRecordAssistant } from './record-assistant-provider';
 
 interface EmailDetailProps {
   thread: GmailThread;
@@ -30,11 +32,29 @@ type FeishuRecord = {
 };
 
 type FeishuCreatorProfile = {
+  recordId: string;
+  email: string;
+  matchedBy: string;
   channelName: string;
   region: string;
   platform: string;
   followers: string;
   collaborationStatus: string;
+  hasReply: string;
+};
+
+type FeishuQuickAction = {
+  id: string;
+  label: string;
+  description: string;
+  fields: Partial<Record<FeishuFieldKey, string>>;
+};
+
+const QUICK_FIELD_LABELS: Partial<Record<FeishuFieldKey, string>> = {
+  hasReply: '红人是否有回复',
+  collaborationStatus: '合作状态',
+  collaborationProgress: '合作进度',
+  notes: '备注',
 };
 
 function stringifyFeishuValue(value: unknown): string {
@@ -66,8 +86,82 @@ function getMappedFeishuValue(
   return stringifyFeishuValue(record.fields[fieldName]).trim();
 }
 
+function createClientId(prefix: string) {
+  if (typeof crypto !== 'undefined' && 'randomUUID' in crypto) {
+    return `${prefix}-${crypto.randomUUID()}`;
+  }
+  return `${prefix}-${Date.now()}-${Math.random().toString(36).slice(2, 10)}`;
+}
+
+function getQuickFieldLabel(fieldKey: FeishuFieldKey) {
+  return QUICK_FIELD_LABELS[fieldKey] || fieldKey;
+}
+
+function buildFeishuPayload(
+  mapping: FeishuFieldMapping,
+  fields: Partial<Record<FeishuFieldKey, string>>,
+) {
+  const payload: Record<string, string> = {};
+  const missing: FeishuFieldKey[] = [];
+
+  (Object.entries(fields) as Array<[FeishuFieldKey, string]>).forEach(([fieldKey, value]) => {
+    const fieldName = mapping[fieldKey];
+    if (!fieldName) {
+      missing.push(fieldKey);
+      return;
+    }
+    payload[fieldName] = value;
+  });
+
+  return { payload, missing };
+}
+
+function buildProfileWriteLog(
+  profile: FeishuCreatorProfile,
+  action: FeishuQuickAction,
+  mapping: FeishuFieldMapping,
+  status: 'synced' | 'failed',
+  error?: string,
+): RecordAssistantLog {
+  const now = new Date().toISOString();
+
+  return {
+    id: createClientId('feishu-profile-write'),
+    event: {
+      type: 'status_changed',
+      source: 'manual',
+      title: `飞书快捷写回：${profile.channelName}`,
+      summary: action.description,
+      occurredAt: now,
+      influencer: {
+        channelName: profile.channelName,
+        email: profile.email,
+      },
+    },
+    updates: (Object.entries(action.fields) as Array<[FeishuFieldKey, string]>).map(([fieldKey, value]) => ({
+      fieldKey,
+      fieldLabel: getQuickFieldLabel(fieldKey),
+      fieldName: mapping[fieldKey],
+      value,
+      valueTemplate: value,
+      enabled: true,
+    })),
+    createdAt: now,
+    finishedAt: now,
+    status,
+    error,
+    recordId: profile.recordId,
+    matchedBy: profile.matchedBy,
+  };
+}
+
 function extractEmails(value?: string) {
-  return (value || '')
+  const raw = value || '';
+  const emailMatches = raw.match(/[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}/gi);
+  if (emailMatches?.length) {
+    return emailMatches.map((item) => normalizeEmail(item)).filter(Boolean);
+  }
+  return raw
     .split(',')
     .map((item) => normalizeEmail(item))
     .filter(Boolean);
@@ -246,7 +340,12 @@ export function EmailDetail({ thread, onBack, onThreadUpdated }: EmailDetailProp
   const [creatorProfile, setCreatorProfile] = useState<FeishuCreatorProfile | null>(null);
   const [creatorProfileLoading, setCreatorProfileLoading] = useState(false);
   const [creatorProfileError, setCreatorProfileError] = useState('');
+  const [pendingProfileAction, setPendingProfileAction] = useState<FeishuQuickAction | null>(null);
+  const [profileActionLoading, setProfileActionLoading] = useState(false);
+  const [profileActionMessage, setProfileActionMessage] = useState('');
+  const [profileActionLogs, setProfileActionLogs] = useState<RecordAssistantLog[]>([]);
   const { settings } = useSettings();
+  const { appendLog } = useRecordAssistant();
   const displayMessages = useMemo(() => sortMessagesNewestFirst(thread.messages), [thread.messages]);
   const newestDisplayMessageId = displayMessages[0]?.id || '';
 
@@ -287,24 +386,37 @@ export function EmailDetail({ thread, onBack, onThreadUpdated }: EmailDetailProp
 
       try {
         const records = await fetchFeishuRecords(activeFeishuUrl);
-        const matchedRecord = records.find((record) => {
-          const recordEmail = stringifyFeishuValue(record.fields[activeEmailField]).toLowerCase();
-          return recordEmail.includes(profileContactEmail);
-        });
+        const matched = records
+          .map((record) => {
+            const emailValue = stringifyFeishuValue(record.fields[activeEmailField]);
+            const emails = extractEmails(emailValue);
+            const matchedEmail = emails.find((email) => email === profileContactEmail);
+            const fallbackMatched = !matchedEmail && emailValue.toLowerCase().includes(profileContactEmail);
+            return matchedEmail || fallbackMatched
+              ? { record, matchedEmail: matchedEmail || profileContactEmail }
+              : null;
+          })
+          .find(Boolean);
 
         if (cancelled) return;
 
-        if (!matchedRecord) {
+        if (!matched) {
           setCreatorProfile(null);
           return;
         }
 
+        const matchedRecord = matched.record;
+
         setCreatorProfile({
+          recordId: matchedRecord.record_id,
+          email: matched.matchedEmail,
+          matchedBy: `邮箱：${matched.matchedEmail}`,
           channelName: getMappedFeishuValue(matchedRecord, mapping, 'channelName') || '未填写频道名',
           region: getMappedFeishuValue(matchedRecord, mapping, 'region') || '未填写',
           platform: getMappedFeishuValue(matchedRecord, mapping, 'platform') || '未填写',
           followers: getMappedFeishuValue(matchedRecord, mapping, 'followers') || '未填写',
           collaborationStatus: getMappedFeishuValue(matchedRecord, mapping, 'collaborationStatus') || '未填写',
+          hasReply: getMappedFeishuValue(matchedRecord, mapping, 'hasReply') || '未填写',
         });
       } catch (error) {
         if (cancelled) return;
@@ -321,6 +433,129 @@ export function EmailDetail({ thread, onBack, onThreadUpdated }: EmailDetailProp
       cancelled = true;
     };
   }, [profileContactEmail, settings.feishuFieldMapping, settings.feishuUrl]);
+
+  useEffect(() => {
+    setPendingProfileAction(null);
+    setProfileActionMessage('');
+    setProfileActionLogs([]);
+  }, [thread.id]);
+
+  const feishuQuickActions = useMemo<FeishuQuickAction[]>(() => {
+    const mapping = settings.feishuFieldMapping || {};
+    const actions: FeishuQuickAction[] = [
+      {
+        id: 'mark-replied',
+        label: '标记已回复',
+        description: '把飞书中的红人回复状态更新为已回复。',
+        fields: { hasReply: '已回复' },
+      },
+      {
+        id: 'mark-interested',
+        label: '标记有意向',
+        description: '把飞书中的合作状态更新为有意向。',
+        fields: { collaborationStatus: '有意向' },
+      },
+      {
+        id: 'mark-collaborating',
+        label: '标记合作中',
+        description: '把飞书中的合作状态更新为合作中。',
+        fields: { collaborationStatus: '合作中' },
+      },
+      {
+        id: 'mark-follow-up',
+        label: '记录待跟进',
+        description: '在飞书合作进度中记录需要继续跟进。',
+        fields: { collaborationProgress: '需要跟进：已从 Gmail 邮件确认后续需要处理。' },
+      },
+    ];
+
+    return actions.filter((action) =>
+      (Object.keys(action.fields) as FeishuFieldKey[]).some((fieldKey) => Boolean(mapping[fieldKey])),
+    );
+  }, [settings.feishuFieldMapping]);
+
+  const executeProfileAction = async () => {
+    if (!creatorProfile || !pendingProfileAction) return;
+
+    const mapping = settings.feishuFieldMapping || {};
+    const { payload } = buildFeishuPayload(mapping, pendingProfileAction.fields);
+
+    if (!settings.feishuUrl) {
+      const log = buildProfileWriteLog(
+        creatorProfile,
+        pendingProfileAction,
+        mapping,
+        'failed',
+        '请先在设置里连接飞书资源库。',
+      );
+      appendLog(log);
+      setProfileActionLogs((current) => [log, ...current].slice(0, 5));
+      setProfileActionMessage('写回失败：请先在设置里连接飞书资源库。');
+      return;
+    }
+
+    if (!Object.keys(payload).length) {
+      const log = buildProfileWriteLog(
+        creatorProfile,
+        pendingProfileAction,
+        mapping,
+        'failed',
+        '没有可写入的字段，请检查飞书字段映射。',
+      );
+      appendLog(log);
+      setProfileActionLogs((current) => [log, ...current].slice(0, 5));
+      setProfileActionMessage('写回失败：没有可写入的字段，请检查飞书字段映射。');
+      return;
+    }
+
+    setProfileActionLoading(true);
+    setProfileActionMessage('');
+
+    try {
+      const response = await fetch('/api/feishu/records', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          action: 'update',
+          url: settings.feishuUrl,
+          recordId: creatorProfile.recordId,
+          fields: payload,
+        }),
+      });
+      const result = await response.json() as { success?: boolean; error?: string };
+      if (!response.ok || !result.success) {
+        throw new Error(result.error || '写回飞书失败。');
+      }
+
+      const log = buildProfileWriteLog(creatorProfile, pendingProfileAction, mapping, 'synced');
+      appendLog(log);
+      setProfileActionLogs((current) => [log, ...current].slice(0, 5));
+      setCreatorProfile((current) => {
+        if (!current || current.recordId !== creatorProfile.recordId) return current;
+        return {
+          ...current,
+          collaborationStatus: pendingProfileAction.fields.collaborationStatus || current.collaborationStatus,
+          hasReply: pendingProfileAction.fields.hasReply || current.hasReply,
+        };
+      });
+      setProfileActionMessage(`已写回飞书：${pendingProfileAction.label}`);
+      setPendingProfileAction(null);
+    } catch (error) {
+      const errorMessage = error instanceof Error ? error.message : '写回飞书失败。';
+      const log = buildProfileWriteLog(
+        creatorProfile,
+        pendingProfileAction,
+        mapping,
+        'failed',
+        errorMessage,
+      );
+      appendLog(log);
+      setProfileActionLogs((current) => [log, ...current].slice(0, 5));
+      setProfileActionMessage(`写回失败：${errorMessage}`);
+    } finally {
+      setProfileActionLoading(false);
+    }
+  };
 
   const requestTranslation = async (text: string) => {
     const response = await fetch('/api/translate', {
@@ -662,35 +897,129 @@ export function EmailDetail({ thread, onBack, onThreadUpdated }: EmailDetailProp
         </div>
       </div>
 
-      {/* 邮件对话 */}
+      {/* 飞书红人资料 */}
       {(creatorProfileLoading || creatorProfile || creatorProfileError) && (
-        <div className="shrink-0 border-b bg-muted/20 px-4 py-2">
+        <div className="shrink-0 border-b bg-muted/20 px-4 py-3">
           {creatorProfileLoading ? (
             <div className="flex items-center gap-2 text-xs text-muted-foreground">
               <Loader2 className="h-3.5 w-3.5 animate-spin" />
               正在匹配飞书红人资料...
             </div>
           ) : creatorProfile ? (
-            <div className="flex flex-wrap items-center gap-x-4 gap-y-1 text-sm">
-              <div className="flex min-w-[180px] items-center gap-2 font-medium">
-                <UserRound className="h-4 w-4 text-primary" />
-                <span className="truncate">{creatorProfile.channelName}</span>
+            <div className="space-y-2 rounded-md border bg-background px-3 py-2">
+              <div className="flex flex-wrap items-center gap-x-4 gap-y-1 text-sm">
+                <div className="flex min-w-[180px] items-center gap-2 font-medium">
+                  <UserRound className="h-4 w-4 text-primary" />
+                  <span className="truncate">{creatorProfile.channelName}</span>
+                </div>
+                <span className="text-xs text-muted-foreground">
+                  地区：<span className="text-foreground">{creatorProfile.region}</span>
+                </span>
+                <span className="text-xs text-muted-foreground">
+                  平台：<span className="text-foreground">{creatorProfile.platform}</span>
+                </span>
+                <span className="text-xs text-muted-foreground">
+                  粉丝数：<span className="text-foreground">{creatorProfile.followers}</span>
+                </span>
+                <span className="text-xs text-muted-foreground">
+                  邮箱：<span className="text-foreground">{creatorProfile.email}</span>
+                </span>
+                <Badge variant="secondary" className="h-5 rounded-md px-2 text-[11px]">
+                  {creatorProfile.collaborationStatus}
+                </Badge>
+                <Badge variant="outline" className="h-5 rounded-md px-2 text-[11px]">
+                  {creatorProfile.hasReply}
+                </Badge>
               </div>
-              <span className="text-xs text-muted-foreground">
-                地区：<span className="text-foreground">{creatorProfile.region}</span>
-              </span>
-              <span className="text-xs text-muted-foreground">
-                平台：<span className="text-foreground">{creatorProfile.platform}</span>
-              </span>
-              <span className="text-xs text-muted-foreground">
-                粉丝数：<span className="text-foreground">{creatorProfile.followers}</span>
-              </span>
-              <Badge variant="secondary" className="h-5 rounded-md px-2 text-[11px]">
-                {creatorProfile.collaborationStatus}
-              </Badge>
+
+              {feishuQuickActions.length > 0 && (
+                <div className="flex flex-wrap items-center gap-2">
+                  {feishuQuickActions.map((action) => (
+                    <Button
+                      key={action.id}
+                      variant={pendingProfileAction?.id === action.id ? 'default' : 'outline'}
+                      size="sm"
+                      className="h-7 px-2 text-xs"
+                      disabled={profileActionLoading}
+                      onClick={() => {
+                        setPendingProfileAction(action);
+                        setProfileActionMessage('');
+                      }}
+                    >
+                      <Database className="mr-1.5 h-3.5 w-3.5" />
+                      {action.label}
+                    </Button>
+                  ))}
+                </div>
+              )}
+
+              {pendingProfileAction && (
+                <div className="rounded-md border border-primary/20 bg-primary/5 px-3 py-2 text-xs">
+                  <div className="flex flex-wrap items-start justify-between gap-3">
+                    <div className="min-w-0 flex-1">
+                      <p className="font-medium">准备写回飞书：{pendingProfileAction.label}</p>
+                      <p className="mt-1 text-muted-foreground">{pendingProfileAction.description}</p>
+                      <div className="mt-2 flex flex-wrap gap-2">
+                        {(Object.entries(pendingProfileAction.fields) as Array<[FeishuFieldKey, string]>).map(([fieldKey, value]) => (
+                          <span key={fieldKey} className="rounded-md bg-background px-2 py-1">
+                            {getQuickFieldLabel(fieldKey)} → {value}
+                          </span>
+                        ))}
+                      </div>
+                    </div>
+                    <div className="flex shrink-0 gap-2">
+                      <Button
+                        size="sm"
+                        className="h-7 px-2 text-xs"
+                        disabled={profileActionLoading}
+                        onClick={() => void executeProfileAction()}
+                      >
+                        {profileActionLoading ? (
+                          <Loader2 className="mr-1.5 h-3.5 w-3.5 animate-spin" />
+                        ) : (
+                          <Save className="mr-1.5 h-3.5 w-3.5" />
+                        )}
+                        确认写回
+                      </Button>
+                      <Button
+                        variant="outline"
+                        size="sm"
+                        className="h-7 px-2 text-xs"
+                        disabled={profileActionLoading}
+                        onClick={() => setPendingProfileAction(null)}
+                      >
+                        取消
+                      </Button>
+                    </div>
+                  </div>
+                </div>
+              )}
+
+              {(profileActionMessage || profileActionLogs.length > 0) && (
+                <div className="flex flex-wrap items-center gap-2 text-xs">
+                  {profileActionMessage && (
+                    <span className="inline-flex items-center gap-1 rounded-md bg-muted px-2 py-1">
+                      {profileActionMessage.startsWith('写回失败') ? (
+                        <XCircle className="h-3.5 w-3.5 text-destructive" />
+                      ) : (
+                        <CheckCircle2 className="h-3.5 w-3.5 text-emerald-600" />
+                      )}
+                      {profileActionMessage}
+                    </span>
+                  )}
+                  {profileActionLogs.slice(0, 3).map((log) => (
+                    <span key={log.id} className="rounded-md border px-2 py-1 text-muted-foreground">
+                      {log.status === 'synced' ? '成功' : '失败'} · {log.event.summary}
+                    </span>
+                  ))}
+                </div>
+              )}
             </div>
           ) : (
-            <div className="text-xs text-amber-600">{creatorProfileError}</div>
+            <div className="flex items-center gap-2 rounded-md border border-amber-200 bg-amber-50 px-3 py-2 text-xs text-amber-700">
+              <Database className="h-3.5 w-3.5" />
+              {creatorProfileError}
+            </div>
           )}
         </div>
       )}

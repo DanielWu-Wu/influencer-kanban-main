@@ -63,6 +63,14 @@ export interface AppSettings {
   customApiKey?: string;
   customApiKeyConfigured?: boolean;
   customModelName?: string;
+  youtubeApiKey?: string;
+  youtubeApiKeyConfigured?: boolean;
+  youtubeDefaultRegion?: string;
+  youtubeDefaultLanguage?: string;
+  youtubeSearchKeywords?: string;
+  youtubeMaxSearchResults?: number;
+  youtubeMinSubscribers?: string;
+  youtubeAutoEnrichEnabled?: boolean;
   gmailSettings?: GmailSettings;
 }
 
@@ -188,6 +196,7 @@ function saveSettings(settings: AppSettings): void {
   delete safeSettings.customApiKey;
   delete safeSettings.customApiKeyConfigured;
   delete safeSettings.gmailClientSecret;
+  delete safeSettings.youtubeApiKey;
   saveData(STORAGE_KEYS.SETTINGS, safeSettings);
 }
 
@@ -196,6 +205,7 @@ function getCloudSafeSettings(settings: AppSettings) {
   delete safeSettings.customApiKey;
   delete safeSettings.customApiKeyConfigured;
   delete safeSettings.gmailClientSecret;
+  delete safeSettings.youtubeApiKey;
   return safeSettings;
 }
 
@@ -247,13 +257,16 @@ export function useSettings() {
         return;
       }
 
-      const [{ data: cloudRow }, secretStatus] = await Promise.all([
+      const [{ data: cloudRow }, secretStatus, youtubeSecretStatus] = await Promise.all([
         supabase
           .from('app_settings')
           .select('data')
           .eq('user_id', authData.user.id)
           .maybeSingle(),
         fetch('/api/secrets/ai-key', { cache: 'no-store' })
+          .then((response) => response.ok ? response.json() : null)
+          .catch(() => null),
+        fetch('/api/secrets/youtube-key', { cache: 'no-store' })
           .then((response) => response.ok ? response.json() : null)
           .catch(() => null),
       ]);
@@ -267,6 +280,8 @@ export function useSettings() {
         ...(cloudSettings || {}),
         customApiKey: localSettings.customApiKey,
         customApiKeyConfigured: Boolean(secretStatus?.configured),
+        youtubeApiKey: localSettings.youtubeApiKey,
+        youtubeApiKeyConfigured: Boolean(youtubeSecretStatus?.configured),
       };
       setSettings(nextSettings);
       if (cloudSettings) saveSettings(nextSettings);

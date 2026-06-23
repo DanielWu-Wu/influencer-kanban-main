@@ -11,8 +11,9 @@ import { useGmailAuth, useSettings } from '@/lib/data';
 import { ProductDatabaseSettings } from '@/components/product-database-settings';
 import { CloudSyncSettings } from '@/components/cloud-sync-settings';
 import { FeishuSettings } from '@/components/feishu-settings';
+import { YouTubeApiSettings } from '@/components/youtube-api-settings';
 import {
-  Settings, Database, Mail, Zap,
+  Settings, Mail, Zap,
   CheckCircle2, AlertTriangle,
   Plug, RefreshCw, Save, HelpCircle, Link2, Cpu,
   ChevronDown, ChevronUp, Info, User, Clock, Heart, LogOut
@@ -199,6 +200,11 @@ export function SettingsPanel() {
         <FeishuSettings
           expanded={expandedSection === 'feishu'}
           onToggle={() => toggleSection('feishu')}
+        />
+
+        <YouTubeApiSettings
+          expanded={expandedSection === 'youtube'}
+          onToggle={() => toggleSection('youtube')}
         />
 
         {/* Gmail 邮件 */}
@@ -659,23 +665,6 @@ export function SettingsPanel() {
           )}
         </Card>
 
-        {/* YouTube - 即将推出 */}
-        <Card className="overflow-hidden opacity-60">
-          <CardHeader className="pb-3">
-            <div className="flex items-center justify-between">
-              <div className="flex items-center gap-3">
-                <div className="w-9 h-9 rounded-lg bg-red-600/10 flex items-center justify-center">
-                  <Database className="w-4 h-4 text-red-600" />
-                </div>
-                <div>
-                  <CardTitle className="text-base">YouTube 数据</CardTitle>
-                  <CardDescription className="text-xs mt-0.5">自动获取视频观看、点赞、评论数据</CardDescription>
-                </div>
-              </div>
-              <Badge variant="secondary" className="text-xs">即将推出</Badge>
-            </div>
-          </CardHeader>
-        </Card>
       </div>
     </div>
   );
