@@ -38,6 +38,7 @@ export function YouTubeApiSettings({ expanded, onToggle }: YouTubeApiSettingsPro
   const [autoEnrichEnabled, setAutoEnrichEnabled] = useState(true);
   const [saving, setSaving] = useState(false);
   const [testing, setTesting] = useState(false);
+  const [justSaved, setJustSaved] = useState(false);
   const [status, setStatus] = useState<{ success: boolean; message: string } | null>(null);
 
   useEffect(() => {
@@ -79,10 +80,20 @@ export function YouTubeApiSettings({ expanded, onToggle }: YouTubeApiSettingsPro
 
   const handleSave = async () => {
     setSaving(true);
+    setJustSaved(false);
     setStatus(null);
     try {
       await persistSettings();
-      setStatus({ success: true, message: 'YouTube API 设置已保存。' });
+      setJustSaved(true);
+      setStatus({
+        success: true,
+        message: `YouTube API 设置已保存。保存时间：${new Date().toLocaleTimeString('zh-CN', {
+          hour: '2-digit',
+          minute: '2-digit',
+          second: '2-digit',
+        })}`,
+      });
+      setTimeout(() => setJustSaved(false), 2500);
     } catch (error) {
       setStatus({ success: false, message: error instanceof Error ? error.message : '保存失败。' });
     } finally {
@@ -243,13 +254,24 @@ export function YouTubeApiSettings({ expanded, onToggle }: YouTubeApiSettingsPro
           )}
 
           <div className="flex flex-wrap gap-2 justify-end">
-            <Button variant="outline" onClick={handleTest} disabled={testing || saving}>
+            <Button type="button" variant="outline" onClick={handleTest} disabled={testing || saving}>
               {testing ? <Loader2 className="w-4 h-4 mr-2 animate-spin" /> : <RefreshCw className="w-4 h-4 mr-2" />}
               测试连接
             </Button>
-            <Button onClick={handleSave} disabled={saving || testing}>
-              {saving ? <Loader2 className="w-4 h-4 mr-2 animate-spin" /> : <Save className="w-4 h-4 mr-2" />}
-              保存 YouTube 设置
+            <Button
+              type="button"
+              onClick={handleSave}
+              disabled={saving || testing}
+              className={justSaved ? 'bg-emerald-600 hover:bg-emerald-700' : undefined}
+            >
+              {saving ? (
+                <Loader2 className="w-4 h-4 mr-2 animate-spin" />
+              ) : justSaved ? (
+                <CheckCircle2 className="w-4 h-4 mr-2" />
+              ) : (
+                <Save className="w-4 h-4 mr-2" />
+              )}
+              {saving ? '保存中...' : justSaved ? '已保存' : '保存 YouTube 设置'}
             </Button>
           </div>
         </CardContent>
