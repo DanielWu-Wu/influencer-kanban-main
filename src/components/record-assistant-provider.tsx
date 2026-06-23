@@ -837,13 +837,13 @@ export function RecordAssistantProvider({ children }: { children: ReactNode }) {
         <>
           {!open && (
             <Button
-              className="fixed bottom-24 right-5 z-[90] h-11 rounded-full px-4 shadow-xl"
+              className="fixed bottom-24 right-5 z-[90] h-12 rounded-lg px-4 shadow-apple-hover"
               onClick={() => setOpen(true)}
             >
               <Sparkles className="mr-2 h-4 w-4" />
               AI 助手
               {pendingCount > 0 && (
-                <Badge variant="secondary" className="ml-2 bg-white text-primary">
+                <Badge variant="secondary" className="ml-2 rounded-md bg-white text-primary">
                   {pendingCount}
                 </Badge>
               )}
@@ -851,42 +851,42 @@ export function RecordAssistantProvider({ children }: { children: ReactNode }) {
           )}
 
           {open && (
-            <section className="fixed bottom-24 right-5 z-[90] flex h-[min(640px,calc(100vh-8rem))] w-[min(460px,calc(100vw-2rem))] flex-col overflow-hidden rounded-md border bg-background shadow-2xl">
-              <header className="flex shrink-0 items-start justify-between border-b px-4 py-3">
+            <section className="glass-panel-strong fixed bottom-24 right-5 z-[90] flex h-[min(720px,calc(100vh-7rem))] w-[min(520px,calc(100vw-2rem))] flex-col overflow-hidden rounded-lg">
+              <header className="flex shrink-0 items-start justify-between border-b border-white/55 bg-white/65 px-4 py-3 backdrop-blur-xl">
                 <div>
                   <div className="flex items-center gap-2">
                     <Sparkles className="h-4 w-4 text-primary" />
                     <h2 className="text-sm font-semibold">悬浮 AI Agent 助手</h2>
-                    {pendingCount > 0 && <Badge variant="outline">{pendingCount} 待确认</Badge>}
+                    {pendingCount > 0 && <Badge variant="outline" className="rounded-md border-primary/25 bg-primary/10 text-primary">{pendingCount} 待确认</Badge>}
                   </div>
                   <p className="mt-1 text-xs text-muted-foreground">先读取和预览，写入飞书前必须由你确认。</p>
                 </div>
-                <Button variant="ghost" size="icon" className="h-8 w-8" onClick={() => setOpen(false)}>
+                <Button variant="ghost" size="icon" className="h-9 w-9 rounded-lg hover:bg-white/70" onClick={() => setOpen(false)}>
                   <X className="h-4 w-4" />
                 </Button>
               </header>
 
               {notice && (
-                <div className="mx-4 mt-3 rounded-md border border-blue-100 bg-blue-50 px-3 py-2 text-xs text-blue-700">
+                <div className="mx-4 mt-3 rounded-lg border border-blue-100 bg-blue-50/85 px-3 py-2 text-xs text-blue-700 shadow-sm">
                   {notice}
                 </div>
               )}
 
               <Tabs value={activeTab} onValueChange={setActiveTab} className="min-h-0 flex-1 p-4">
-                <TabsList className="grid w-full grid-cols-4">
-                  <TabsTrigger value="agent">
+                <TabsList className="grid w-full grid-cols-4 rounded-lg bg-white/55 p-1">
+                  <TabsTrigger value="agent" className="rounded-md data-[state=active]:bg-white data-[state=active]:shadow-sm">
                     <Bot className="h-3.5 w-3.5" />
                     对话
                   </TabsTrigger>
-                  <TabsTrigger value="pending">
+                  <TabsTrigger value="pending" className="rounded-md data-[state=active]:bg-white data-[state=active]:shadow-sm">
                     <ClipboardList className="h-3.5 w-3.5" />
                     待确认
                   </TabsTrigger>
-                  <TabsTrigger value="rules">
+                  <TabsTrigger value="rules" className="rounded-md data-[state=active]:bg-white data-[state=active]:shadow-sm">
                     <Settings2 className="h-3.5 w-3.5" />
                     规则
                   </TabsTrigger>
-                  <TabsTrigger value="logs">
+                  <TabsTrigger value="logs" className="rounded-md data-[state=active]:bg-white data-[state=active]:shadow-sm">
                     <History className="h-3.5 w-3.5" />
                     记录
                   </TabsTrigger>
@@ -896,7 +896,7 @@ export function RecordAssistantProvider({ children }: { children: ReactNode }) {
                   <div className="flex h-full min-h-0 flex-col">
                     <div className="min-h-0 flex-1 space-y-3 overflow-y-auto pr-1">
                       {agentMessages.length === 0 && (
-                        <div className="rounded-md border bg-muted/30 p-3">
+                        <div className="rounded-lg border border-white/65 bg-white/68 p-3 shadow-apple">
                           <div className="flex items-center gap-2 text-sm font-medium">
                             <Database className="h-4 w-4 text-primary" />
                             可以直接问我运营问题
@@ -909,7 +909,7 @@ export function RecordAssistantProvider({ children }: { children: ReactNode }) {
                               <button
                                 key={example}
                                 type="button"
-                                className="rounded-md border bg-background px-3 py-2 text-left text-xs transition-colors hover:bg-accent"
+                                className="rounded-lg border border-white/65 bg-white/72 px-3 py-2 text-left text-xs transition-colors hover:bg-white"
                                 onClick={() => void sendAgentMessage(example)}
                               >
                                 {example}
@@ -922,8 +922,8 @@ export function RecordAssistantProvider({ children }: { children: ReactNode }) {
                       {agentMessages.map((message) => (
                         <div
                           key={message.id}
-                          className={`rounded-md border p-3 ${
-                            message.role === 'user' ? 'bg-primary text-primary-foreground' : 'bg-background'
+                          className={`rounded-lg border p-3 shadow-sm ${
+                            message.role === 'user' ? 'border-primary bg-primary text-primary-foreground' : 'border-white/65 bg-white/75'
                           }`}
                         >
                           <div className="mb-2 flex items-center gap-2 text-xs font-medium">
@@ -943,7 +943,7 @@ export function RecordAssistantProvider({ children }: { children: ReactNode }) {
                           )}
 
                           {Boolean(message.warnings?.length) && (
-                            <div className="mt-3 rounded-md bg-amber-50 px-3 py-2 text-xs text-amber-700">
+                            <div className="mt-3 rounded-lg border border-amber-200 bg-amber-50/85 px-3 py-2 text-xs text-amber-700">
                               {message.warnings?.map((warning) => (
                                 <p key={warning}>· {warning}</p>
                               ))}
@@ -951,13 +951,13 @@ export function RecordAssistantProvider({ children }: { children: ReactNode }) {
                           )}
 
                           {Boolean(message.actions?.length) && (
-                            <div className="mt-3 space-y-3 rounded-md border bg-muted/30 p-3 text-foreground">
+                            <div className="mt-3 space-y-3 rounded-lg border border-primary/20 bg-primary/5 p-3 text-foreground shadow-sm">
                               <p className="text-xs font-semibold">操作预览：确认后才会写入飞书</p>
                               {message.actions?.map((action) => {
                                 const status = agentActionStatus[action.id];
                                 const mapping = settings.feishuFieldMapping || {};
                                 return (
-                                  <div key={action.id} className="rounded-md bg-background p-3">
+                                  <div key={action.id} className="rounded-lg border border-white/65 bg-white/82 p-3">
                                     <div className="flex items-start justify-between gap-2">
                                       <div className="min-w-0">
                                         <p className="truncate text-sm font-medium">
@@ -971,7 +971,7 @@ export function RecordAssistantProvider({ children }: { children: ReactNode }) {
 
                                     <div className="mt-3 space-y-2">
                                       {action.fields.map((field) => (
-                                        <div key={`${action.id}-${field.fieldName}`} className="rounded-md bg-muted/50 px-3 py-2">
+                                        <div key={`${action.id}-${field.fieldName}`} className="rounded-md bg-white/70 px-3 py-2">
                                           <div className="flex items-center justify-between gap-2">
                                             <span className="text-xs font-medium">
                                               {field.fieldLabel || field.fieldName}
@@ -988,6 +988,7 @@ export function RecordAssistantProvider({ children }: { children: ReactNode }) {
                                     <div className="mt-3 flex justify-end">
                                       <Button
                                         size="sm"
+                                        className="rounded-lg"
                                         disabled={status === 'running' || status === 'done'}
                                         onClick={() => void executeAgentAction(action)}
                                       >
@@ -1004,21 +1005,21 @@ export function RecordAssistantProvider({ children }: { children: ReactNode }) {
                       ))}
 
                       {agentLoading && (
-                        <div className="flex items-center gap-2 rounded-md border bg-background p-3 text-sm text-muted-foreground">
+                        <div className="flex items-center gap-2 rounded-lg border border-white/65 bg-white/75 p-3 text-sm text-muted-foreground">
                           <Loader2 className="h-4 w-4 animate-spin" />
                           正在读取飞书、Gmail 和产品资料...
                         </div>
                       )}
 
                       {agentError && (
-                        <div className="rounded-md bg-red-50 px-3 py-2 text-xs text-red-700">
+                        <div className="rounded-lg border border-red-100 bg-red-50/90 px-3 py-2 text-xs text-red-700">
                           {agentError}
                         </div>
                       )}
                     </div>
 
                     <form
-                      className="mt-3 shrink-0 space-y-2 border-t pt-3"
+                      className="mt-3 shrink-0 space-y-2 border-t border-white/55 pt-3"
                       onSubmit={(event) => {
                         event.preventDefault();
                         void sendAgentMessage();
@@ -1027,10 +1028,10 @@ export function RecordAssistantProvider({ children }: { children: ReactNode }) {
                       <Textarea
                         value={agentInput}
                         placeholder="例如：把某个红人标记为合作中，或汇报西班牙合作进度..."
-                        className="min-h-20 resize-none text-sm"
+                        className="min-h-20 resize-none rounded-lg bg-white/75 text-sm"
                         onChange={(event) => setAgentInput(event.target.value)}
                       />
-                      <Button className="w-full" disabled={agentLoading || !agentInput.trim()}>
+                      <Button className="h-10 w-full rounded-lg" disabled={agentLoading || !agentInput.trim()}>
                         {agentLoading ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <Send className="mr-2 h-4 w-4" />}
                         发送给 Agent
                       </Button>
@@ -1040,7 +1041,7 @@ export function RecordAssistantProvider({ children }: { children: ReactNode }) {
 
                 <TabsContent value="pending" className="min-h-0 overflow-y-auto pt-3">
                   {pending.length === 0 ? (
-                    <div className="flex h-48 flex-col items-center justify-center rounded-md border border-dashed text-center">
+                    <div className="flex h-48 flex-col items-center justify-center rounded-lg border border-dashed border-white/70 bg-white/45 text-center">
                       <CheckCircle2 className="h-8 w-8 text-green-600" />
                       <p className="mt-2 text-sm font-medium">暂无待确认同步</p>
                       <p className="mt-1 text-xs text-muted-foreground">发送邮件或拖动看板状态后会出现在这里。</p>
@@ -1048,7 +1049,7 @@ export function RecordAssistantProvider({ children }: { children: ReactNode }) {
                   ) : (
                     <div className="space-y-3">
                       {pending.map((sync) => (
-                        <div key={sync.id} className="rounded-md border p-3">
+                        <div key={sync.id} className="rounded-lg border border-white/65 bg-white/72 p-3 shadow-sm">
                           <div className="flex items-start justify-between gap-3">
                             <div className="min-w-0">
                               <p className="truncate text-sm font-medium">{sync.event.title}</p>
@@ -1068,7 +1069,7 @@ export function RecordAssistantProvider({ children }: { children: ReactNode }) {
 
                           <div className="mt-3 space-y-2">
                             {sync.updates.map((update) => (
-                              <div key={`${sync.id}-${update.fieldKey}`} className="rounded-md bg-muted/50 px-3 py-2">
+                              <div key={`${sync.id}-${update.fieldKey}`} className="rounded-md bg-white/70 px-3 py-2">
                                 <div className="flex items-center justify-between gap-2">
                                   <span className="text-xs font-medium">{update.fieldLabel}</span>
                                   <span className="truncate text-[11px] text-muted-foreground">
@@ -1081,18 +1082,19 @@ export function RecordAssistantProvider({ children }: { children: ReactNode }) {
                           </div>
 
                           {sync.error && (
-                            <div className="mt-3 flex items-start gap-2 rounded-md bg-red-50 px-3 py-2 text-xs text-red-700">
+                            <div className="mt-3 flex items-start gap-2 rounded-lg border border-red-100 bg-red-50/90 px-3 py-2 text-xs text-red-700">
                               <AlertCircle className="mt-0.5 h-3.5 w-3.5 shrink-0" />
                               <span>{sync.error}</span>
                             </div>
                           )}
 
                           <div className="mt-3 flex justify-end gap-2">
-                            <Button variant="ghost" size="sm" onClick={() => ignoreSync(sync)}>
+                            <Button variant="ghost" size="sm" className="rounded-lg hover:bg-white/70" onClick={() => ignoreSync(sync)}>
                               忽略
                             </Button>
                             <Button
                               size="sm"
+                              className="rounded-lg"
                               disabled={sync.status === 'syncing'}
                               onClick={() => void confirmSync(sync)}
                             >
@@ -1108,7 +1110,7 @@ export function RecordAssistantProvider({ children }: { children: ReactNode }) {
 
                 <TabsContent value="rules" className="min-h-0 overflow-y-auto pt-3">
                   <div className="space-y-3">
-                    <div className="flex items-center justify-between rounded-md border px-3 py-2">
+                    <div className="flex items-center justify-between rounded-lg border border-white/65 bg-white/72 px-3 py-2 shadow-sm">
                       <div>
                         <p className="text-sm font-medium">启用 AI 辅助记录</p>
                         <p className="text-xs text-muted-foreground">关闭后不会再捕捉新的操作事件。</p>
@@ -1120,7 +1122,7 @@ export function RecordAssistantProvider({ children }: { children: ReactNode }) {
                     </div>
 
                     {draftSettings.rules.map((rule) => (
-                      <div key={rule.id} className="rounded-md border p-3">
+                      <div key={rule.id} className="rounded-lg border border-white/65 bg-white/72 p-3 shadow-sm">
                         <div className="flex items-center justify-between gap-3">
                           <div className="min-w-0">
                             <p className="truncate text-sm font-medium">{rule.label}</p>
@@ -1138,7 +1140,7 @@ export function RecordAssistantProvider({ children }: { children: ReactNode }) {
                             onValueChange={(eventType) =>
                               updateRule(rule.id, { eventType: eventType as RecordAssistantRule['eventType'] })}
                           >
-                            <SelectTrigger className="w-full">
+                            <SelectTrigger className="w-full rounded-lg bg-white/75">
                               <SelectValue />
                             </SelectTrigger>
                             <SelectContent>
@@ -1153,7 +1155,7 @@ export function RecordAssistantProvider({ children }: { children: ReactNode }) {
 
                         <div className="mt-3 space-y-3">
                           {rule.updates.map((update, index) => (
-                            <div key={`${rule.id}-${update.fieldKey}`} className="rounded-md bg-muted/40 p-3">
+                            <div key={`${rule.id}-${update.fieldKey}`} className="rounded-lg bg-white/65 p-3">
                               <div className="mb-2 flex items-center justify-between gap-2">
                                 <div>
                                   <p className="text-xs font-medium">
@@ -1170,7 +1172,7 @@ export function RecordAssistantProvider({ children }: { children: ReactNode }) {
                               </div>
                               <Textarea
                                 value={update.valueTemplate}
-                                className="min-h-16 text-xs"
+                                className="min-h-16 rounded-lg bg-white/75 text-xs"
                                 onChange={(event) => updateRuleTemplate(rule.id, index, event.target.value)}
                               />
                             </div>
@@ -1179,15 +1181,15 @@ export function RecordAssistantProvider({ children }: { children: ReactNode }) {
                       </div>
                     ))}
 
-                    <div className="rounded-md border bg-muted/30 px-3 py-2 text-xs text-muted-foreground">
+                    <div className="rounded-lg border border-white/65 bg-white/60 px-3 py-2 text-xs text-muted-foreground">
                       可用变量：{'{{today}}'}、{'{{subject}}'}、{'{{channelName}}'}、{'{{email}}'}、{'{{statusLabel}}'}、{'{{feishuStatus}}'}。
                     </div>
 
                     <div className="flex gap-2">
-                      <Button variant="outline" className="flex-1" onClick={resetRules}>
+                      <Button variant="outline" className="h-10 flex-1 rounded-lg bg-white/75" onClick={resetRules}>
                         恢复默认
                       </Button>
-                      <Button className="flex-1" onClick={saveRules}>
+                      <Button className="h-10 flex-1 rounded-lg" onClick={saveRules}>
                         <Save className="mr-2 h-4 w-4" />
                         保存规则
                       </Button>
@@ -1197,7 +1199,7 @@ export function RecordAssistantProvider({ children }: { children: ReactNode }) {
 
                 <TabsContent value="logs" className="min-h-0 overflow-y-auto pt-3">
                   {logs.length === 0 ? (
-                    <div className="flex h-48 flex-col items-center justify-center rounded-md border border-dashed text-center">
+                    <div className="flex h-48 flex-col items-center justify-center rounded-lg border border-dashed border-white/70 bg-white/45 text-center">
                       <History className="h-8 w-8 text-muted-foreground" />
                       <p className="mt-2 text-sm font-medium">暂无记录</p>
                       <p className="mt-1 text-xs text-muted-foreground">同步、忽略和失败记录会保留在这里。</p>
@@ -1205,7 +1207,7 @@ export function RecordAssistantProvider({ children }: { children: ReactNode }) {
                   ) : (
                     <div className="space-y-2">
                       {logs.map((log) => (
-                        <div key={`${log.id}-${log.finishedAt}`} className="rounded-md border px-3 py-2">
+                        <div key={`${log.id}-${log.finishedAt}`} className="rounded-lg border border-white/65 bg-white/72 px-3 py-2 shadow-sm">
                           <div className="flex items-center justify-between gap-2">
                             <p className="truncate text-sm font-medium">{log.event.title}</p>
                             <Badge variant={log.status === 'failed' ? 'destructive' : log.status === 'synced' ? 'secondary' : 'outline'}>

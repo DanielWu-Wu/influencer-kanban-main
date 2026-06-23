@@ -66,7 +66,7 @@ export function InfluencerCard({ influencer, onEdit, onDelete, isDragging }: Inf
   return (
     <>
       <Card
-        className={`cursor-pointer transition-all duration-200 hover:shadow-apple-hover hover:-translate-y-0.5 ${
+        className={`cursor-pointer rounded-lg border-white/65 bg-white/72 backdrop-blur-xl transition-all duration-200 hover:-translate-y-0.5 hover:bg-white hover:shadow-apple-hover ${
           isDragging ? 'shadow-apple-hover opacity-90' : 'shadow-apple'
         }`}
         onClick={() => setShowDetail(true)}
@@ -74,13 +74,13 @@ export function InfluencerCard({ influencer, onEdit, onDelete, isDragging }: Inf
         <CardContent className="p-3">
           <div className="flex items-start justify-between gap-2">
             <div className="min-w-0 flex-1">
-              <h4 className="font-medium text-sm truncate">{influencer.channelName}</h4>
-              <div className="flex items-center gap-2 mt-1.5">
+              <h4 className="truncate text-sm font-semibold">{influencer.channelName}</h4>
+              <div className="mt-1.5 flex items-center gap-2">
                 <span className="flex items-center gap-1 text-xs text-muted-foreground">
                   <MapPin className="w-3 h-3" />
                   {influencer.country || '-'}
                 </span>
-                <Badge className={`${ratingConfig[influencer.rating].color} text-[10px] px-1.5`}>
+                <Badge className={`${ratingConfig[influencer.rating].color} rounded-md px-1.5 text-[10px]`}>
                   {ratingConfig[influencer.rating].label}
                 </Badge>
               </div>
@@ -100,17 +100,21 @@ export function InfluencerCard({ influencer, onEdit, onDelete, isDragging }: Inf
             )}
           </div>
 
-          <div className="mt-2 text-[11px] text-muted-foreground">
+          <div className="mt-2 inline-flex rounded-md bg-white/70 px-2 py-0.5 text-[11px] text-muted-foreground">
             {STATUS_LABELS[influencer.status]}
           </div>
 
-          {influencer.notes && <p className="mt-2 text-xs text-muted-foreground line-clamp-2">{influencer.notes}</p>}
+          {influencer.notes && (
+            <p className="mt-2 line-clamp-2 rounded-md bg-white/55 px-2 py-1.5 text-xs text-muted-foreground">
+              {influencer.notes}
+            </p>
+          )}
 
           <div className="mt-2 flex items-center gap-1">
             <Button
               variant="ghost"
               size="sm"
-              className="h-7 w-7 p-0 hover:bg-accent"
+              className="h-8 w-8 rounded-lg p-0 hover:bg-white/80"
               onClick={(event) => {
                 event.stopPropagation();
                 onEdit(influencer);
@@ -121,7 +125,7 @@ export function InfluencerCard({ influencer, onEdit, onDelete, isDragging }: Inf
             <Button
               variant="ghost"
               size="sm"
-              className="h-7 w-7 p-0 hover:bg-red-50 hover:text-red-500"
+              className="h-8 w-8 rounded-lg p-0 hover:bg-red-50 hover:text-red-500"
               onClick={(event) => {
                 event.stopPropagation();
                 handleDelete();
@@ -137,7 +141,7 @@ export function InfluencerCard({ influencer, onEdit, onDelete, isDragging }: Inf
                 onClick={(event) => event.stopPropagation()}
                 className="ml-auto"
               >
-                <Button variant="ghost" size="sm" className="h-7 w-7 p-0">
+                <Button variant="ghost" size="sm" className="h-8 w-8 rounded-lg p-0 hover:bg-white/80">
                   <ExternalLink className="w-3 h-3" />
                 </Button>
               </a>
@@ -147,7 +151,7 @@ export function InfluencerCard({ influencer, onEdit, onDelete, isDragging }: Inf
       </Card>
 
       <Dialog open={showDetail} onOpenChange={setShowDetail}>
-        <DialogContent className="max-w-md">
+        <DialogContent className="glass-panel-strong max-w-md rounded-lg border-white/65">
           <DialogHeader>
             <DialogTitle className="flex items-center gap-2">
               <User className="w-5 h-5" />
@@ -159,7 +163,7 @@ export function InfluencerCard({ influencer, onEdit, onDelete, isDragging }: Inf
             <div className="grid grid-cols-2 gap-4">
               <div className="space-y-1">
                 <p className="text-xs text-muted-foreground">{text.email}</p>
-                <a href={`mailto:${influencer.email}`} className="flex items-center gap-2 text-sm text-blue-600 hover:underline">
+                <a href={`mailto:${influencer.email}`} className="flex items-center gap-2 text-sm text-primary hover:underline">
                   <Mail className="w-4 h-4" />
                   {influencer.email}
                 </a>
@@ -170,7 +174,7 @@ export function InfluencerCard({ influencer, onEdit, onDelete, isDragging }: Inf
                   href={influencer.channelUrl}
                   target="_blank"
                   rel="noopener noreferrer"
-                  className="flex items-center gap-2 text-sm text-blue-600 hover:underline truncate"
+                  className="flex items-center gap-2 truncate text-sm text-primary hover:underline"
                 >
                   <Globe className="w-4 h-4 flex-shrink-0" />
                   {influencer.channelUrl}
@@ -195,7 +199,7 @@ export function InfluencerCard({ influencer, onEdit, onDelete, isDragging }: Inf
               </div>
               <div className="space-y-1">
                 <p className="text-xs text-muted-foreground">{text.rating}</p>
-                <Badge className={ratingConfig[influencer.rating].color}>
+                <Badge className={`${ratingConfig[influencer.rating].color} rounded-md`}>
                   <Star className="w-3 h-3 mr-1" />
                   {ratingConfig[influencer.rating].label}
                 </Badge>
@@ -220,14 +224,15 @@ export function InfluencerCard({ influencer, onEdit, onDelete, isDragging }: Inf
             {influencer.notes && (
               <div className="space-y-1">
                 <p className="text-xs text-muted-foreground">{text.notes}</p>
-                <p className="text-sm bg-accent/50 p-3 rounded-xl whitespace-pre-wrap">{influencer.notes}</p>
+                <p className="rounded-lg bg-white/65 p-3 text-sm whitespace-pre-wrap">{influencer.notes}</p>
               </div>
             )}
           </div>
 
-          <div className="flex justify-between pt-4 border-t">
+          <div className="flex justify-between border-t border-white/60 pt-4">
             <Button
               variant="outline"
+              className="rounded-lg bg-white/75"
               onClick={() => {
                 setShowDetail(false);
                 onEdit(influencer);
@@ -236,7 +241,7 @@ export function InfluencerCard({ influencer, onEdit, onDelete, isDragging }: Inf
               <Edit2 className="w-4 h-4 mr-2" />
               {text.edit}
             </Button>
-            <Button variant="outline" className="text-red-500 hover:text-red-600 hover:bg-red-50" onClick={handleDelete}>
+            <Button variant="outline" className="rounded-lg bg-white/75 text-red-500 hover:bg-red-50 hover:text-red-600" onClick={handleDelete}>
               <Trash2 className="w-4 h-4 mr-2" />
               {text.delete}
             </Button>

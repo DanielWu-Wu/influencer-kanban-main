@@ -36,14 +36,16 @@ export function GmailPage() {
   };
 
   return (
-    <div className="flex h-full min-h-0 overflow-hidden bg-background">
-      <aside className={`${selectedThread ? 'hidden xl:flex' : 'hidden md:flex'} w-40 shrink-0 flex-col border-r bg-card px-2 py-3`}>
+    <div className="glass-panel-strong flex h-full min-h-0 overflow-hidden rounded-lg">
+      <aside className={`${selectedThread ? 'hidden xl:flex' : 'hidden md:flex'} w-44 shrink-0 flex-col border-r border-white/55 bg-white/45 px-3 py-3 backdrop-blur-xl`}>
         <div className="mb-3 flex items-center gap-2 px-2 text-sm font-semibold">
-          <Mail className="h-4 w-4 text-red-500" />
-          Gmail
+          <span className="flex h-8 w-8 items-center justify-center rounded-lg bg-red-50 text-red-600">
+            <Mail className="h-4 w-4" />
+          </span>
+          <span>Gmail</span>
         </div>
         <Button
-          className="mb-3 h-10 w-full justify-start gap-3 px-3"
+          className="mb-3 h-11 w-full justify-start gap-3 rounded-lg px-3 shadow-apple"
           onClick={() => setShowNewEmail(true)}
         >
           <FilePenLine className="h-4 w-4" />
@@ -54,7 +56,9 @@ export function GmailPage() {
             <Button
               key={id}
               variant={mailbox === id ? 'secondary' : 'ghost'}
-              className="h-9 w-full justify-start gap-3 px-3 font-normal"
+              className={`h-10 w-full justify-start gap-3 rounded-lg px-3 font-normal ${
+                mailbox === id ? 'bg-white/80 shadow-sm' : 'hover:bg-white/70'
+              }`}
               onClick={() => handleMailboxChange(id)}
             >
               <Icon className="h-4 w-4" />
@@ -62,10 +66,12 @@ export function GmailPage() {
             </Button>
           ))}
         </nav>
-        <div className="my-3 border-t" />
+        <div className="my-3 border-t border-white/60" />
         <Button
           variant={showSettings ? 'secondary' : 'ghost'}
-          className="h-9 w-full justify-start gap-3 px-3 font-normal"
+          className={`h-10 w-full justify-start gap-3 rounded-lg px-3 font-normal ${
+            showSettings ? 'bg-white/80 shadow-sm' : 'hover:bg-white/70'
+          }`}
           onClick={() => {
             setShowSettings(true);
             setSelectedThread(null);
@@ -78,12 +84,12 @@ export function GmailPage() {
 
       {!showSettings && (
       <div
-        className={`${selectedThread ? 'hidden lg:flex lg:w-[420px] lg:flex-none' : 'flex flex-1'} min-h-0 flex-col overflow-hidden border-r bg-card transition-all duration-300 ease-out`}
+        className={`${selectedThread ? 'hidden lg:flex lg:w-[420px] xl:w-[460px] lg:flex-none' : 'flex flex-1'} min-h-0 flex-col overflow-hidden border-r border-white/55 bg-white/50 transition-[width,opacity] duration-300 ease-out`}
       >
-        <div className="flex shrink-0 gap-1 overflow-x-auto border-b p-2 md:hidden">
+        <div className="flex shrink-0 gap-1 overflow-x-auto border-b border-white/55 bg-white/55 p-2 md:hidden">
           <Button
             size="sm"
-            className="shrink-0 gap-2"
+            className="shrink-0 gap-2 rounded-lg"
             onClick={() => setShowNewEmail(true)}
           >
             <FilePenLine className="h-4 w-4" />
@@ -94,7 +100,7 @@ export function GmailPage() {
               key={id}
               variant={mailbox === id ? 'secondary' : 'ghost'}
               size="sm"
-              className="shrink-0 gap-2"
+              className="shrink-0 gap-2 rounded-lg"
               onClick={() => handleMailboxChange(id)}
             >
               <Icon className="h-4 w-4" />
@@ -104,7 +110,7 @@ export function GmailPage() {
           <Button
             variant={showSettings ? 'secondary' : 'ghost'}
             size="sm"
-            className="shrink-0 gap-2"
+            className="shrink-0 gap-2 rounded-lg"
             onClick={() => {
               setShowSettings(true);
               setSelectedThread(null);
@@ -130,7 +136,7 @@ export function GmailPage() {
       </div>
       )}
 
-      <div className={`min-h-0 min-w-0 flex-1 ${selectedThread || showSettings ? 'flex' : 'hidden'} flex-col overflow-hidden bg-background`}>
+      <div className={`min-h-0 min-w-0 flex-1 ${selectedThread || showSettings ? 'flex' : 'hidden'} flex-col overflow-hidden bg-white/35`}>
         {showSettings ? (
           <GmailSignatureSettings onBack={() => setShowSettings(false)} />
         ) : selectedThread ? (
@@ -141,7 +147,7 @@ export function GmailPage() {
           />
         ) : (
           <div className="flex flex-1 flex-col items-center justify-center p-6 text-center">
-            <div className="mb-4 flex h-16 w-16 items-center justify-center rounded-lg bg-muted">
+            <div className="mb-4 flex h-16 w-16 items-center justify-center rounded-lg border border-white/70 bg-white/70 shadow-apple">
               <Mail className="h-8 w-8 text-muted-foreground" />
             </div>
             <h3 className="mb-2 text-lg font-semibold">{'\u9009\u62e9\u4e00\u5c01\u90ae\u4ef6'}</h3>

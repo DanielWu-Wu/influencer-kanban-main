@@ -181,10 +181,10 @@ export function DelayedEmailProvider({ children }: { children: ReactNode }) {
           return (
             <div
               key={task.id}
-              className="pointer-events-auto rounded-md border bg-background p-4 shadow-xl"
+              className="pointer-events-auto rounded-lg border border-white/65 bg-white/82 p-4 shadow-apple backdrop-blur-xl"
             >
               <div className="flex items-start gap-3">
-                <div className="mt-0.5 flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-primary/10">
+                <div className="mt-0.5 flex h-8 w-8 shrink-0 items-center justify-center rounded-lg bg-primary/10">
                   {task.status === 'sending'
                     ? <Loader2 className="h-4 w-4 animate-spin text-primary" />
                     : task.status === 'error'
@@ -217,18 +217,19 @@ export function DelayedEmailProvider({ children }: { children: ReactNode }) {
                 <Button
                   variant="ghost"
                   size="sm"
+                  className="h-8 rounded-lg"
                   onClick={() => setTasks((current) => current.map((item) =>
                     item.id === task.id ? { ...item, hidden: true } : item))}
                 >
                   关闭
                 </Button>
                 {task.status === 'countdown' && (
-                  <Button variant="outline" size="sm" onClick={() => cancelTask(task.id)}>
+                  <Button variant="outline" size="sm" className="h-8 rounded-lg border-white/70 bg-white/70" onClick={() => cancelTask(task.id)}>
                     取消发送
                   </Button>
                 )}
                 {task.status === 'error' && (
-                  <Button variant="outline" size="sm" onClick={() => removeTask(task.id)}>
+                  <Button variant="outline" size="sm" className="h-8 rounded-lg border-white/70 bg-white/70" onClick={() => removeTask(task.id)}>
                     知道了
                   </Button>
                 )}

@@ -74,17 +74,17 @@ const emptyProduct = (): ProductFormData => ({
 const statusMeta: Record<ProductStatus, { label: string; className: string; icon: typeof Box }> = {
   active: {
     label: '推广中',
-    className: 'border-emerald-200 bg-emerald-50 text-emerald-700',
+    className: 'border-emerald-200/80 bg-emerald-50/80 text-emerald-700',
     icon: Box,
   },
   paused: {
     label: '已暂停',
-    className: 'border-amber-200 bg-amber-50 text-amber-700',
+    className: 'border-amber-200/80 bg-amber-50/80 text-amber-700',
     icon: CirclePause,
   },
   archived: {
     label: '已归档',
-    className: 'border-slate-200 bg-slate-50 text-slate-600',
+    className: 'border-slate-200/80 bg-slate-50/80 text-slate-600',
     icon: Archive,
   },
 };
@@ -202,12 +202,12 @@ export function ProductDatabaseSettings({ expanded, onToggle }: ProductDatabaseS
 
   return (
     <>
-      <Card className="overflow-hidden">
+      <Card className="overflow-hidden rounded-lg border-white/65 bg-white/66 shadow-apple backdrop-blur-xl">
         <button type="button" onClick={onToggle} className="w-full text-left">
           <CardHeader className="pb-3">
             <div className="flex items-center justify-between gap-4">
               <div className="flex min-w-0 items-center gap-3">
-                <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg bg-cyan-500/10">
+                <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg bg-cyan-500/10 ring-1 ring-cyan-500/10">
                   <Package className="h-4 w-4 text-cyan-600" />
                 </div>
                 <div className="min-w-0">
@@ -219,7 +219,7 @@ export function ProductDatabaseSettings({ expanded, onToggle }: ProductDatabaseS
               </div>
               <div className="flex shrink-0 items-center gap-2">
                 {products.length > 0 && (
-                  <Badge variant="secondary" className="text-xs">
+                  <Badge variant="secondary" className="rounded-md bg-white/75 text-xs">
                     {products.length} 个产品
                   </Badge>
                 )}
@@ -237,7 +237,7 @@ export function ProductDatabaseSettings({ expanded, onToggle }: ProductDatabaseS
           <CardContent className="space-y-4 pt-0">
             <div className="flex flex-col gap-3 lg:flex-row lg:items-center lg:justify-between">
               <div className="flex flex-wrap items-center gap-2">
-                <Badge variant="outline" className="gap-1 text-xs">
+                <Badge variant="outline" className="gap-1 rounded-md border-white/70 bg-white/55 text-xs">
                   <Info className="h-3 w-3" />
                   当前保存在本机浏览器，后续可同步到飞书
                 </Badge>
@@ -247,7 +247,7 @@ export function ProductDatabaseSettings({ expanded, onToggle }: ProductDatabaseS
                   </span>
                 )}
               </div>
-              <Button type="button" size="sm" className="gap-1.5" onClick={openCreateDialog}>
+              <Button type="button" size="sm" className="h-9 gap-1.5 rounded-lg shadow-apple" onClick={openCreateDialog}>
                 <Plus className="h-4 w-4" />
                 添加产品
               </Button>
@@ -260,38 +260,38 @@ export function ProductDatabaseSettings({ expanded, onToggle }: ProductDatabaseS
                   value={searchQuery}
                   onChange={(event) => setSearchQuery(event.target.value)}
                   placeholder="搜索产品、型号、市场或目标红人..."
-                  className="pl-9"
+                  className="h-10 rounded-lg border-white/65 bg-white/75 pl-9"
                 />
               </div>
             )}
 
             {loading ? (
-              <div className="py-10 text-center text-sm text-muted-foreground">正在读取产品资料...</div>
+              <div className="rounded-lg border border-white/60 bg-white/35 py-10 text-center text-sm text-muted-foreground">正在读取产品资料...</div>
             ) : products.length === 0 ? (
-              <div className="flex flex-col items-center justify-center border-y py-10 text-center">
-                <div className="mb-3 flex h-12 w-12 items-center justify-center rounded-lg bg-muted">
+              <div className="flex flex-col items-center justify-center rounded-lg border border-dashed border-white/70 bg-white/35 py-10 text-center">
+                <div className="mb-3 flex h-12 w-12 items-center justify-center rounded-lg bg-white/75 shadow-sm">
                   <Package className="h-6 w-6 text-muted-foreground" />
                 </div>
                 <p className="text-sm font-medium">还没有产品资料</p>
                 <p className="mt-1 max-w-md text-xs leading-5 text-muted-foreground">
                   先录入产品卖点、参数和推广规则。之后 AI 起草开发信或谈判回复时，就能调用这些资料。
                 </p>
-                <Button type="button" variant="outline" size="sm" className="mt-4 gap-1.5" onClick={openCreateDialog}>
+                <Button type="button" variant="outline" size="sm" className="mt-4 h-9 gap-1.5 rounded-lg border-white/70 bg-white/70" onClick={openCreateDialog}>
                   <Plus className="h-4 w-4" />
                   添加第一个产品
                 </Button>
               </div>
             ) : filteredProducts.length === 0 ? (
-              <div className="border-y py-10 text-center text-sm text-muted-foreground">
+              <div className="rounded-lg border border-white/60 bg-white/35 py-10 text-center text-sm text-muted-foreground">
                 没有找到符合条件的产品
               </div>
             ) : (
-              <div className="divide-y border-y">
+              <div className="space-y-3">
                 {filteredProducts.map((product) => {
                   const meta = statusMeta[product.status];
                   const StatusIcon = meta.icon;
                   return (
-                    <div key={product.id} className="flex flex-col gap-3 py-4 lg:flex-row lg:items-start">
+                    <div key={product.id} className="flex flex-col gap-3 rounded-lg border border-white/65 bg-white/55 p-4 transition-colors hover:bg-white/75 lg:flex-row lg:items-start">
                       <div className="min-w-0 flex-1">
                         <div className="flex flex-wrap items-center gap-2">
                           <h4 className="font-medium">{product.name}</h4>
@@ -311,7 +311,7 @@ export function ProductDatabaseSettings({ expanded, onToggle }: ProductDatabaseS
                         <div className="mt-2 flex flex-wrap gap-1.5">
                           {product.marketProfiles.length > 0 ? (
                             product.marketProfiles.map((market) => (
-                              <Badge key={market.id} variant="secondary" className="font-normal">
+                              <Badge key={market.id} variant="secondary" className="rounded-md bg-white/75 font-normal">
                                 {market.targetMarket || market.siteName || '未命名市场'}
                                 {market.targetMarket && market.siteName ? ` · ${market.siteName}` : ''}
                               </Badge>
@@ -328,7 +328,7 @@ export function ProductDatabaseSettings({ expanded, onToggle }: ProductDatabaseS
                             type="button"
                             variant="ghost"
                             size="icon"
-                            className="h-8 w-8"
+                            className="h-8 w-8 rounded-lg hover:bg-white/80"
                             title="打开产品链接"
                             onClick={() => window.open(product.productUrl, '_blank', 'noopener,noreferrer')}
                           >
@@ -339,7 +339,7 @@ export function ProductDatabaseSettings({ expanded, onToggle }: ProductDatabaseS
                           type="button"
                           variant="ghost"
                           size="icon"
-                          className="h-8 w-8"
+                          className="h-8 w-8 rounded-lg hover:bg-white/80"
                           title="编辑产品"
                           onClick={() => openEditDialog(product)}
                         >
@@ -349,7 +349,7 @@ export function ProductDatabaseSettings({ expanded, onToggle }: ProductDatabaseS
                           type="button"
                           variant="ghost"
                           size="icon"
-                          className="h-8 w-8 text-muted-foreground hover:text-destructive"
+                          className="h-8 w-8 rounded-lg text-muted-foreground hover:bg-white/80 hover:text-destructive"
                           title="删除产品"
                           onClick={() => setDeletingProduct(product)}
                         >
@@ -366,8 +366,8 @@ export function ProductDatabaseSettings({ expanded, onToggle }: ProductDatabaseS
       </Card>
 
       <Dialog open={dialogOpen} onOpenChange={setDialogOpen}>
-        <DialogContent className="flex max-h-[92vh] max-w-5xl flex-col gap-0 overflow-hidden p-0">
-          <DialogHeader className="shrink-0 border-b px-6 py-5">
+        <DialogContent className="glass-panel-strong flex max-h-[92vh] max-w-5xl flex-col gap-0 overflow-hidden rounded-lg border-white/65 p-0">
+          <DialogHeader className="shrink-0 border-b border-white/60 bg-white/55 px-6 py-5">
             <DialogTitle>{editingProduct ? '编辑产品资料' : '添加产品资料'}</DialogTitle>
             <DialogDescription>
               可直接使用自然语言填写。市场推广资料支持为同一产品添加多个国家或站点。
@@ -391,6 +391,7 @@ export function ProductDatabaseSettings({ expanded, onToggle }: ProductDatabaseS
                       onChange={(event) => setFormData({ ...formData, name: event.target.value })}
                       placeholder="例如：Aferiy 便携式储能电源"
                       required
+                      className="rounded-lg border-white/65 bg-white/75"
                     />
                   </Field>
                   <Field label="产品型号" icon={Box}>
@@ -398,6 +399,7 @@ export function ProductDatabaseSettings({ expanded, onToggle }: ProductDatabaseS
                       value={formData.model}
                       onChange={(event) => setFormData({ ...formData, model: event.target.value })}
                       placeholder="例如：P280 / Nomad 1800 Pro"
+                      className="rounded-lg border-white/65 bg-white/75"
                     />
                   </Field>
                 </div>
@@ -408,6 +410,7 @@ export function ProductDatabaseSettings({ expanded, onToggle }: ProductDatabaseS
                       value={formData.productUrl}
                       onChange={(event) => setFormData({ ...formData, productUrl: event.target.value })}
                       placeholder="https://..."
+                      className="rounded-lg border-white/65 bg-white/75"
                     />
                   </Field>
                   <Field label="产品状态" icon={Archive}>
@@ -415,7 +418,7 @@ export function ProductDatabaseSettings({ expanded, onToggle }: ProductDatabaseS
                       value={formData.status}
                       onValueChange={(value: ProductStatus) => setFormData({ ...formData, status: value })}
                     >
-                      <SelectTrigger className="w-full">
+                      <SelectTrigger className="w-full rounded-lg border-white/65 bg-white/75">
                         <SelectValue />
                       </SelectTrigger>
                       <SelectContent>
@@ -434,6 +437,7 @@ export function ProductDatabaseSettings({ expanded, onToggle }: ProductDatabaseS
                       onChange={(event) => setFormData({ ...formData, sellingPoints: event.target.value })}
                       placeholder="用自然语言描述核心优势、适用场景、与竞品的差异..."
                       rows={5}
+                      className="rounded-lg border-white/65 bg-white/75"
                     />
                   </Field>
                   <Field label="技术参数" icon={FileText}>
@@ -444,6 +448,7 @@ export function ProductDatabaseSettings({ expanded, onToggle }: ProductDatabaseS
                       }
                       placeholder="容量、功率、接口、尺寸、重量、充电时间等，可直接粘贴完整参数..."
                       rows={5}
+                      className="rounded-lg border-white/65 bg-white/75"
                     />
                   </Field>
                 </div>
@@ -457,6 +462,7 @@ export function ProductDatabaseSettings({ expanded, onToggle }: ProductDatabaseS
                       }
                       placeholder="产品图片、说明书、媒体包、网盘资料等，每行一个链接或附上说明..."
                       rows={4}
+                      className="rounded-lg border-white/65 bg-white/75"
                     />
                   </Field>
                   <Field label="内部备注" icon={FileText}>
@@ -465,6 +471,7 @@ export function ProductDatabaseSettings({ expanded, onToggle }: ProductDatabaseS
                       onChange={(event) => setFormData({ ...formData, notes: event.target.value })}
                       placeholder="记录库存、生命周期、内部负责人或其他仅供团队参考的信息..."
                       rows={4}
+                      className="rounded-lg border-white/65 bg-white/75"
                     />
                   </Field>
                 </div>
@@ -480,7 +487,7 @@ export function ProductDatabaseSettings({ expanded, onToggle }: ProductDatabaseS
                       同一产品可分别设置西班牙、荷兰等市场的链接、预算和合作要求。
                     </p>
                   </div>
-                  <Button type="button" variant="outline" size="sm" className="gap-1.5" onClick={addMarket}>
+                  <Button type="button" variant="outline" size="sm" className="h-9 gap-1.5 rounded-lg border-white/70 bg-white/65" onClick={addMarket}>
                     <Plus className="h-4 w-4" />
                     添加市场
                   </Button>
@@ -488,8 +495,8 @@ export function ProductDatabaseSettings({ expanded, onToggle }: ProductDatabaseS
 
                 <div className="space-y-4">
                   {formData.marketProfiles.map((market, index) => (
-                    <div key={market.id} className="rounded-md border">
-                      <div className="flex items-center justify-between border-b bg-muted/30 px-4 py-3">
+                    <div key={market.id} className="overflow-hidden rounded-lg border border-white/65 bg-white/55">
+                      <div className="flex items-center justify-between border-b border-white/60 bg-white/55 px-4 py-3">
                         <div className="flex items-center gap-2">
                           <Globe2 className="h-4 w-4 text-muted-foreground" />
                           <span className="text-sm font-medium">
@@ -500,7 +507,7 @@ export function ProductDatabaseSettings({ expanded, onToggle }: ProductDatabaseS
                           type="button"
                           variant="ghost"
                           size="icon"
-                          className="h-8 w-8 text-muted-foreground hover:text-destructive"
+                          className="h-8 w-8 rounded-lg text-muted-foreground hover:bg-white/80 hover:text-destructive"
                           title="删除这个市场配置"
                           onClick={() => removeMarket(market.id)}
                         >
@@ -515,6 +522,7 @@ export function ProductDatabaseSettings({ expanded, onToggle }: ProductDatabaseS
                               value={market.targetMarket}
                               onChange={(event) => updateMarket(market.id, 'targetMarket', event.target.value)}
                               placeholder="例如：西班牙、荷兰、德国"
+                              className="rounded-lg border-white/65 bg-white/75"
                             />
                           </Field>
                           <Field label="站点或项目名称" icon={Store}>
@@ -522,6 +530,7 @@ export function ProductDatabaseSettings({ expanded, onToggle }: ProductDatabaseS
                               value={market.siteName}
                               onChange={(event) => updateMarket(market.id, 'siteName', event.target.value)}
                               placeholder="例如：Aferiy ES / 2026 夏季推广"
+                              className="rounded-lg border-white/65 bg-white/75"
                             />
                           </Field>
                         </div>
@@ -531,6 +540,7 @@ export function ProductDatabaseSettings({ expanded, onToggle }: ProductDatabaseS
                             value={market.localProductUrl}
                             onChange={(event) => updateMarket(market.id, 'localProductUrl', event.target.value)}
                             placeholder="该国家或站点对应的产品页面链接"
+                            className="rounded-lg border-white/65 bg-white/75"
                           />
                         </Field>
 
@@ -543,6 +553,7 @@ export function ProductDatabaseSettings({ expanded, onToggle }: ProductDatabaseS
                               }
                               placeholder="描述频道领域、粉丝量级、内容风格、受众和排除条件..."
                               rows={4}
+                              className="rounded-lg border-white/65 bg-white/75"
                             />
                           </Field>
                           <Field label="推广预算" icon={WalletCards}>
@@ -553,6 +564,7 @@ export function ProductDatabaseSettings({ expanded, onToggle }: ProductDatabaseS
                               }
                               placeholder="例如：单条视频 500-1000 欧元，可接受产品置换；总预算约 8000 欧元..."
                               rows={4}
+                              className="rounded-lg border-white/65 bg-white/75"
                             />
                           </Field>
                         </div>
@@ -565,6 +577,7 @@ export function ProductDatabaseSettings({ expanded, onToggle }: ProductDatabaseS
                             }
                             placeholder="视频形式、时长、交付物、发布时间、链接、折扣码、素材授权等..."
                             rows={4}
+                            className="rounded-lg border-white/65 bg-white/75"
                           />
                         </Field>
 
@@ -575,6 +588,7 @@ export function ProductDatabaseSettings({ expanded, onToggle }: ProductDatabaseS
                               onChange={(event) => updateMarket(market.id, 'mustMention', event.target.value)}
                               placeholder="必须出现的卖点、演示场景、品牌名称、活动信息或免责声明..."
                               rows={4}
+                              className="rounded-lg border-white/65 bg-white/75"
                             />
                           </Field>
                           <Field label="禁止宣传的内容" icon={FileText}>
@@ -585,6 +599,7 @@ export function ProductDatabaseSettings({ expanded, onToggle }: ProductDatabaseS
                               }
                               placeholder="不可使用的绝对化说法、竞品攻击、错误参数、安全风险表述等..."
                               rows={4}
+                              className="rounded-lg border-white/65 bg-white/75"
                             />
                           </Field>
                         </div>
@@ -595,6 +610,7 @@ export function ProductDatabaseSettings({ expanded, onToggle }: ProductDatabaseS
                             onChange={(event) => updateMarket(market.id, 'localAssetLinks', event.target.value)}
                             placeholder="当地语言素材、站点图片、价格表、活动页面等..."
                             rows={3}
+                            className="rounded-lg border-white/65 bg-white/75"
                           />
                         </Field>
                       </div>
@@ -604,11 +620,11 @@ export function ProductDatabaseSettings({ expanded, onToggle }: ProductDatabaseS
               </section>
             </div>
 
-            <DialogFooter className="shrink-0 border-t bg-background px-6 py-4">
-              <Button type="button" variant="outline" onClick={() => setDialogOpen(false)}>
+            <DialogFooter className="shrink-0 border-t border-white/60 bg-white/65 px-6 py-4">
+              <Button type="button" variant="outline" className="h-10 rounded-lg border-white/70 bg-white/70" onClick={() => setDialogOpen(false)}>
                 取消
               </Button>
-              <Button type="submit">{editingProduct ? '保存修改' : '添加产品'}</Button>
+              <Button type="submit" className="h-10 rounded-lg shadow-apple">{editingProduct ? '保存修改' : '添加产品'}</Button>
             </DialogFooter>
           </form>
         </DialogContent>
@@ -620,7 +636,7 @@ export function ProductDatabaseSettings({ expanded, onToggle }: ProductDatabaseS
           if (!open) setDeletingProduct(null);
         }}
       >
-        <AlertDialogContent>
+        <AlertDialogContent className="glass-panel-strong rounded-lg border-white/65">
           <AlertDialogHeader>
             <AlertDialogTitle>删除这条产品资料？</AlertDialogTitle>
             <AlertDialogDescription>

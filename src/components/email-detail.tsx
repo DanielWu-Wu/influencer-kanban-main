@@ -861,15 +861,15 @@ export function EmailDetail({ thread, onBack, onThreadUpdated }: EmailDetailProp
   };
 
   return (
-    <div className="flex h-full min-h-0 flex-col overflow-hidden">
+    <div className="flex h-full min-h-0 flex-col overflow-hidden bg-white/30">
       {/* 头部 */}
-      <div className="flex items-center justify-between px-4 py-3 border-b bg-background">
+      <div className="flex items-center justify-between border-b border-white/55 bg-white/68 px-4 py-3 backdrop-blur-xl">
         <div className="flex items-center gap-3">
-          <Button variant="ghost" size="icon" onClick={onBack} className="h-8 w-8">
+          <Button variant="ghost" size="icon" onClick={onBack} className="h-9 w-9 rounded-lg hover:bg-white/70">
             <ArrowLeft className="w-4 h-4" />
           </Button>
           <div className="min-w-0">
-            <h2 className="font-semibold truncate">{thread.subject || '(无主题)'}</h2>
+            <h2 className="truncate text-base font-semibold">{thread.subject || '(无主题)'}</h2>
             <p className="text-xs text-muted-foreground">
               {thread.messages.length} 封邮件 · {thread.participantCount} 位参与者
             </p>
@@ -879,7 +879,7 @@ export function EmailDetail({ thread, onBack, onThreadUpdated }: EmailDetailProp
           <Button
             variant="ghost"
             size="icon"
-            className="h-8 w-8"
+            className="h-9 w-9 rounded-lg hover:bg-white/70"
             title="AI 辅助回复"
             onClick={() => {
               setReplyMode('ai');
@@ -888,10 +888,10 @@ export function EmailDetail({ thread, onBack, onThreadUpdated }: EmailDetailProp
           >
             <Sparkles className="w-4 h-4 text-primary" />
           </Button>
-          <Button variant="ghost" size="icon" className="h-8 w-8">
+          <Button variant="ghost" size="icon" className="h-9 w-9 rounded-lg hover:bg-white/70">
             <Reply className="w-4 h-4" />
           </Button>
-          <Button variant="ghost" size="icon" className="h-8 w-8">
+          <Button variant="ghost" size="icon" className="h-9 w-9 rounded-lg hover:bg-white/70">
             <MoreHorizontal className="w-4 h-4" />
           </Button>
         </div>
@@ -899,14 +899,14 @@ export function EmailDetail({ thread, onBack, onThreadUpdated }: EmailDetailProp
 
       {/* 飞书红人资料 */}
       {(creatorProfileLoading || creatorProfile || creatorProfileError) && (
-        <div className="shrink-0 border-b bg-muted/20 px-4 py-3">
+        <div className="shrink-0 border-b border-white/55 bg-white/45 px-4 py-3 backdrop-blur-xl">
           {creatorProfileLoading ? (
-            <div className="flex items-center gap-2 text-xs text-muted-foreground">
+            <div className="glass-control flex items-center gap-2 px-3 py-2 text-xs text-muted-foreground">
               <Loader2 className="h-3.5 w-3.5 animate-spin" />
               正在匹配飞书红人资料...
             </div>
           ) : creatorProfile ? (
-            <div className="space-y-2 rounded-md border bg-background px-3 py-2">
+            <div className="space-y-2 rounded-lg border border-white/65 bg-white/72 px-3 py-2 shadow-apple">
               <div className="flex flex-wrap items-center gap-x-4 gap-y-1 text-sm">
                 <div className="flex min-w-[180px] items-center gap-2 font-medium">
                   <UserRound className="h-4 w-4 text-primary" />
@@ -924,10 +924,10 @@ export function EmailDetail({ thread, onBack, onThreadUpdated }: EmailDetailProp
                 <span className="text-xs text-muted-foreground">
                   邮箱：<span className="text-foreground">{creatorProfile.email}</span>
                 </span>
-                <Badge variant="secondary" className="h-5 rounded-md px-2 text-[11px]">
+                <Badge variant="secondary" className="h-5 rounded-md bg-white/80 px-2 text-[11px]">
                   {creatorProfile.collaborationStatus}
                 </Badge>
-                <Badge variant="outline" className="h-5 rounded-md px-2 text-[11px]">
+                <Badge variant="outline" className="h-5 rounded-md border-white/65 bg-white/50 px-2 text-[11px]">
                   {creatorProfile.hasReply}
                 </Badge>
               </div>
@@ -939,7 +939,7 @@ export function EmailDetail({ thread, onBack, onThreadUpdated }: EmailDetailProp
                       key={action.id}
                       variant={pendingProfileAction?.id === action.id ? 'default' : 'outline'}
                       size="sm"
-                      className="h-7 px-2 text-xs"
+                      className="h-8 rounded-lg px-2 text-xs"
                       disabled={profileActionLoading}
                       onClick={() => {
                         setPendingProfileAction(action);
@@ -954,14 +954,14 @@ export function EmailDetail({ thread, onBack, onThreadUpdated }: EmailDetailProp
               )}
 
               {pendingProfileAction && (
-                <div className="rounded-md border border-primary/20 bg-primary/5 px-3 py-2 text-xs">
+                <div className="rounded-lg border border-primary/20 bg-primary/5 px-3 py-2 text-xs shadow-sm">
                   <div className="flex flex-wrap items-start justify-between gap-3">
                     <div className="min-w-0 flex-1">
                       <p className="font-medium">准备写回飞书：{pendingProfileAction.label}</p>
                       <p className="mt-1 text-muted-foreground">{pendingProfileAction.description}</p>
                       <div className="mt-2 flex flex-wrap gap-2">
                         {(Object.entries(pendingProfileAction.fields) as Array<[FeishuFieldKey, string]>).map(([fieldKey, value]) => (
-                          <span key={fieldKey} className="rounded-md bg-background px-2 py-1">
+                          <span key={fieldKey} className="rounded-md bg-white/80 px-2 py-1">
                             {getQuickFieldLabel(fieldKey)} → {value}
                           </span>
                         ))}
@@ -970,7 +970,7 @@ export function EmailDetail({ thread, onBack, onThreadUpdated }: EmailDetailProp
                     <div className="flex shrink-0 gap-2">
                       <Button
                         size="sm"
-                        className="h-7 px-2 text-xs"
+                        className="h-8 rounded-lg px-2 text-xs"
                         disabled={profileActionLoading}
                         onClick={() => void executeProfileAction()}
                       >
@@ -984,7 +984,7 @@ export function EmailDetail({ thread, onBack, onThreadUpdated }: EmailDetailProp
                       <Button
                         variant="outline"
                         size="sm"
-                        className="h-7 px-2 text-xs"
+                        className="h-8 rounded-lg px-2 text-xs"
                         disabled={profileActionLoading}
                         onClick={() => setPendingProfileAction(null)}
                       >
@@ -998,7 +998,7 @@ export function EmailDetail({ thread, onBack, onThreadUpdated }: EmailDetailProp
               {(profileActionMessage || profileActionLogs.length > 0) && (
                 <div className="flex flex-wrap items-center gap-2 text-xs">
                   {profileActionMessage && (
-                    <span className="inline-flex items-center gap-1 rounded-md bg-muted px-2 py-1">
+                    <span className="inline-flex items-center gap-1 rounded-md bg-white/75 px-2 py-1">
                       {profileActionMessage.startsWith('写回失败') ? (
                         <XCircle className="h-3.5 w-3.5 text-destructive" />
                       ) : (
@@ -1008,7 +1008,7 @@ export function EmailDetail({ thread, onBack, onThreadUpdated }: EmailDetailProp
                     </span>
                   )}
                   {profileActionLogs.slice(0, 3).map((log) => (
-                    <span key={log.id} className="rounded-md border px-2 py-1 text-muted-foreground">
+                    <span key={log.id} className="rounded-md border border-white/65 bg-white/55 px-2 py-1 text-muted-foreground">
                       {log.status === 'synced' ? '成功' : '失败'} · {log.event.summary}
                     </span>
                   ))}
@@ -1016,7 +1016,7 @@ export function EmailDetail({ thread, onBack, onThreadUpdated }: EmailDetailProp
               )}
             </div>
           ) : (
-            <div className="flex items-center gap-2 rounded-md border border-amber-200 bg-amber-50 px-3 py-2 text-xs text-amber-700">
+            <div className="flex items-center gap-2 rounded-lg border border-amber-200 bg-amber-50/80 px-3 py-2 text-xs text-amber-700">
               <Database className="h-3.5 w-3.5" />
               {creatorProfileError}
             </div>
@@ -1025,12 +1025,12 @@ export function EmailDetail({ thread, onBack, onThreadUpdated }: EmailDetailProp
       )}
 
       {messageActionError && (
-        <div className="shrink-0 border-b bg-destructive/5 px-4 py-2 text-xs text-destructive">
+        <div className="shrink-0 border-b border-destructive/15 bg-destructive/5 px-4 py-2 text-xs text-destructive">
           {messageActionError}
         </div>
       )}
       <ScrollArea className="min-h-0 flex-1">
-        <div className="p-4 space-y-4">
+        <div className="space-y-4 p-4">
           {displayMessages.map((message, index) => {
             const sender = getDisplayEmail(message.from);
             const translation = getTranslation(message.id);
@@ -1047,23 +1047,23 @@ export function EmailDetail({ thread, onBack, onThreadUpdated }: EmailDetailProp
                 {/* 邮件头 */}
                 <div 
                   className={`
-                    rounded-2xl border p-4 transition-all cursor-pointer
-                    ${isNewest ? 'bg-primary/5 border-primary/20' : 'bg-card'}
+                    cursor-pointer rounded-lg border p-4 shadow-apple transition-all duration-200
+                    ${isNewest ? 'border-primary/20 bg-primary/5' : 'border-white/65 bg-white/72'}
                   `}
                   onClick={() => toggleMessage(message.id)}
                 >
                   <div className="flex items-start justify-between gap-4">
-                    <div className="flex items-start gap-3 min-w-0">
+                    <div className="flex min-w-0 items-start gap-3">
                       {/* 头像 */}
-                      <div className="w-10 h-10 rounded-full bg-gradient-to-br from-blue-100 to-blue-200 flex items-center justify-center flex-shrink-0">
-                        <span className="text-sm font-medium text-blue-600">
+                      <div className="flex h-10 w-10 flex-shrink-0 items-center justify-center rounded-lg bg-primary/10">
+                        <span className="text-sm font-medium text-primary">
                           {sender.name.charAt(0).toUpperCase()}
                         </span>
                       </div>
                       
                       {/* 发件人信息 */}
                       <div className="min-w-0">
-                        <div className="flex items-center gap-2 mb-0.5">
+                        <div className="mb-0.5 flex items-center gap-2">
                           <span className="font-medium">{sender.name}</span>
                           <span className="text-xs text-muted-foreground">&lt;{sender.email}&gt;</span>
                         </div>
@@ -1073,11 +1073,11 @@ export function EmailDetail({ thread, onBack, onThreadUpdated }: EmailDetailProp
                       </div>
                     </div>
 
-                    <div className="flex items-center gap-2 flex-shrink-0">
+                    <div className="flex flex-shrink-0 items-center gap-2">
                       <Button
                         variant="ghost"
                         size="icon"
-                        className="h-8 w-8"
+                        className="h-9 w-9 rounded-lg hover:bg-white/70"
                         title="转发这封邮件"
                         onClick={(event) => {
                           event.stopPropagation();
@@ -1090,7 +1090,7 @@ export function EmailDetail({ thread, onBack, onThreadUpdated }: EmailDetailProp
                       <Button
                         variant="ghost"
                         size="icon"
-                        className="h-8 w-8"
+                        className="h-9 w-9 rounded-lg hover:bg-white/70"
                         title={message.isRead ? '\u6807\u8bb0\u4e3a\u672a\u8bfb' : '\u6807\u8bb0\u4e3a\u5df2\u8bfb'}
                         disabled={changingReadStateId !== null}
                         onClick={(e) => {
@@ -1110,12 +1110,12 @@ export function EmailDetail({ thread, onBack, onThreadUpdated }: EmailDetailProp
                         </span>
                       </Button>
                       {message.hasAttachments && (
-                        <Badge variant="secondary" className="text-xs">有附件</Badge>
+                        <Badge variant="secondary" className="rounded-md bg-white/80 text-xs">有附件</Badge>
                       )}
                       <Button 
                         variant="ghost" 
                         size="icon" 
-                        className="h-8 w-8"
+                        className="h-9 w-9 rounded-lg hover:bg-white/70"
                         onClick={(e) => {
                           e.stopPropagation();
                           handleTranslate(message);
@@ -1146,7 +1146,7 @@ export function EmailDetail({ thread, onBack, onThreadUpdated }: EmailDetailProp
 
                       {showingTranslationIds.has(message.id) && translation ? (
                         <div className="prose prose-sm max-w-none">
-                          <pre className="max-w-full whitespace-pre-wrap break-words rounded-xl bg-blue-50 p-4 font-sans text-sm">
+                          <pre className="max-w-full whitespace-pre-wrap break-words rounded-lg border border-blue-100 bg-blue-50/80 p-4 font-sans text-sm">
                             {translation.translatedText}
                           </pre>
                           {translationProgress[message.id] && (
@@ -1158,12 +1158,12 @@ export function EmailDetail({ thread, onBack, onThreadUpdated }: EmailDetailProp
                         </div>
                       ) : displayHtmlBody ? (
                         <div
-                          className="email-html-content max-w-full overflow-hidden rounded-xl bg-white p-4 text-sm"
+                          className="email-html-content max-w-full overflow-hidden rounded-lg border border-white/65 bg-white/85 p-4 text-sm shadow-sm"
                           dangerouslySetInnerHTML={{ __html: sanitizeEmailHtml(displayHtmlBody) }}
                         />
                       ) : (
                         <div className="prose prose-sm max-w-none">
-                          <pre className="max-w-full whitespace-pre-wrap break-words rounded-xl bg-accent/30 p-4 font-sans text-sm">
+                          <pre className="max-w-full whitespace-pre-wrap break-words rounded-lg border border-white/65 bg-white/75 p-4 font-sans text-sm">
                             {displayBody}
                           </pre>
                         </div>
@@ -1178,7 +1178,7 @@ export function EmailDetail({ thread, onBack, onThreadUpdated }: EmailDetailProp
                         <Button 
                           size="sm" 
                           variant="outline" 
-                          className="h-8"
+                          className="h-8 rounded-lg bg-white/75"
                           onClick={() => copyToClipboard(displayBody)}
                         >
                           <Copy className="w-3 h-3 mr-1" />
@@ -1187,7 +1187,7 @@ export function EmailDetail({ thread, onBack, onThreadUpdated }: EmailDetailProp
                         <Button
                           size="sm"
                           variant="outline"
-                          className="h-8"
+                          className="h-8 rounded-lg bg-white/75"
                           onClick={() => handleTranslate(message)}
                           disabled={translatingIds.has(message.id)}
                         >
@@ -1217,12 +1217,12 @@ export function EmailDetail({ thread, onBack, onThreadUpdated }: EmailDetailProp
       </ScrollArea>
 
       {/* 底部回复区域 */}
-      <div className={`${showComposer ? 'max-h-[72%] overflow-y-auto' : ''} shrink-0 border-t bg-background p-4`}>
+      <div className={`${showComposer ? 'max-h-[72%] overflow-y-auto' : ''} shrink-0 border-t border-white/55 bg-white/72 p-4 backdrop-blur-xl`}>
         {!showComposer ? (
           <div className="flex items-center justify-center gap-3">
             <Button 
               variant="outline" 
-              className="flex-1"
+              className="h-10 flex-1 rounded-lg bg-white/80"
               onClick={() => {
                 setReplyMode('compose');
                 setShowComposer(true);
@@ -1232,7 +1232,7 @@ export function EmailDetail({ thread, onBack, onThreadUpdated }: EmailDetailProp
               回复
             </Button>
             <Button 
-              className="flex-1"
+              className="h-10 flex-1 rounded-lg shadow-apple"
               onClick={() => {
                 setReplyMode('ai');
                 setShowComposer(true);
@@ -1280,16 +1280,16 @@ function AttachmentList({ attachments }: { attachments: GmailAttachment[] }) {
             key={`${attachment.id}-${attachment.filename}`}
             href={attachment.dataUrl}
             download={attachment.filename}
-            className="flex min-w-0 items-center gap-3 rounded-lg border bg-background p-3 hover:bg-muted/50"
+            className="flex min-w-0 items-center gap-3 rounded-lg border border-white/65 bg-white/72 p-3 shadow-sm transition-colors hover:bg-white"
           >
             {attachment.mimeType.startsWith('image/') && attachment.dataUrl ? (
               <img
                 src={attachment.dataUrl}
                 alt={attachment.filename}
-                className="h-12 w-12 flex-shrink-0 rounded object-cover"
+                className="h-12 w-12 flex-shrink-0 rounded-lg object-cover"
               />
             ) : (
-              <div className="flex h-12 w-12 flex-shrink-0 items-center justify-center rounded bg-muted">
+              <div className="flex h-12 w-12 flex-shrink-0 items-center justify-center rounded-lg bg-white/70">
                 <Paperclip className="w-5 h-5 text-muted-foreground" />
               </div>
             )}

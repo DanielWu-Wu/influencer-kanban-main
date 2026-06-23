@@ -144,11 +144,11 @@ export function CloudSyncSettings() {
   };
 
   return (
-    <Card>
+    <Card className="overflow-hidden rounded-lg border-white/65 bg-white/66 shadow-apple backdrop-blur-xl">
       <CardHeader className="pb-3">
         <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
           <div className="flex items-center gap-3">
-            <div className="flex h-9 w-9 items-center justify-center rounded-lg bg-emerald-500/10">
+            <div className="flex h-9 w-9 items-center justify-center rounded-lg bg-emerald-500/10 ring-1 ring-emerald-500/10">
               <Cloud className="h-4 w-4 text-emerald-600" />
             </div>
             <div>
@@ -158,7 +158,7 @@ export function CloudSyncSettings() {
               </CardDescription>
             </div>
           </div>
-          <Badge variant="outline" className="w-fit gap-1">
+          <Badge variant="outline" className="w-fit gap-1 rounded-md border-white/70 bg-white/55">
             <ShieldCheck className="h-3 w-3" />
             账号数据隔离
           </Badge>
@@ -166,21 +166,21 @@ export function CloudSyncSettings() {
       </CardHeader>
       <CardContent className="space-y-4">
         <div className="grid gap-3 sm:grid-cols-2">
-          <div className="border-l-2 border-slate-300 pl-3">
+          <div className="rounded-lg border border-white/60 bg-white/45 p-3">
             <p className="text-xs text-muted-foreground">本机产品资料</p>
             <p className="mt-1 text-lg font-semibold">{localProductCount}</p>
           </div>
-          <div className="border-l-2 border-emerald-400 pl-3">
+          <div className="rounded-lg border border-emerald-200/80 bg-emerald-50/65 p-3">
             <p className="text-xs text-muted-foreground">云端产品资料</p>
             <p className="mt-1 text-lg font-semibold">{cloudProductCount}</p>
           </div>
         </div>
 
         {message && (
-          <div className={`rounded-md p-3 text-sm ${
+          <div className={`rounded-lg border p-3 text-sm ${
             state === 'error'
-              ? 'bg-red-50 text-red-700'
-              : 'bg-emerald-50 text-emerald-700'
+              ? 'border-red-200/80 bg-red-50/80 text-red-700'
+              : 'border-emerald-200/80 bg-emerald-50/80 text-emerald-700'
           }`}>
             {message}
           </div>
@@ -189,7 +189,7 @@ export function CloudSyncSettings() {
         <Button
           type="button"
           variant={state === 'complete' ? 'outline' : 'default'}
-          className="w-full gap-2"
+          className="h-10 w-full gap-2 rounded-lg"
           onClick={uploadLocalData}
           disabled={state === 'checking' || state === 'uploading'}
         >

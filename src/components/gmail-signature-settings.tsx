@@ -37,23 +37,24 @@ export function GmailSignatureSettings({ onBack }: { onBack: () => void }) {
   return (
     <div className="h-full overflow-y-auto">
       <div className="mx-auto w-full max-w-3xl px-6 py-6">
-        <div className="border-b pb-4">
-          <div className="flex items-center gap-2">
-            <Button variant="ghost" size="icon" className="h-8 w-8 md:hidden" onClick={onBack}>
-              <ArrowLeft className="h-4 w-4" />
-              <span className="sr-only">返回邮箱</span>
-            </Button>
-            <Mail className="h-5 w-5 text-red-500" />
-            <h2 className="text-lg font-semibold">Gmail 设置</h2>
+        <div className="glass-panel-strong rounded-lg p-5">
+          <div className="border-b border-white/60 pb-4">
+            <div className="flex items-center gap-2">
+              <Button variant="ghost" size="icon" className="h-8 w-8 rounded-lg md:hidden" onClick={onBack}>
+                <ArrowLeft className="h-4 w-4" />
+                <span className="sr-only">返回邮箱</span>
+              </Button>
+              <Mail className="h-5 w-5 text-red-500" />
+              <h2 className="text-lg font-semibold">Gmail 设置</h2>
+            </div>
+            <p className="mt-1 text-sm text-muted-foreground">
+              管理通过红人工作台发送的邮件行为。
+            </p>
           </div>
-          <p className="mt-1 text-sm text-muted-foreground">
-            管理通过红人工作台发送的邮件行为。
-          </p>
-        </div>
 
-        <section className="border-b py-6">
+          <section className="border-b border-white/60 py-6">
           <div className="mb-5 flex items-start gap-3">
-            <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-md bg-primary/10">
+            <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg bg-primary/10 ring-1 ring-primary/10">
               <Clock3 className="h-4 w-4 text-primary" />
             </div>
             <div>
@@ -64,7 +65,7 @@ export function GmailSignatureSettings({ onBack }: { onBack: () => void }) {
             </div>
           </div>
 
-          <div className="rounded-md border p-4">
+          <div className="rounded-lg border border-white/65 bg-white/55 p-4">
             <div className="flex items-center gap-4">
               <Slider
                 value={[sendDelay]}
@@ -81,7 +82,7 @@ export function GmailSignatureSettings({ onBack }: { onBack: () => void }) {
                   max={60}
                   step={1}
                   value={sendDelay}
-                  className="w-20 text-center"
+                  className="w-20 rounded-lg border-white/65 bg-white/75 text-center"
                   onChange={(event) => setSendDelay(clampDelay(Number(event.target.value)))}
                 />
                 <span className="text-sm text-muted-foreground">秒</span>
@@ -107,22 +108,23 @@ export function GmailSignatureSettings({ onBack }: { onBack: () => void }) {
             value={signature}
             onChange={(event) => setSignature(event.target.value)}
             placeholder={'例如：\nBest regards,\nDaniel Wu\nDigital Marketing Specialist | Aferiy'}
-            className="min-h-44 resize-y"
+            className="min-h-44 resize-y rounded-lg border-white/65 bg-white/75"
           />
 
-          <div className="mt-8 border-t pt-6">
+          <div className="mt-8 border-t border-white/60 pt-6">
             <p className="mb-3 text-sm font-medium">签名预览</p>
-            <div className="min-h-28 whitespace-pre-wrap rounded-md border bg-white p-4 text-sm">
+            <div className="min-h-28 whitespace-pre-wrap rounded-lg border border-white/65 bg-white/75 p-4 text-sm">
               {signature || <span className="text-muted-foreground">尚未设置邮件签名</span>}
             </div>
           </div>
         </section>
 
-        <div className="sticky bottom-0 flex justify-end border-t bg-background py-4">
-          <Button onClick={handleSave} className="gap-2">
+        <div className="sticky bottom-0 flex justify-end border-t border-white/60 bg-white/65 py-4 backdrop-blur-xl">
+          <Button onClick={handleSave} className="h-10 gap-2 rounded-lg shadow-apple">
             {saved ? <Check className="h-4 w-4" /> : <Save className="h-4 w-4" />}
             {saved ? '已保存' : '保存 Gmail 设置'}
           </Button>
+        </div>
         </div>
       </div>
     </div>

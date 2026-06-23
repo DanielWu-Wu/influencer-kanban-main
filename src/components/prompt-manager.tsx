@@ -180,7 +180,7 @@ export default function PromptManager() {
   return (
     <div className="flex h-full flex-col overflow-hidden">
       <Toaster richColors position="top-center" />
-      <div className="mb-4 flex shrink-0 items-center justify-between px-1">
+      <div className="mb-4 flex shrink-0 items-center justify-between rounded-lg border border-white/60 bg-white/45 px-4 py-3 shadow-apple backdrop-blur-xl">
         <div>
           <h2 className="flex items-center gap-2 text-lg font-semibold">
             <Sparkles className="h-5 w-5" />
@@ -190,13 +190,13 @@ export default function PromptManager() {
             分别设置翻译、合作判断和邮件起草规则，并保存常用模板
           </p>
         </div>
-        <Button onClick={handleSaveAll} size="sm" className="gap-1.5">
+        <Button onClick={handleSaveAll} size="sm" className="h-9 gap-1.5 rounded-lg shadow-apple">
           {saved ? <CheckCircle2 className="h-4 w-4" /> : <Save className="h-4 w-4" />}
           {saved ? '已保存' : '保存全部'}
         </Button>
       </div>
 
-      <Separator className="mb-4 shrink-0" />
+      <Separator className="mb-4 shrink-0 bg-white/60" />
 
       <div className="min-h-0 flex-1 space-y-4 overflow-y-auto pr-1">
         {PROMPT_SECTIONS.map((section) => {
@@ -209,7 +209,7 @@ export default function PromptManager() {
           const modified = prompts[section.type] !== section.defaultValue;
 
           return (
-            <Card key={section.type} className="overflow-hidden">
+            <Card key={section.type} className="overflow-hidden rounded-lg border-white/65 bg-white/66 shadow-apple backdrop-blur-xl">
               <button
                 type="button"
                 className="w-full text-left"
@@ -218,7 +218,7 @@ export default function PromptManager() {
                 <CardHeader className="pb-3">
                   <div className="flex items-center justify-between">
                     <div className="flex items-center gap-3">
-                      <div className="flex h-9 w-9 items-center justify-center rounded-md bg-primary/10">
+                      <div className="flex h-9 w-9 items-center justify-center rounded-lg bg-primary/10 ring-1 ring-primary/10">
                         <Icon className="h-4 w-4 text-primary" />
                       </div>
                       <div>
@@ -229,7 +229,7 @@ export default function PromptManager() {
                       </div>
                     </div>
                     <div className="flex items-center gap-2">
-                      {modified && <Badge variant="secondary">已修改</Badge>}
+                      {modified && <Badge variant="secondary" className="rounded-md bg-white/75">已修改</Badge>}
                       {expanded
                         ? <ChevronUp className="h-4 w-4 text-muted-foreground" />
                         : <ChevronDown className="h-4 w-4 text-muted-foreground" />}
@@ -240,13 +240,13 @@ export default function PromptManager() {
 
               {expanded && (
                 <CardContent className="space-y-4 pt-0">
-                  <div className="rounded-md border bg-muted/20 p-3">
+                  <div className="rounded-lg border border-white/65 bg-white/55 p-3">
                     <div className="mb-2 flex items-center justify-between">
                       <label className="text-sm font-medium">提示词模板</label>
                       <Button
                         variant="ghost"
                         size="sm"
-                        className="h-8 gap-1 text-muted-foreground"
+                        className="h-8 gap-1 rounded-lg text-muted-foreground hover:bg-white/80"
                         onClick={() => setPrompts((current) => ({
                           ...current,
                           [section.type]: section.defaultValue,
@@ -259,7 +259,7 @@ export default function PromptManager() {
                     <div className="flex gap-2">
                       <select
                         value={selectedTemplates[section.type]}
-                        className="h-9 min-w-0 flex-1 rounded-md border bg-background px-3 text-sm"
+                        className="h-9 min-w-0 flex-1 rounded-lg border border-white/65 bg-white/75 px-3 text-sm outline-none"
                         onChange={(event) => applyTemplate(section.type, event.target.value)}
                       >
                         {templates.map((template) => (
@@ -271,7 +271,7 @@ export default function PromptManager() {
                       <Button
                         variant="outline"
                         size="icon"
-                        className="h-9 w-9"
+                        className="h-9 w-9 rounded-lg border-white/70 bg-white/65"
                         title="删除当前自定义模板"
                         disabled={!selected || selected.builtIn}
                         onClick={() => deleteTemplate(section.type)}
@@ -283,6 +283,7 @@ export default function PromptManager() {
                       <Input
                         value={templateNames[section.type]}
                         placeholder="输入新模板名称"
+                        className="rounded-lg border-white/65 bg-white/75"
                         onChange={(event) => setTemplateNames((current) => ({
                           ...current,
                           [section.type]: event.target.value,
@@ -290,7 +291,7 @@ export default function PromptManager() {
                       />
                       <Button
                         variant="outline"
-                        className="shrink-0 gap-1.5"
+                        className="h-9 shrink-0 gap-1.5 rounded-lg border-white/70 bg-white/65"
                         onClick={() => saveTemplate(section.type)}
                       >
                         <Plus className="h-4 w-4" />
@@ -305,7 +306,7 @@ export default function PromptManager() {
                   <Textarea
                     value={prompts[section.type]}
                     rows={section.rows}
-                    className="resize-y font-mono text-sm leading-relaxed"
+                    className="resize-y rounded-lg border-white/65 bg-white/75 font-mono text-sm leading-relaxed"
                     onChange={(event) => setPrompts((current) => ({
                       ...current,
                       [section.type]: event.target.value,

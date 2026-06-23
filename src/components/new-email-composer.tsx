@@ -234,8 +234,8 @@ export function NewEmailComposer({
 
   return (
     <Dialog open={open} onOpenChange={handleOpenChange}>
-      <DialogContent className="bottom-4 left-auto right-4 top-auto flex h-[min(820px,calc(100vh-2rem))] w-[min(900px,calc(100vw-2rem))] max-w-[900px] translate-x-0 translate-y-0 flex-col gap-0 overflow-hidden rounded-md p-0 shadow-2xl sm:max-w-[900px] max-sm:inset-0 max-sm:h-dvh max-sm:w-full max-sm:max-w-none max-sm:rounded-none">
-        <DialogHeader className="shrink-0 border-b bg-muted/40 px-5 py-3">
+      <DialogContent className="glass-panel-strong bottom-4 left-auto right-4 top-auto flex h-[min(820px,calc(100vh-2rem))] w-[min(980px,calc(100vw-2rem))] max-w-[980px] translate-x-0 translate-y-0 flex-col gap-0 overflow-hidden rounded-lg border-white/65 p-0 sm:max-w-[980px] max-sm:inset-0 max-sm:h-dvh max-sm:w-full max-sm:max-w-none max-sm:rounded-none">
+        <DialogHeader className="shrink-0 border-b border-white/60 bg-white/60 px-5 py-3">
           <DialogTitle>{title}</DialogTitle>
           <DialogDescription>{description}</DialogDescription>
         </DialogHeader>
@@ -249,6 +249,7 @@ export function NewEmailComposer({
               value={to}
               placeholder="creator@example.com"
               onChange={(event) => setTo(event.target.value)}
+              className="rounded-lg border-white/65 bg-white/75"
             />
             <label htmlFor="new-email-subject" className="text-sm text-muted-foreground">主题</label>
             <Input
@@ -256,6 +257,7 @@ export function NewEmailComposer({
               value={subject}
               placeholder="填写邮件主题"
               onChange={(event) => setSubject(event.target.value)}
+              className="rounded-lg border-white/65 bg-white/75"
             />
           </div>
 
@@ -281,7 +283,7 @@ export function NewEmailComposer({
               type="button"
               variant="outline"
               size="sm"
-              className="gap-1.5"
+              className="h-9 gap-1.5 rounded-lg border-white/70 bg-white/70"
               onClick={() => fileInputRef.current?.click()}
             >
               <Paperclip className="h-4 w-4" />
@@ -290,7 +292,7 @@ export function NewEmailComposer({
           </div>
 
           {attachments.length > 0 && (
-            <div className="max-h-28 shrink-0 space-y-2 overflow-y-auto rounded-md border p-2">
+            <div className="max-h-28 shrink-0 space-y-2 overflow-y-auto rounded-lg border border-white/65 bg-white/55 p-2">
               {attachments.map((file, index) => (
                 <div key={`${file.name}-${index}`} className="flex items-center gap-2 px-2 py-1">
                   <Paperclip className="h-4 w-4 text-muted-foreground" />
@@ -299,7 +301,7 @@ export function NewEmailComposer({
                     type="button"
                     variant="ghost"
                     size="icon"
-                    className="h-7 w-7"
+                    className="h-7 w-7 rounded-lg"
                     title="移除附件"
                     onClick={() => setAttachments((current) =>
                       current.filter((_, fileIndex) => fileIndex !== index))}
@@ -314,10 +316,10 @@ export function NewEmailComposer({
           {error && <p className="shrink-0 text-sm text-destructive">{error}</p>}
         </div>
 
-        <DialogFooter className="shrink-0 border-t bg-background px-5 py-3">
+        <DialogFooter className="shrink-0 border-t border-white/60 bg-white/65 px-5 py-3">
           <Button
             variant="outline"
-            className="gap-2"
+            className="h-10 gap-2 rounded-lg border-white/70 bg-white/70"
             disabled={saving || sending}
             onClick={saveDraft}
           >
@@ -325,7 +327,7 @@ export function NewEmailComposer({
             保存为草稿
           </Button>
           <Button
-            className="gap-2"
+            className="h-10 gap-2 rounded-lg shadow-apple"
             disabled={saving || sending}
             onClick={sendEmail}
           >

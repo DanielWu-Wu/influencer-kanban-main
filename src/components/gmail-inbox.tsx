@@ -875,7 +875,9 @@ export function GmailInbox({
   if (!auth?.isConnected) {
     return (
       <div className="flex h-full flex-col items-center justify-center p-6 text-center">
-        <Mail className="mb-4 h-10 w-10 text-red-500" />
+        <div className="mb-4 flex h-14 w-14 items-center justify-center rounded-lg border border-white/70 bg-white/75 shadow-apple">
+          <Mail className="h-7 w-7 text-red-500" />
+        </div>
         <h3 className="mb-2 text-lg font-semibold">{'\u8fde\u63a5 Gmail'}</h3>
         <p className="mb-4 max-w-xs text-sm text-muted-foreground">
           {'\u5b8c\u6210 Google \u6388\u6743\u540e\uff0c\u5373\u53ef\u5728\u5de5\u4f5c\u53f0\u5185\u7ba1\u7406\u90ae\u4ef6\u3002'}
@@ -890,12 +892,12 @@ export function GmailInbox({
 
   return (
     <div className="flex h-full min-h-0 flex-col overflow-hidden">
-      <div className="flex shrink-0 items-center justify-between border-b px-4 py-3">
+      <div className="flex shrink-0 items-center justify-between border-b border-white/55 bg-white/62 px-4 py-3 backdrop-blur-xl">
         <div className="flex min-w-0 flex-col">
           <div className="flex min-w-0 items-center gap-2">
-            <h2 className="truncate font-semibold">{MAILBOX_LABELS[mailbox]}</h2>
+            <h2 className="section-title truncate">{MAILBOX_LABELS[mailbox]}</h2>
             {(mailbox === 'inbox' || mailbox === 'unread') && (
-              <Badge variant="secondary">
+              <Badge variant="secondary" className="rounded-md bg-white/80">
                 {unreadBadgeCount} {'\u672a\u8bfb'}
               </Badge>
             )}
@@ -915,7 +917,7 @@ export function GmailInbox({
           <Button
             variant={showTranslatedSubjects ? 'secondary' : 'ghost'}
             size="icon"
-            className="h-8 w-8"
+            className="h-9 w-9 rounded-lg hover:bg-white/70"
             title={showTranslatedSubjects ? '\u6062\u590d\u539f\u6807\u9898' : '\u7ffb\u8bd1\u90ae\u4ef6\u6807\u9898'}
             onClick={handleToggleSubjectTranslations}
             disabled={translatingSubjects && !showTranslatedSubjects}
@@ -929,7 +931,7 @@ export function GmailInbox({
           <Button
             variant="ghost"
             size="icon"
-            className="h-8 w-8"
+            className="h-9 w-9 rounded-lg hover:bg-white/70"
             title={'\u5237\u65b0'}
             onClick={fetchThreads}
             disabled={loading}
@@ -939,21 +941,21 @@ export function GmailInbox({
         </div>
       </div>
 
-      <div className="shrink-0 border-b px-3 py-2">
+      <div className="shrink-0 border-b border-white/55 bg-white/45 px-3 py-2">
         <div className="relative">
           <Search className="absolute left-3 top-2.5 h-4 w-4 text-muted-foreground" />
           <Input
             placeholder={'\u641c\u7d22\u90ae\u4ef6...'}
             value={searchQuery}
             onChange={(event) => setSearchQuery(event.target.value)}
-            className="h-9 pl-9"
+            className="glass-control h-10 border-0 pl-9"
           />
         </div>
         {mailbox !== 'unread' && (
           <Button
             variant={showUnreadOnly ? 'secondary' : 'ghost'}
             size="sm"
-            className="mt-1 h-7 px-2 text-xs"
+            className="mt-2 h-7 rounded-md px-2 text-xs"
             onClick={() => setShowUnreadOnly((current) => !current)}
           >
             {showUnreadOnly ? '\u663e\u793a\u5168\u90e8' : '\u53ea\u770b\u672a\u8bfb'}
@@ -962,15 +964,15 @@ export function GmailInbox({
       </div>
 
       {mailbox === 'inbox' && (
-        <div className="grid shrink-0 grid-cols-3 border-b">
+        <div className="grid shrink-0 grid-cols-3 border-b border-white/55 bg-white/38">
           {CATEGORY_TABS.map(({ id, label, icon: Icon }) => (
             <button
               key={id}
               type="button"
               className={`flex h-11 items-center justify-center gap-2 border-b-2 text-sm transition-colors ${
                 category === id
-                  ? 'border-primary font-medium text-primary'
-                  : 'border-transparent text-muted-foreground hover:bg-muted/50'
+                  ? 'border-primary bg-white/55 font-medium text-primary'
+                  : 'border-transparent text-muted-foreground hover:bg-white/50'
               }`}
               onClick={() => onCategoryChange(id)}
             >
@@ -1018,9 +1020,9 @@ export function GmailInbox({
                 key={thread.id}
                 role="button"
                 tabIndex={0}
-                className={`group border-b px-3 py-2.5 transition-colors hover:bg-muted/50 ${
-                  selectedThreadId === thread.id ? 'bg-muted' : ''
-                } ${thread.hasUnread ? 'bg-primary/[0.04]' : ''}`}
+                className={`glass-list-row group border-b border-white/55 px-3 py-2.5 transition-all duration-200 ${
+                  selectedThreadId === thread.id ? 'bg-white/85 shadow-[inset_3px_0_0_var(--primary)]' : ''
+                } ${thread.hasUnread ? 'bg-primary/[0.055]' : ''}`}
                 onClick={() => handleOpenThread(thread)}
                 onKeyDown={(event) => {
                   if (event.key === 'Enter') handleOpenThread(thread);
@@ -1030,7 +1032,7 @@ export function GmailInbox({
                   <Button
                     variant="ghost"
                     size="icon"
-                    className="mt-0.5 h-7 w-7 shrink-0"
+                    className="mt-0.5 h-8 w-8 shrink-0 rounded-lg hover:bg-white/70"
                     title={thread.isStarred ? '\u53d6\u6d88\u6807\u661f' : '\u6807\u661f'}
                     disabled={actionLoading}
                     onClick={(event) => {
@@ -1074,7 +1076,7 @@ export function GmailInbox({
                       <p className="mt-0.5 truncate text-xs text-muted-foreground">{thread.snippet}</p>
                     </div>
                   ) : (
-                    <div className="grid min-w-0 flex-1 grid-cols-[minmax(120px,220px)_minmax(0,1fr)_auto] items-center gap-3">
+                    <div className="grid min-w-0 flex-1 grid-cols-[minmax(150px,240px)_minmax(0,1fr)_72px] items-center gap-4">
                       <span
                         className={`flex min-w-0 items-center gap-1.5 text-sm ${
                           thread.hasUnread ? 'font-semibold' : 'text-muted-foreground'
@@ -1099,7 +1101,7 @@ export function GmailInbox({
                           <span className="text-muted-foreground"> - {thread.snippet}</span>
                         )}
                       </div>
-                      <span className="shrink-0 text-xs text-muted-foreground">
+                      <span className="shrink-0 text-right text-xs text-muted-foreground">
                         {formatDate(thread.lastMessageDate)}
                       </span>
                     </div>
@@ -1108,7 +1110,7 @@ export function GmailInbox({
                   <Button
                     variant="ghost"
                     size="icon"
-                    className="h-7 w-7 shrink-0 opacity-70 group-hover:opacity-100"
+                    className="h-8 w-8 shrink-0 rounded-lg opacity-70 hover:bg-white/70 group-hover:opacity-100"
                     title={thread.hasUnread ? '\u6807\u8bb0\u4e3a\u5df2\u8bfb' : '\u6807\u8bb0\u4e3a\u672a\u8bfb'}
                     disabled={actionLoading}
                     onClick={(event) => {
@@ -1135,11 +1137,11 @@ export function GmailInbox({
         )}
       </ScrollArea>
 
-      <div className="flex shrink-0 items-center justify-between gap-2 border-t px-3 py-2 text-xs text-muted-foreground">
+      <div className="flex shrink-0 items-center justify-between gap-2 border-t border-white/55 bg-white/55 px-3 py-2 text-xs text-muted-foreground backdrop-blur">
         <Button
           variant="outline"
           size="sm"
-          className="h-7 gap-1 px-2 text-xs"
+          className="h-8 gap-1 rounded-lg bg-white/70 px-2 text-xs"
           onClick={goToPreviousPage}
           disabled={loading || pageIndex === 0}
         >
@@ -1153,7 +1155,7 @@ export function GmailInbox({
         <Button
           variant="outline"
           size="sm"
-          className="h-7 gap-1 px-2 text-xs"
+          className="h-8 gap-1 rounded-lg bg-white/70 px-2 text-xs"
           onClick={goToNextPage}
           disabled={loading || !nextPageToken}
         >
@@ -1162,12 +1164,12 @@ export function GmailInbox({
         </Button>
       </div>
 
-      <div className="flex shrink-0 items-center justify-between border-t px-3 py-2 text-xs text-muted-foreground">
+      <div className="flex shrink-0 items-center justify-between border-t border-white/55 bg-white/45 px-3 py-2 text-xs text-muted-foreground">
         <span className="truncate">{auth.email || 'Gmail'}</span>
         <Button
           variant="ghost"
           size="sm"
-          className="h-7 gap-1 px-2 text-xs"
+          className="h-8 gap-1 rounded-lg px-2 text-xs hover:bg-white/70"
           onClick={disconnect}
         >
           <LogOut className="h-3.5 w-3.5" />

@@ -192,12 +192,12 @@ export function FeishuSettings({
   };
 
   return (
-    <Card className="overflow-hidden">
+    <Card className="overflow-hidden rounded-lg border-white/65 bg-white/66 shadow-apple backdrop-blur-xl">
       <button type="button" onClick={onToggle} className="w-full text-left">
         <CardHeader className="pb-3">
           <div className="flex items-center justify-between gap-3">
             <div className="flex min-w-0 items-center gap-3">
-              <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg bg-blue-500/10">
+              <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg bg-blue-500/10 ring-1 ring-blue-500/10">
                 <FileSpreadsheet className="h-4 w-4 text-blue-600" />
               </div>
               <div className="min-w-0">
@@ -208,7 +208,7 @@ export function FeishuSettings({
               </div>
             </div>
             <div className="flex shrink-0 items-center gap-2">
-              {connection.connected && <Badge variant="secondary">已连接</Badge>}
+              {connection.connected && <Badge variant="secondary" className="rounded-md bg-white/75">已连接</Badge>}
               {expanded
                 ? <ChevronUp className="h-4 w-4 text-muted-foreground" />
                 : <ChevronDown className="h-4 w-4 text-muted-foreground" />}
@@ -220,16 +220,16 @@ export function FeishuSettings({
       {expanded && (
         <CardContent className="space-y-4 pt-0">
           {connection.loading ? (
-            <div className="flex items-center gap-2 rounded-md bg-muted/50 p-3 text-sm text-muted-foreground">
+            <div className="flex items-center gap-2 rounded-lg border border-white/65 bg-white/55 p-3 text-sm text-muted-foreground">
               <LoaderCircle className="h-4 w-4 animate-spin" />
               正在检查飞书连接状态...
             </div>
           ) : !connection.configured ? (
-            <div className="rounded-md border border-amber-200 bg-amber-50 p-3 text-sm text-amber-800">
+            <div className="rounded-lg border border-amber-200/80 bg-amber-50/80 p-3 text-sm text-amber-800">
               网站功能已经准备好，等待在 Vercel 填写飞书 App ID、App Secret 和回调地址。
             </div>
           ) : connection.connected ? (
-            <div className="flex items-center justify-between gap-4 rounded-md border border-emerald-200 bg-emerald-50 p-3">
+            <div className="flex items-center justify-between gap-4 rounded-lg border border-emerald-200/80 bg-emerald-50/80 p-3">
               <div className="min-w-0">
                 <div className="flex items-center gap-2 text-sm font-medium text-emerald-800">
                   <CheckCircle2 className="h-4 w-4" />
@@ -239,20 +239,20 @@ export function FeishuSettings({
                   {connection.name || '当前飞书账号'}
                 </p>
               </div>
-              <Button variant="outline" size="sm" className="shrink-0 gap-1.5" onClick={disconnect}>
+              <Button variant="outline" size="sm" className="h-9 shrink-0 gap-1.5 rounded-lg border-white/70 bg-white/70" onClick={disconnect}>
                 <LogOut className="h-4 w-4" />
                 断开
               </Button>
             </div>
           ) : (
-            <div className="space-y-3 rounded-md border bg-muted/30 p-4">
+            <div className="space-y-3 rounded-lg border border-white/65 bg-white/55 p-4">
               <div>
                 <p className="text-sm font-medium">授权你的飞书账号</p>
                 <p className="mt-1 text-xs leading-5 text-muted-foreground">
                   授权后，看板只能访问你本人原本有权限使用的多维表格。
                 </p>
               </div>
-              <Button className="w-full gap-2 bg-blue-600 hover:bg-blue-700" asChild>
+              <Button className="h-10 w-full gap-2 rounded-lg bg-blue-600 shadow-apple hover:bg-blue-700" asChild>
                 <a href="/api/auth/feishu">
                   <Plug className="h-4 w-4" />
                   一键连接飞书
@@ -262,7 +262,7 @@ export function FeishuSettings({
           )}
 
           {connection.connected && (
-            <div className="space-y-3 border-t pt-4">
+            <div className="space-y-3 border-t border-white/60 pt-4">
               <div className="flex items-center gap-2 text-sm font-medium">
                 <Database className="h-4 w-4" />
                 连接红人资源库
@@ -274,12 +274,13 @@ export function FeishuSettings({
                   value={url}
                   onChange={(event) => setUrl(event.target.value)}
                   placeholder="https://xxx.feishu.cn/base/..."
+                  className="rounded-lg border-white/65 bg-white/75"
                 />
               </div>
               <Button
                 type="button"
                 variant="outline"
-                className="w-full gap-2"
+                className="h-10 w-full gap-2 rounded-lg border-white/70 bg-white/65"
                 onClick={inspect}
                 disabled={inspecting}
               >
@@ -292,21 +293,21 @@ export function FeishuSettings({
           )}
 
           {message && (
-            <div className={`rounded-md p-3 text-sm ${
-              inspection ? 'bg-emerald-50 text-emerald-800' : 'bg-amber-50 text-amber-800'
+            <div className={`rounded-lg border p-3 text-sm ${
+              inspection ? 'border-emerald-200/80 bg-emerald-50/80 text-emerald-800' : 'border-amber-200/80 bg-amber-50/80 text-amber-800'
             }`}>
               {message}
             </div>
           )}
 
           {connection.error && (
-            <div className="rounded-md bg-red-50 p-3 text-sm text-red-700">
+            <div className="rounded-lg border border-red-200/80 bg-red-50/80 p-3 text-sm text-red-700">
               {connection.error}
             </div>
           )}
 
           {inspection && (
-            <div className="space-y-3 rounded-md border p-4">
+            <div className="space-y-3 rounded-lg border border-white/65 bg-white/50 p-4 shadow-sm">
               <div className="flex items-center gap-2 text-sm font-medium">
                 <ShieldCheck className="h-4 w-4 text-emerald-600" />
                 已完成只读检查
@@ -345,11 +346,11 @@ export function FeishuSettings({
                     </p>
                   </div>
                   <div className="flex gap-2">
-                    <Button type="button" variant="outline" size="sm" className="gap-1.5" onClick={remapFields}>
+                    <Button type="button" variant="outline" size="sm" className="h-9 gap-1.5 rounded-lg border-white/70 bg-white/65" onClick={remapFields}>
                       <RefreshCw className="h-4 w-4" />
                       重新识别
                     </Button>
-                    <Button type="button" size="sm" className="gap-1.5" onClick={saveFieldMapping}>
+                    <Button type="button" size="sm" className="h-9 gap-1.5 rounded-lg shadow-apple" onClick={saveFieldMapping}>
                       {mappingSaved ? <CheckCircle2 className="h-4 w-4" /> : <Save className="h-4 w-4" />}
                       {mappingSaved ? '已保存' : '保存映射'}
                     </Button>
@@ -358,12 +359,12 @@ export function FeishuSettings({
 
                 <div className="grid gap-2 md:grid-cols-2">
                   {FEISHU_FIELD_TARGETS.map((target) => (
-                    <div key={target.key} className="rounded-md border bg-background p-3">
+                    <div key={target.key} className="rounded-lg border border-white/65 bg-white/60 p-3">
                       <div className="mb-2 flex items-start justify-between gap-2">
                         <div className="min-w-0">
                           <div className="flex items-center gap-1.5">
                             <p className="text-sm font-medium">{target.label}</p>
-                            {target.required && <Badge variant="secondary" className="text-[10px]">关键</Badge>}
+                            {target.required && <Badge variant="secondary" className="rounded-md bg-white/75 text-[10px]">关键</Badge>}
                           </div>
                           <p className="mt-0.5 text-xs text-muted-foreground">{target.description}</p>
                         </div>
@@ -372,7 +373,7 @@ export function FeishuSettings({
                         value={fieldMapping[target.key] || 'none'}
                         onValueChange={(value) => updateMapping(target.key, value)}
                       >
-                        <SelectTrigger className="w-full">
+                        <SelectTrigger className="w-full rounded-lg border-white/65 bg-white/75">
                           <SelectValue placeholder="选择飞书字段" />
                         </SelectTrigger>
                         <SelectContent>
@@ -401,7 +402,7 @@ export function FeishuSettings({
                     只展示前 {inspection.sampleRecords.length} 条样例，用于确认字段是否对应正确。
                   </p>
                 </div>
-                <div className="rounded-md border">
+                <div className="overflow-hidden rounded-lg border border-white/65 bg-white/60">
                   <Table>
                     <TableHeader>
                       <TableRow>
@@ -440,7 +441,7 @@ export function FeishuSettings({
 
 function Metric({ label, value }: { label: string; value: string | number }) {
   return (
-    <div className="border-l-2 border-blue-300 pl-3">
+    <div className="rounded-lg border border-white/60 bg-white/55 p-3">
       <p className="text-xs text-muted-foreground">{label}</p>
       <p className="mt-1 truncate text-sm font-semibold">{value}</p>
     </div>

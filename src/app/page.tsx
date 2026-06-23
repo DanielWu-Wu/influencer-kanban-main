@@ -156,8 +156,8 @@ export default function DashboardPage() {
 
   if (!configured) {
     return (
-      <div className="flex min-h-screen items-center justify-center p-6">
-        <div className="max-w-md rounded-lg border p-6 text-center">
+      <div className="workspace-shell flex min-h-screen items-center justify-center p-6">
+        <div className="glass-panel-strong max-w-md rounded-lg p-6 text-center">
           <h1 className="text-lg font-semibold">Supabase 尚未连接</h1>
           <p className="mt-2 text-sm text-muted-foreground">
             请确认 Vercel 中已经添加 Supabase URL 和 Publishable Key，并完成重新部署。
@@ -200,11 +200,11 @@ export default function DashboardPage() {
   };
 
   const renderNav = () => (
-    <nav className="flex flex-col gap-0.5">
+    <nav className="flex flex-col gap-3">
       {[label.dailyWork, label.influencerManage, label.tools].map((group, index) => (
-        <div key={group}>
-          {index > 0 && <div className="h-px bg-border my-2 mx-3" />}
-          <p className="text-[10px] uppercase tracking-wider text-muted-foreground px-3 mb-1.5 font-medium">{group}</p>
+        <div key={group} className="space-y-1">
+          {index > 0 && <div className="mx-2 mb-3 h-px bg-border/70" />}
+          <p className="px-2 text-[11px] font-semibold text-muted-foreground">{group}</p>
           {NAV_ITEMS.filter((item) => item.group === group).map((item) => {
             const Icon = item.icon;
             const isActive = currentView === item.id;
@@ -222,21 +222,22 @@ export default function DashboardPage() {
             return (
               <button
                 key={item.id}
+                type="button"
                 onClick={() => {
                   setCurrentView(item.id as View);
                   setMobileMenuOpen(false);
                 }}
-                className={`w-full flex items-center gap-3 px-3 py-2.5 rounded-xl text-sm font-medium transition-all duration-200 mx-0.5 ${
+                className={`flex h-11 w-full items-center gap-3 rounded-lg px-3 text-sm font-medium transition-all duration-200 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring ${
                   isActive
-                    ? 'bg-primary text-primary-foreground shadow-sm'
-                    : 'text-muted-foreground hover:bg-accent hover:text-foreground'
+                    ? 'bg-primary text-primary-foreground shadow-apple'
+                    : 'text-muted-foreground hover:bg-white/70 hover:text-foreground'
                 }`}
               >
-                <Icon className="w-4 h-4 flex-shrink-0" />
+                <Icon className="h-4 w-4 flex-shrink-0" />
                 <span className="flex-1 text-left truncate">{item.label}</span>
                 {badge > 0 && (
                   <span
-                    className={`inline-flex items-center justify-center h-5 min-w-5 px-1.5 rounded-full text-[10px] font-medium ${
+                    className={`inline-flex h-5 min-w-5 items-center justify-center rounded-md px-1.5 text-[10px] font-semibold ${
                       isActive ? 'bg-white/20 text-white' : 'bg-accent text-muted-foreground'
                     }`}
                   >
@@ -252,27 +253,30 @@ export default function DashboardPage() {
   );
 
   return (
-    <div className="min-h-screen bg-background">
-      <header className="sticky top-0 z-50 bg-background/80 backdrop-blur-xl border-b">
-        <div className="flex items-center justify-between h-14 px-4">
+    <div className="workspace-shell min-h-screen">
+      <header className="sticky top-0 z-50 border-b border-white/50 bg-white/72 backdrop-blur-xl">
+        <div className="flex h-16 items-center justify-between px-4 md:px-5">
           <div className="flex items-center gap-3">
             <Button variant="ghost" size="icon" className="md:hidden" onClick={() => setMobileMenuOpen(true)}>
               <Menu className="w-5 h-5" />
             </Button>
 
             <div className="flex items-center gap-2">
-              <div className="w-8 h-8 rounded-xl bg-gradient-to-br from-blue-500 to-blue-600 flex items-center justify-center shadow-sm">
-                <Sparkles className="w-4 h-4 text-white" />
+              <div className="flex h-9 w-9 items-center justify-center rounded-lg bg-primary shadow-apple">
+                <Sparkles className="h-4 w-4 text-primary-foreground" />
               </div>
-              <span className="text-lg font-semibold hidden sm:block">{label.appShort}</span>
+              <div className="hidden sm:block">
+                <span className="text-base font-semibold leading-none">{label.appShort}</span>
+                <p className="section-kicker mt-0.5">Influencer Ops</p>
+              </div>
             </div>
           </div>
 
-          <div className="flex items-center gap-2 md:gap-4">
+          <div className="flex items-center gap-2 md:gap-3">
             {stats.todayTodos > 0 && (
               <button
                 onClick={() => setCurrentView('todo')}
-                className="hidden md:flex items-center gap-2 px-3 py-1.5 rounded-full bg-blue-50 text-blue-600 text-sm font-medium hover:bg-blue-100 transition-colors"
+                className="glass-control hidden h-9 items-center gap-2 rounded-lg px-3 text-sm font-medium text-primary transition-colors hover:bg-white md:flex"
               >
                 <CheckSquare className="w-4 h-4" />
                 {stats.todayTodos} {label.todo}
@@ -281,22 +285,22 @@ export default function DashboardPage() {
             {stats.upcoming > 0 && (
               <button
                 onClick={() => setCurrentView('reminders')}
-                className="hidden md:flex items-center gap-2 px-3 py-1.5 rounded-full bg-orange-50 text-orange-600 text-sm font-medium hover:bg-orange-100 transition-colors"
+                className="glass-control hidden h-9 items-center gap-2 rounded-lg px-3 text-sm font-medium text-amber-700 transition-colors hover:bg-white md:flex"
               >
                 <Bell className="w-4 h-4" />
                 {stats.upcoming} {label.followUps}
               </button>
             )}
-            <div className="hidden lg:flex items-center gap-3 text-sm text-muted-foreground">
-              <span>
+            <div className="glass-control hidden h-9 items-center gap-3 rounded-lg px-3 text-sm text-muted-foreground lg:flex">
+              <span className="font-medium text-foreground">
                 {stats.total} {label.influencers}
               </span>
-              <span>|</span>
-              <span className="text-green-600">
+              <span className="h-4 w-px bg-border" />
+              <span className="font-medium text-emerald-700">
                 {stats.published} {label.published}
               </span>
             </div>
-            <div className="hidden items-center gap-2 border-l pl-3 md:flex">
+            <div className="hidden h-9 items-center gap-2 border-l border-border/70 pl-3 md:flex">
               <span className="max-w-40 truncate text-xs text-muted-foreground">
                 {user?.email}
               </span>
@@ -312,7 +316,7 @@ export default function DashboardPage() {
                 <LogOut className="h-4 w-4" />
               </Button>
             </div>
-            <Button size="sm" onClick={() => setShowAddDialog(true)} className="shadow-sm">
+            <Button size="sm" onClick={() => setShowAddDialog(true)} className="h-9 rounded-lg shadow-apple">
               <Plus className="w-4 h-4 mr-1" />
               <span className="hidden sm:inline">{label.addInfluencer}</span>
             </Button>
@@ -320,16 +324,31 @@ export default function DashboardPage() {
         </div>
       </header>
 
-      <div className="flex">
-        <aside className="hidden md:flex w-56 flex-col sticky top-14 h-[calc(100vh-3.5rem)] border-r bg-background p-3">
-          {renderNav()}
+      <div className="flex p-3 pt-4 md:p-4">
+        <aside className="glass-panel-soft sticky top-20 hidden h-[calc(100vh-5rem)] w-60 shrink-0 flex-col rounded-lg p-3 md:flex">
+          <div className="mb-3 rounded-lg border border-white/60 bg-white/55 p-3">
+            <p className="text-xs font-medium text-muted-foreground">今日作战台</p>
+            <div className="mt-2 grid grid-cols-2 gap-2 text-xs">
+              <div className="rounded-md bg-white/70 px-2 py-1.5">
+                <p className="text-muted-foreground">待办</p>
+                <p className="text-base font-semibold">{stats.todayTodos}</p>
+              </div>
+              <div className="rounded-md bg-white/70 px-2 py-1.5">
+                <p className="text-muted-foreground">Gmail</p>
+                <p className="text-base font-semibold">{unreadCount}</p>
+              </div>
+            </div>
+          </div>
+          <div className="min-h-0 overflow-y-auto pr-1">
+            {renderNav()}
+          </div>
         </aside>
 
         <Sheet open={mobileMenuOpen} onOpenChange={setMobileMenuOpen}>
           <SheetContent side="left" className="w-72 p-4">
             <div className="flex items-center gap-2 mb-6">
-              <div className="w-8 h-8 rounded-xl bg-gradient-to-br from-blue-500 to-blue-600 flex items-center justify-center">
-                <Sparkles className="w-4 h-4 text-white" />
+              <div className="flex h-9 w-9 items-center justify-center rounded-lg bg-primary">
+                <Sparkles className="h-4 w-4 text-primary-foreground" />
               </div>
               <span className="text-lg font-semibold">{label.appFull}</span>
             </div>
@@ -337,9 +356,9 @@ export default function DashboardPage() {
           </SheetContent>
         </Sheet>
 
-        <main className="flex-1 h-[calc(100vh-3.5rem)] min-h-0 overflow-hidden flex flex-col">
+        <main className="ml-0 flex h-[calc(100vh-5rem)] min-h-0 flex-1 flex-col overflow-hidden md:ml-4">
           {currentView === 'kanban' && (
-            <div className="flex-1 overflow-auto p-4 md:p-6">
+            <div className="glass-panel-strong flex-1 overflow-auto rounded-lg p-4">
               <div className="flex gap-3 mb-4 flex-shrink-0">
                 <div className="relative flex-1 max-w-md">
                   <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-muted-foreground" />
@@ -347,13 +366,13 @@ export default function DashboardPage() {
                     placeholder={label.search}
                     value={searchQuery}
                     onChange={(event) => setSearchQuery(event.target.value)}
-                    className="pl-10 bg-accent/50 border-0"
+                    className="glass-control h-10 border-0 pl-10"
                   />
                 </div>
                 <select
                   value={filterCountry}
                   onChange={(event) => setFilterCountry(event.target.value)}
-                  className="px-3 py-2 rounded-lg bg-accent/50 border-0 text-sm"
+                  className="glass-control h-10 rounded-lg px-3 text-sm"
                 >
                   <option value="all">{label.allCountries}</option>
                   {COUNTRY_OPTIONS.map((country) => (
@@ -374,7 +393,7 @@ export default function DashboardPage() {
           )}
 
           {currentView === 'list' && (
-            <div className="h-[calc(100vh-8rem)] p-4 md:p-6">
+            <div className="glass-panel-strong min-h-0 flex-1 rounded-lg p-4">
               {settings.feishuUrl ? (
                 <div className="h-full flex flex-col">
                   <div className="flex items-center justify-between mb-4">
@@ -392,7 +411,7 @@ export default function DashboardPage() {
                       {label.openNewWindow}
                     </Button>
                   </div>
-                  <div className="flex-1 rounded-2xl border overflow-hidden shadow-apple relative">
+                  <div className="relative flex-1 overflow-hidden rounded-lg border border-white/60 bg-white/60 shadow-apple">
                     <iframe
                       src={settings.feishuUrl}
                       className="w-full h-full"
@@ -420,13 +439,13 @@ export default function DashboardPage() {
           )}
 
           {currentView === 'email' && (
-            <div className="h-[calc(100vh-8rem)] p-4 md:p-6">
+            <div className="glass-panel-strong min-h-0 flex-1 rounded-lg p-4">
               <EmailTemplateManager templates={templates} onCopy={(textToCopy) => navigator.clipboard.writeText(textToCopy)} />
             </div>
           )}
 
           {currentView === 'reminders' && (
-            <div className="h-[calc(100vh-8rem)] p-4 md:p-6">
+            <div className="glass-panel-strong min-h-0 flex-1 rounded-lg p-4">
               <ReminderPanel
                 reminders={reminders}
                 influencers={influencers}
@@ -438,31 +457,31 @@ export default function DashboardPage() {
           )}
 
           {currentView === 'settings' && (
-            <div className="flex-1 min-h-0 p-4 md:p-6 flex flex-col overflow-hidden">
+            <div className="glass-panel-strong flex min-h-0 flex-1 flex-col overflow-hidden rounded-lg p-4">
               <SettingsPanel />
             </div>
           )}
 
           {currentView === 'prompts' && (
-            <div className="flex-1 min-h-0 p-4 md:p-6 flex flex-col overflow-hidden">
+            <div className="glass-panel-strong flex min-h-0 flex-1 flex-col overflow-hidden rounded-lg p-4">
               <PromptManager />
             </div>
           )}
 
           {currentView === 'todo' && (
-            <div className="h-[calc(100vh-8rem)] p-4 md:p-6">
+            <div className="glass-panel-strong min-h-0 flex-1 rounded-lg p-4">
               <TodoBoard todos={todos} onAdd={addTodo} onToggle={toggleTodo} onDelete={deleteTodo} onUpdate={updateTodo} />
             </div>
           )}
 
           {currentView === 'calendar' && (
-            <div className="h-[calc(100vh-8rem)] p-4 md:p-6">
+            <div className="glass-panel-strong min-h-0 flex-1 rounded-lg p-4">
               <WorkCalendar events={events} todos={todos} onAddEvent={addEvent} onDeleteEvent={deleteEvent} />
             </div>
           )}
 
           {currentView === 'gmail' && (
-            <div className="flex-1 min-h-0 overflow-hidden p-4 md:p-6">
+            <div className="min-h-0 flex-1 overflow-hidden rounded-lg">
               <GmailPage />
             </div>
           )}

@@ -73,7 +73,7 @@ function ToolbarButton({
           type="button"
           variant={active ? 'secondary' : 'ghost'}
           size="icon"
-          className="h-8 w-8 shrink-0"
+          className="h-8 w-8 shrink-0 rounded-lg hover:bg-white/80"
           aria-label={label}
           aria-pressed={active}
           onMouseDown={(event) => event.preventDefault()}
@@ -196,7 +196,7 @@ export function RichEmailEditor({
   return (
     <div
       className={cn(
-        'overflow-hidden rounded-md border bg-background',
+        'overflow-hidden rounded-lg border border-white/65 bg-white/75 shadow-sm backdrop-blur-xl',
         fillHeight && 'flex min-h-0 flex-col',
         className,
       )}
@@ -230,14 +230,14 @@ export function RichEmailEditor({
         />
       </div>
 
-      <div className="flex flex-wrap items-center gap-0.5 border-t bg-muted/30 px-2 py-1">
+      <div className="flex flex-wrap items-center gap-0.5 border-t border-white/60 bg-white/65 px-2 py-1">
         <ToolbarButton label="撤销" icon={<Undo2 className="h-4 w-4" />} onAction={() => runCommand('undo')} />
         <ToolbarButton label="重做" icon={<Redo2 className="h-4 w-4" />} onAction={() => runCommand('redo')} />
         <div className="mx-1 h-5 w-px bg-border" />
 
         <select
           aria-label="字体"
-          className="h-8 max-w-32 rounded border-0 bg-transparent px-1 text-xs outline-none hover:bg-muted"
+          className="h-8 max-w-32 rounded-lg border-0 bg-transparent px-1 text-xs outline-none hover:bg-white/80"
           defaultValue="Arial"
           onMouseDown={saveSelection}
           onChange={(event) => runCommand('fontName', event.target.value)}
@@ -251,7 +251,7 @@ export function RichEmailEditor({
         </select>
         <select
           aria-label="文字大小"
-          className="h-8 rounded border-0 bg-transparent px-1 text-xs outline-none hover:bg-muted"
+          className="h-8 rounded-lg border-0 bg-transparent px-1 text-xs outline-none hover:bg-white/80"
           defaultValue="3"
           onMouseDown={saveSelection}
           onChange={(event) => runCommand('fontSize', event.target.value)}
@@ -270,7 +270,7 @@ export function RichEmailEditor({
         <ToolbarButton label="下划线" icon={<Underline className="h-4 w-4" />} active={activeCommands.has('underline')} onAction={() => runCommand('underline')} />
         <ToolbarButton label="删除线" icon={<Strikethrough className="h-4 w-4" />} active={activeCommands.has('strikeThrough')} onAction={() => runCommand('strikeThrough')} />
 
-        <label className="relative flex h-8 w-8 shrink-0 cursor-pointer items-center justify-center rounded hover:bg-muted" title="文字颜色">
+        <label className="relative flex h-8 w-8 shrink-0 cursor-pointer items-center justify-center rounded-lg hover:bg-white/80" title="文字颜色">
           <span className="border-b-2 text-sm font-semibold" style={{ color: textColor, borderColor: textColor }}>A</span>
           <input
             type="color"
@@ -283,7 +283,7 @@ export function RichEmailEditor({
             }}
           />
         </label>
-        <label className="relative flex h-8 w-8 shrink-0 cursor-pointer items-center justify-center rounded hover:bg-muted" title="背景颜色">
+        <label className="relative flex h-8 w-8 shrink-0 cursor-pointer items-center justify-center rounded-lg hover:bg-white/80" title="背景颜色">
           <Highlighter className="h-4 w-4" style={{ color: highlightColor }} />
           <input
             type="color"
@@ -321,7 +321,7 @@ export function RichEmailEditor({
                   type="button"
                   variant="ghost"
                   size="icon"
-                  className="h-8 w-8"
+                  className="h-8 w-8 rounded-lg hover:bg-white/80"
                   aria-label="插入表情"
                   onMouseDown={saveSelection}
                 >
@@ -331,14 +331,14 @@ export function RichEmailEditor({
             </TooltipTrigger>
             <TooltipContent>插入表情</TooltipContent>
           </Tooltip>
-          <PopoverContent align="start" className="grid w-52 grid-cols-5 gap-1 p-2">
+          <PopoverContent align="start" className="grid w-52 grid-cols-5 gap-1 rounded-lg border-white/65 bg-white/90 p-2 shadow-apple backdrop-blur-xl">
             {EMOJIS.map((emoji) => (
               <Button
                 key={emoji}
                 type="button"
                 variant="ghost"
                 size="icon"
-                className="h-8 w-8 text-lg"
+                className="h-8 w-8 rounded-lg text-lg hover:bg-white/80"
                 onClick={() => insertEmoji(emoji)}
               >
                 {emoji}

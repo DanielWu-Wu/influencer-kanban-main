@@ -19,21 +19,21 @@ export function KanbanColumn({ column, influencers, onEdit, onDelete, isDragging
   return (
     <div
       ref={setNodeRef}
-      className={`flex-shrink-0 w-[260px] rounded-2xl transition-all duration-300 flex flex-col max-h-full ${
-        isOver && isDragging ? 'ring-2 ring-primary/20 bg-primary/5' : ''
+      className={`glass-panel-soft flex max-h-full w-[260px] flex-shrink-0 flex-col rounded-lg transition-all duration-300 ${
+        isOver && isDragging ? 'ring-2 ring-primary/25 bg-primary/5' : ''
       }`}
     >
       <div className="flex items-center justify-between px-3 py-2.5">
         <div className="flex items-center gap-2">
-          <div className="w-2 h-2 rounded-full" style={{ backgroundColor: getStatusColor(column.id) }} />
-          <h3 className="font-medium text-sm">{column.title}</h3>
+          <div className="h-2 w-2 rounded-full" style={{ backgroundColor: getStatusColor(column.id) }} />
+          <h3 className="text-sm font-semibold">{column.title}</h3>
         </div>
-        <span className="text-xs text-muted-foreground bg-accent/50 px-2 py-0.5 rounded-full">
+        <span className="rounded-md bg-white/75 px-2 py-0.5 text-xs text-muted-foreground">
           {influencers.length}
         </span>
       </div>
 
-      <div className="flex-1 overflow-y-auto space-y-2 p-2">
+      <div className="flex-1 space-y-2 overflow-y-auto p-2">
         {influencers.map((influencer) => (
           <SortableContext key={influencer.id} items={[influencer.id]} strategy={verticalListSortingStrategy}>
             <InfluencerCard influencer={influencer} onEdit={onEdit} onDelete={onDelete} />
@@ -41,7 +41,9 @@ export function KanbanColumn({ column, influencers, onEdit, onDelete, isDragging
         ))}
 
         {influencers.length === 0 && (
-          <div className="text-center py-8 text-muted-foreground/50 text-sm">{'\u6682\u65e0\u7ea2\u4eba'}</div>
+          <div className="rounded-lg border border-dashed border-white/70 bg-white/35 py-8 text-center text-sm text-muted-foreground/65">
+            {'\u6682\u65e0\u7ea2\u4eba'}
+          </div>
         )}
       </div>
     </div>

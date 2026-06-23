@@ -133,19 +133,19 @@ export function YouTubeApiSettings({ expanded, onToggle }: YouTubeApiSettingsPro
   };
 
   return (
-    <Card className="overflow-hidden">
+    <Card className="overflow-hidden rounded-lg border-white/65 bg-white/66 shadow-apple backdrop-blur-xl">
       <button type="button" onClick={onToggle} className="w-full text-left">
-        <CardHeader className="pb-3 hover:bg-muted/30 transition-colors">
+        <CardHeader className="pb-3 transition-colors hover:bg-white/45">
           <div className="flex items-center justify-between">
             <div className="flex items-center gap-3">
-              <div className="w-9 h-9 rounded-lg bg-red-600/10 flex items-center justify-center">
+              <div className="flex h-9 w-9 items-center justify-center rounded-lg bg-red-600/10 ring-1 ring-red-500/10">
                 <Youtube className="w-4 h-4 text-red-600" />
               </div>
               <div>
                 <CardTitle className="text-base flex items-center gap-2">
                   YouTube API
                   {settings.youtubeApiKeyConfigured && (
-                    <Badge variant="secondary" className="text-xs">已配置</Badge>
+                    <Badge variant="secondary" className="rounded-md bg-white/75 text-xs">已配置</Badge>
                   )}
                 </CardTitle>
                 <CardDescription className="text-xs mt-0.5">
@@ -170,6 +170,7 @@ export function YouTubeApiSettings({ expanded, onToggle }: YouTubeApiSettingsPro
                 onChange={(event) => setApiKey(event.target.value)}
                 placeholder="AIza..."
                 autoComplete="off"
+                className="rounded-lg border-white/65 bg-white/75"
               />
               <p className="text-xs text-muted-foreground">
                 用于之后读取频道简介、订阅数、视频数据和搜索合适红人。
@@ -181,20 +182,22 @@ export function YouTubeApiSettings({ expanded, onToggle }: YouTubeApiSettingsPro
                 <Label htmlFor="youtube-region">默认市场</Label>
                 <Input
                   id="youtube-region"
-                  value={defaultRegion}
-                  onChange={(event) => setDefaultRegion(event.target.value)}
-                  placeholder="ES"
-                  maxLength={2}
-                />
+                value={defaultRegion}
+                onChange={(event) => setDefaultRegion(event.target.value)}
+                placeholder="ES"
+                maxLength={2}
+                className="rounded-lg border-white/65 bg-white/75"
+              />
               </div>
               <div className="space-y-2">
                 <Label htmlFor="youtube-language">默认语言</Label>
                 <Input
                   id="youtube-language"
-                  value={defaultLanguage}
-                  onChange={(event) => setDefaultLanguage(event.target.value)}
-                  placeholder="es"
-                />
+                value={defaultLanguage}
+                onChange={(event) => setDefaultLanguage(event.target.value)}
+                placeholder="es"
+                className="rounded-lg border-white/65 bg-white/75"
+              />
               </div>
             </div>
 
@@ -207,6 +210,7 @@ export function YouTubeApiSettings({ expanded, onToggle }: YouTubeApiSettingsPro
                 max={50}
                 value={maxSearchResults}
                 onChange={(event) => setMaxSearchResults(Number(event.target.value))}
+                className="rounded-lg border-white/65 bg-white/75"
               />
               <p className="text-xs text-muted-foreground">YouTube API 单次搜索最多建议 50 条。</p>
             </div>
@@ -218,6 +222,7 @@ export function YouTubeApiSettings({ expanded, onToggle }: YouTubeApiSettingsPro
                 value={minSubscribers}
                 onChange={(event) => setMinSubscribers(event.target.value)}
                 placeholder="例如：1万以上，优先 5万-50万"
+                className="rounded-lg border-white/65 bg-white/75"
               />
             </div>
           </div>
@@ -229,14 +234,14 @@ export function YouTubeApiSettings({ expanded, onToggle }: YouTubeApiSettingsPro
               value={searchKeywords}
               onChange={(event) => setSearchKeywords(event.target.value)}
               placeholder="例如：西班牙、露营、房车、离网生活、太阳能；排除纯新闻和低互动频道"
-              className="min-h-24"
+              className="min-h-24 rounded-lg border-white/65 bg-white/75"
             />
             <p className="text-xs text-muted-foreground">
               这里可以用自然语言写，后续 AI 搜索红人时会优先参考这些偏好。
             </p>
           </div>
 
-          <div className="flex items-center justify-between rounded-lg border p-3">
+          <div className="flex items-center justify-between rounded-lg border border-white/65 bg-white/55 p-3">
             <div>
               <p className="text-sm font-medium">自动补全频道资料</p>
               <p className="text-xs text-muted-foreground">后续连接红人库时，自动补全频道简介、粉丝量、最新视频等信息。</p>
@@ -245,8 +250,8 @@ export function YouTubeApiSettings({ expanded, onToggle }: YouTubeApiSettingsPro
           </div>
 
           {status && (
-            <div className={`flex items-center gap-2 rounded-lg p-3 text-sm ${
-              status.success ? 'bg-emerald-50 text-emerald-700' : 'bg-amber-50 text-amber-700'
+            <div className={`flex items-center gap-2 rounded-lg border p-3 text-sm ${
+              status.success ? 'border-emerald-200/80 bg-emerald-50/80 text-emerald-700' : 'border-amber-200/80 bg-amber-50/80 text-amber-700'
             }`}>
               {status.success ? <CheckCircle2 className="w-4 h-4" /> : <AlertTriangle className="w-4 h-4" />}
               <span>{status.message}</span>
@@ -254,7 +259,7 @@ export function YouTubeApiSettings({ expanded, onToggle }: YouTubeApiSettingsPro
           )}
 
           <div className="flex flex-wrap gap-2 justify-end">
-            <Button type="button" variant="outline" onClick={handleTest} disabled={testing || saving}>
+            <Button type="button" variant="outline" className="h-10 rounded-lg border-white/70 bg-white/65" onClick={handleTest} disabled={testing || saving}>
               {testing ? <Loader2 className="w-4 h-4 mr-2 animate-spin" /> : <RefreshCw className="w-4 h-4 mr-2" />}
               测试连接
             </Button>
@@ -262,7 +267,7 @@ export function YouTubeApiSettings({ expanded, onToggle }: YouTubeApiSettingsPro
               type="button"
               onClick={handleSave}
               disabled={saving || testing}
-              className={justSaved ? 'bg-emerald-600 hover:bg-emerald-700' : undefined}
+              className={justSaved ? 'h-10 rounded-lg bg-emerald-600 hover:bg-emerald-700' : 'h-10 rounded-lg shadow-apple'}
             >
               {saving ? (
                 <Loader2 className="w-4 h-4 mr-2 animate-spin" />

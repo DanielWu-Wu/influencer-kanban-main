@@ -161,17 +161,17 @@ export function SettingsPanel() {
   };
 
   return (
-    <div className="h-full flex flex-col overflow-hidden">
+    <div className="flex h-full flex-col overflow-hidden">
       {/* 顶部标题栏 - 固定不滚动 */}
-      <div className="flex-shrink-0 flex items-center justify-between px-1 mb-4">
+      <div className="mb-4 flex flex-shrink-0 items-center justify-between rounded-lg border border-white/60 bg-white/62 px-4 py-3 shadow-apple backdrop-blur-xl">
         <div>
-          <h2 className="text-lg font-semibold flex items-center gap-2">
+          <h2 className="flex items-center gap-2 text-lg font-semibold">
             <Settings className="w-5 h-5" />
             设置
           </h2>
-          <p className="text-sm text-muted-foreground mt-0.5">管理产品资料、集成连接、品牌信息和模型配置</p>
+          <p className="mt-0.5 text-sm text-muted-foreground">管理产品资料、集成连接、品牌信息和模型配置</p>
         </div>
-        <Button onClick={handleSaveAll} size="sm" className="gap-1.5">
+        <Button onClick={handleSaveAll} size="sm" className="h-10 gap-1.5 rounded-lg shadow-apple">
           {saved ? (
             <>
               <CheckCircle2 className="w-4 h-4" />
@@ -186,10 +186,10 @@ export function SettingsPanel() {
         </Button>
       </div>
 
-      <Separator className="flex-shrink-0 mb-4" />
+      <Separator className="mb-4 flex-shrink-0 bg-white/60" />
 
       {/* 设置卡片列表 - 可滚动区域 */}
-      <div className="flex-1 min-h-0 overflow-y-auto pr-1 space-y-4">
+      <div className="min-h-0 flex-1 space-y-4 overflow-y-auto pr-1">
         <CloudSyncSettings />
 
         <ProductDatabaseSettings
@@ -208,7 +208,7 @@ export function SettingsPanel() {
         />
 
         {/* Gmail 邮件 */}
-        <Card className="overflow-hidden">
+        <Card className="overflow-hidden rounded-lg border-white/65 bg-white/66 shadow-apple backdrop-blur-xl">
           <button
             type="button"
             onClick={() => toggleSection('gmail')}
@@ -217,17 +217,17 @@ export function SettingsPanel() {
             <CardHeader className="pb-3">
               <div className="flex items-center justify-between">
                 <div className="flex items-center gap-3">
-                  <div className="w-9 h-9 rounded-lg bg-red-500/10 flex items-center justify-center">
+                  <div className="flex h-9 w-9 items-center justify-center rounded-lg bg-red-500/10">
                     <Mail className="w-4 h-4 text-red-500" />
                   </div>
                   <div>
                     <CardTitle className="text-base">Gmail 邮件</CardTitle>
-                    <CardDescription className="text-xs mt-0.5">连接 Gmail，查看邮件往来，AI 辅助回复</CardDescription>
+                    <CardDescription className="mt-0.5 text-xs">连接 Gmail，查看邮件往来，AI 辅助回复</CardDescription>
                   </div>
                 </div>
                 <div className="flex items-center gap-2">
                   {gmailAuth?.isConnected && (
-                    <Badge variant="secondary" className="text-xs">已连接</Badge>
+                    <Badge variant="secondary" className="rounded-md bg-emerald-50 text-xs text-emerald-700">已连接</Badge>
                   )}
                   {expandedSection === 'gmail' ? (
                     <ChevronUp className="w-4 h-4 text-muted-foreground" />
@@ -240,16 +240,16 @@ export function SettingsPanel() {
           </button>
 
           {expandedSection === 'gmail' && (
-            <CardContent className="pt-0 space-y-4">
+            <CardContent className="space-y-4 pt-0">
               <div className="flex items-center justify-between">
-                <Badge variant="outline" className="text-xs gap-1">
+                <Badge variant="outline" className="gap-1 rounded-md border-white/70 bg-white/55 text-xs">
                   <Info className="w-3 h-3" />
                   用于「Gmail 邮件」页面
                 </Badge>
               </div>
 
               {gmailAuth?.isConnected ? (
-                <div className="flex items-center justify-between gap-4 rounded-lg border border-green-200 bg-green-50 p-4">
+                <div className="flex items-center justify-between gap-4 rounded-lg border border-green-200 bg-green-50/85 p-4">
                   <div className="min-w-0">
                     <div className="flex items-center gap-2 text-sm font-medium text-green-800">
                       <CheckCircle2 className="h-4 w-4" />
@@ -262,7 +262,7 @@ export function SettingsPanel() {
                   <Button
                     variant="outline"
                     size="sm"
-                    className="shrink-0 gap-1.5"
+                    className="shrink-0 gap-1.5 rounded-lg bg-white/75"
                     onClick={disconnectGmail}
                   >
                     <LogOut className="h-4 w-4" />
@@ -270,18 +270,18 @@ export function SettingsPanel() {
                   </Button>
                 </div>
               ) : (
-                <div className="space-y-3 rounded-lg border bg-muted/30 p-4">
+                <div className="space-y-3 rounded-lg border border-white/65 bg-white/55 p-4">
                   <div>
                     <p className="text-sm font-medium">授权你的 Gmail 账号</p>
                     <p className="mt-1 text-xs leading-5 text-muted-foreground">
                       点击后跳转至 Google 官方授权页面。应用不会要求你填写或保存 Google Client Secret。
                     </p>
                   </div>
-                  <div className="rounded-md bg-background p-3 text-xs text-muted-foreground">
+                  <div className="rounded-lg bg-white/70 p-3 text-xs text-muted-foreground">
                     授权后可读取和分类邮件、标记已读或未读、标星，以及保存 AI 回复草稿。
                   </div>
                   <Button
-                    className="w-full gap-2 bg-red-500 hover:bg-red-600"
+                    className="h-10 w-full gap-2 rounded-lg bg-red-500 hover:bg-red-600"
                     onClick={handleConnectGmail}
                   >
                     <Plug className="h-4 w-4" />
@@ -290,7 +290,7 @@ export function SettingsPanel() {
                 </div>
               )}
 
-              <div className="rounded-lg bg-muted/50 p-3 text-xs text-muted-foreground">
+              <div className="rounded-lg border border-white/65 bg-white/55 p-3 text-xs text-muted-foreground">
                 OAuth 密钥由项目的 Vercel 环境变量安全管理，无需在网页中重复填写。
               </div>
             </CardContent>
@@ -298,7 +298,7 @@ export function SettingsPanel() {
         </Card>
 
         {/* 模型 API 设置 */}
-        <Card className="overflow-hidden">
+        <Card className="overflow-hidden rounded-lg border-white/65 bg-white/66 shadow-apple backdrop-blur-xl">
           <button
             type="button"
             onClick={() => toggleSection('model')}
@@ -307,17 +307,17 @@ export function SettingsPanel() {
             <CardHeader className="pb-3">
               <div className="flex items-center justify-between">
                 <div className="flex items-center gap-3">
-                  <div className="w-9 h-9 rounded-lg bg-primary/10 flex items-center justify-center">
+                  <div className="flex h-9 w-9 items-center justify-center rounded-lg bg-primary/10">
                     <Cpu className="w-4 h-4 text-primary" />
                   </div>
                   <div>
                     <CardTitle className="text-base">模型 API 设置</CardTitle>
-                    <CardDescription className="text-xs mt-0.5">选择 AI 模型来源，支持切换到大语言模型</CardDescription>
+                    <CardDescription className="mt-0.5 text-xs">选择 AI 模型来源，支持切换到大语言模型</CardDescription>
                   </div>
                 </div>
                 <div className="flex items-center gap-2">
                   {modelProvider === 'custom' && (
-                    <Badge variant="secondary" className="text-xs">自定义</Badge>
+                    <Badge variant="secondary" className="rounded-md bg-white/80 text-xs">自定义</Badge>
                   )}
                   {expandedSection === 'model' ? (
                     <ChevronUp className="w-4 h-4 text-muted-foreground" />
@@ -330,9 +330,9 @@ export function SettingsPanel() {
           </button>
 
           {expandedSection === 'model' && (
-            <CardContent className="pt-0 space-y-4">
+            <CardContent className="space-y-4 pt-0">
               <div className="flex items-center justify-between">
-                <Badge variant="outline" className="text-xs gap-1">
+                <Badge variant="outline" className="gap-1 rounded-md border-white/70 bg-white/55 text-xs">
                   <Info className="w-3 h-3" />
                   用于「翻译」和「AI 回复」功能
                 </Badge>
@@ -344,34 +344,34 @@ export function SettingsPanel() {
                   <button
                     type="button"
                     onClick={() => setModelProvider('builtin')}
-                    className={`p-3 rounded-lg border-2 text-left transition-all ${
+                    className={`rounded-lg border-2 p-3 text-left transition-all ${
                       modelProvider === 'builtin'
                         ? 'border-primary bg-primary/5'
-                        : 'border-border hover:border-primary/50'
+                        : 'border-white/70 bg-white/50 hover:border-primary/50'
                     }`}
                   >
-                    <div className="font-medium text-sm flex items-center gap-2">
+                    <div className="flex items-center gap-2 text-sm font-medium">
                       <Zap className="w-4 h-4" />
                       内置 DeepSeek
                     </div>
-                    <p className="text-xs text-muted-foreground mt-1">
+                    <p className="mt-1 text-xs text-muted-foreground">
                       无需配置，开箱即用
                     </p>
                   </button>
                   <button
                     type="button"
                     onClick={() => setModelProvider('custom')}
-                    className={`p-3 rounded-lg border-2 text-left transition-all ${
+                    className={`rounded-lg border-2 p-3 text-left transition-all ${
                       modelProvider === 'custom'
                         ? 'border-primary bg-primary/5'
-                        : 'border-border hover:border-primary/50'
+                        : 'border-white/70 bg-white/50 hover:border-primary/50'
                     }`}
                   >
-                    <div className="font-medium text-sm flex items-center gap-2">
+                    <div className="flex items-center gap-2 text-sm font-medium">
                       <Link2 className="w-4 h-4" />
                       自定义 API
                     </div>
-                    <p className="text-xs text-muted-foreground mt-1">
+                    <p className="mt-1 text-xs text-muted-foreground">
                       OpenAI 兼容接口
                     </p>
                   </button>
@@ -379,7 +379,7 @@ export function SettingsPanel() {
               </div>
 
               {modelProvider === 'builtin' && (
-                <div className="rounded-lg bg-green-500/5 p-3 flex items-center gap-2">
+                <div className="flex items-center gap-2 rounded-lg border border-green-200 bg-green-50/85 p-3">
                   <CheckCircle2 className="w-4 h-4 text-green-600" />
                   <span className="text-sm text-green-700">内置 DeepSeek AI 已启用，无需额外配置</span>
                 </div>
@@ -387,12 +387,12 @@ export function SettingsPanel() {
 
               {modelProvider === 'custom' && (
                 <div className="space-y-3">
-                  <div className="rounded-lg bg-muted/50 p-3 space-y-2">
-                    <h4 className="text-xs font-medium text-foreground flex items-center gap-1.5">
+                  <div className="space-y-2 rounded-lg border border-white/65 bg-white/55 p-3">
+                    <h4 className="flex items-center gap-1.5 text-xs font-medium text-foreground">
                       <HelpCircle className="w-3.5 h-3.5 text-primary" />
                       支持的模型提供商
                     </h4>
-                    <ul className="text-xs text-muted-foreground list-disc list-inside space-y-0.5">
+                    <ul className="list-inside list-disc space-y-0.5 text-xs text-muted-foreground">
                       <li>OpenAI (GPT-4o, GPT-4, GPT-3.5)</li>
                       <li>DeepSeek (deepseek-chat, deepseek-reasoner)</li>
                       <li>智谱 AI (GLM-4)</li>
@@ -409,7 +409,7 @@ export function SettingsPanel() {
                       placeholder="https://api.openai.com/v1/chat/completions"
                       value={customApiUrl}
                       onChange={(e) => setCustomApiUrl(e.target.value)}
-                      className="text-sm"
+                      className="rounded-lg bg-white/75 text-sm"
                     />
                   </div>
                   <div className="space-y-2">
@@ -423,7 +423,7 @@ export function SettingsPanel() {
                       onFocus={() => {
                         if (customApiKey === STORED_AI_KEY) setCustomApiKey('');
                       }}
-                      className="text-sm"
+                      className="rounded-lg bg-white/75 text-sm"
                     />
                   </div>
                   <div className="space-y-2">
@@ -434,7 +434,7 @@ export function SettingsPanel() {
                       placeholder="gpt-4o / deepseek-chat / glm-4"
                       value={customModelName}
                       onChange={(e) => setCustomModelName(e.target.value)}
-                      className="text-sm"
+                      className="rounded-lg bg-white/75 text-sm"
                     />
                   </div>
 
@@ -447,7 +447,7 @@ export function SettingsPanel() {
                       !(customApiKey || settings.customApiKeyConfigured) ||
                       !customModelName
                     }
-                    className="w-full"
+                    className="h-10 w-full rounded-lg bg-white/75"
                   >
                     {testingModel ? (
                       <RefreshCw className="w-4 h-4 mr-1 animate-spin" />
@@ -458,8 +458,8 @@ export function SettingsPanel() {
                   </Button>
 
                   {modelTestResult && (
-                    <div className={`rounded-lg p-3 flex items-center gap-2 ${
-                      modelTestResult.success ? 'bg-green-500/5' : 'bg-red-500/5'
+                    <div className={`flex items-center gap-2 rounded-lg border p-3 ${
+                      modelTestResult.success ? 'border-green-200 bg-green-50/85' : 'border-red-100 bg-red-50/90'
                     }`}>
                       {modelTestResult.success ? (
                         <CheckCircle2 className="w-4 h-4 text-green-600" />
@@ -480,7 +480,7 @@ export function SettingsPanel() {
         </Card>
 
         {/* 品牌信息 */}
-        <Card className="overflow-hidden">
+        <Card className="overflow-hidden rounded-lg border-white/65 bg-white/66 shadow-apple backdrop-blur-xl">
           <button
             type="button"
             onClick={() => toggleSection('brand')}
@@ -489,17 +489,17 @@ export function SettingsPanel() {
             <CardHeader className="pb-3">
               <div className="flex items-center justify-between">
                 <div className="flex items-center gap-3">
-                  <div className="w-9 h-9 rounded-lg bg-amber-500/10 flex items-center justify-center">
+                  <div className="flex h-9 w-9 items-center justify-center rounded-lg bg-amber-500/10">
                     <User className="w-4 h-4 text-amber-500" />
                   </div>
                   <div>
                     <CardTitle className="text-base">品牌信息</CardTitle>
-                    <CardDescription className="text-xs mt-0.5">设置邮件模板中使用的品牌信息</CardDescription>
+                    <CardDescription className="mt-0.5 text-xs">设置邮件模板中使用的品牌信息</CardDescription>
                   </div>
                 </div>
                 <div className="flex items-center gap-2">
                   {(settings.brandName || settings.senderName) && (
-                    <Badge variant="secondary" className="text-xs">已配置</Badge>
+                    <Badge variant="secondary" className="rounded-md bg-white/80 text-xs">已配置</Badge>
                   )}
                   {expandedSection === 'brand' ? (
                     <ChevronUp className="w-4 h-4 text-muted-foreground" />
@@ -512,9 +512,9 @@ export function SettingsPanel() {
           </button>
 
           {expandedSection === 'brand' && (
-            <CardContent className="pt-0 space-y-4">
+            <CardContent className="space-y-4 pt-0">
               <div className="flex items-center justify-between">
-                <Badge variant="outline" className="text-xs gap-1">
+                <Badge variant="outline" className="gap-1 rounded-md border-white/70 bg-white/55 text-xs">
                   <Info className="w-3 h-3" />
                   用于「邮件模板」功能
                 </Badge>
@@ -527,7 +527,7 @@ export function SettingsPanel() {
                   value={brandName}
                   onChange={(e) => setBrandName(e.target.value)}
                   placeholder="例如：TechGear Pro"
-                  className="text-sm"
+                  className="rounded-lg bg-white/75 text-sm"
                 />
               </div>
               <div className="space-y-2">
@@ -537,7 +537,7 @@ export function SettingsPanel() {
                   value={senderName}
                   onChange={(e) => setSenderName(e.target.value)}
                   placeholder="例如：小明"
-                  className="text-sm"
+                  className="rounded-lg bg-white/75 text-sm"
                 />
               </div>
             </CardContent>
@@ -545,7 +545,7 @@ export function SettingsPanel() {
         </Card>
 
         {/* 跟进规则 */}
-        <Card className="overflow-hidden">
+        <Card className="overflow-hidden rounded-lg border-white/65 bg-white/66 shadow-apple backdrop-blur-xl">
           <button
             type="button"
             onClick={() => toggleSection('followup')}
@@ -554,12 +554,12 @@ export function SettingsPanel() {
             <CardHeader className="pb-3">
               <div className="flex items-center justify-between">
                 <div className="flex items-center gap-3">
-                  <div className="w-9 h-9 rounded-lg bg-emerald-500/10 flex items-center justify-center">
+                  <div className="flex h-9 w-9 items-center justify-center rounded-lg bg-emerald-500/10">
                     <Clock className="w-4 h-4 text-emerald-500" />
                   </div>
                   <div>
                     <CardTitle className="text-base">跟进规则</CardTitle>
-                    <CardDescription className="text-xs mt-0.5">设置自动跟进提醒的时间间隔</CardDescription>
+                    <CardDescription className="mt-0.5 text-xs">设置自动跟进提醒的时间间隔</CardDescription>
                   </div>
                 </div>
                 <div className="flex items-center gap-2">
@@ -574,9 +574,9 @@ export function SettingsPanel() {
           </button>
 
           {expandedSection === 'followup' && (
-            <CardContent className="pt-0 space-y-4">
+            <CardContent className="space-y-4 pt-0">
               <div className="flex items-center justify-between">
-                <Badge variant="outline" className="text-xs gap-1">
+                <Badge variant="outline" className="gap-1 rounded-md border-white/70 bg-white/55 text-xs">
                   <Info className="w-3 h-3" />
                   用于「跟进提醒」功能
                 </Badge>
@@ -584,22 +584,22 @@ export function SettingsPanel() {
 
               <div className="space-y-2">
                 <Label htmlFor="firstFollowup" className="text-xs">首次跟进（天）</Label>
-                <Input id="firstFollowup" type="number" defaultValue={3} className="text-sm" />
+                <Input id="firstFollowup" type="number" defaultValue={3} className="rounded-lg bg-white/75 text-sm" />
               </div>
               <div className="space-y-2">
                 <Label htmlFor="secondFollowup" className="text-xs">第二次跟进（天）</Label>
-                <Input id="secondFollowup" type="number" defaultValue={7} className="text-sm" />
+                <Input id="secondFollowup" type="number" defaultValue={7} className="rounded-lg bg-white/75 text-sm" />
               </div>
               <div className="space-y-2">
                 <Label htmlFor="thirdFollowup" className="text-xs">第三次跟进（天）</Label>
-                <Input id="thirdFollowup" type="number" defaultValue={7} className="text-sm" />
+                <Input id="thirdFollowup" type="number" defaultValue={7} className="rounded-lg bg-white/75 text-sm" />
               </div>
             </CardContent>
           )}
         </Card>
 
         {/* 关于 */}
-        <Card className="overflow-hidden">
+        <Card className="overflow-hidden rounded-lg border-white/65 bg-white/66 shadow-apple backdrop-blur-xl">
           <button
             type="button"
             onClick={() => toggleSection('about')}
@@ -608,12 +608,12 @@ export function SettingsPanel() {
             <CardHeader className="pb-3">
               <div className="flex items-center justify-between">
                 <div className="flex items-center gap-3">
-                  <div className="w-9 h-9 rounded-lg bg-pink-500/10 flex items-center justify-center">
+                  <div className="flex h-9 w-9 items-center justify-center rounded-lg bg-pink-500/10">
                     <Heart className="w-4 h-4 text-pink-500" />
                   </div>
                   <div>
                     <CardTitle className="text-base">关于红人推广看板</CardTitle>
-                    <CardDescription className="text-xs mt-0.5">版本信息和功能预告</CardDescription>
+                    <CardDescription className="mt-0.5 text-xs">版本信息和功能预告</CardDescription>
                   </div>
                 </div>
                 <div className="flex items-center gap-2">
@@ -628,7 +628,7 @@ export function SettingsPanel() {
           </button>
 
           {expandedSection === 'about' && (
-            <CardContent className="pt-0 space-y-4">
+            <CardContent className="space-y-4 pt-0">
               <p className="text-sm text-muted-foreground">
                 专为跨境电商海外红人推广专员设计的任务管理工具，帮助你管理红人数据库、跟踪合作进度、管理邮件往来。
               </p>
@@ -648,12 +648,12 @@ export function SettingsPanel() {
 
               <Separator />
 
-              <div className="rounded-lg bg-muted/50 p-3 space-y-2">
-                <h4 className="text-xs font-medium text-foreground flex items-center gap-1.5">
+              <div className="space-y-2 rounded-lg border border-white/65 bg-white/55 p-3">
+                <h4 className="flex items-center gap-1.5 text-xs font-medium text-foreground">
                   <Zap className="w-3.5 h-3.5 text-primary" />
                   已完成功能
                 </h4>
-                <ul className="text-xs text-muted-foreground space-y-1">
+                <ul className="space-y-1 text-xs text-muted-foreground">
                   <li>Gmail 邮件集成</li>
                   <li>DeepSeek AI 辅助写邮件</li>
                   <li>邮件翻译功能</li>
