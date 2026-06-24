@@ -85,6 +85,7 @@ type Prospect = {
 
 type YouTubeResolveChannel = Omit<Prospect, 'id' | 'inputUrl' | 'status' | 'createdAt' | 'updatedAt' | 'aiDraft'> & {
   confidence?: 'high' | 'medium' | 'low';
+  inputUrl?: string;
 };
 
 type YouTubeResolveResponse = {
@@ -140,8 +141,10 @@ function normalizeInputKey(value: string) {
     .trim()
     .replace(/[<>"'，,。]+$/g, '')
     .replace(/^["'<]+/g, '')
-    .replace(/^https?:\/\/(www\.)?/i, '')
-    .replace(/\/$/g, '')
+    .replace(/[?#].*$/g, '')
+    .replace(/^https?:\/\/(www\.|m\.)?/i, '')
+    .replace(/\/+$/g, '')
+    .replace(/\/(about|community|featured|playlists|shorts|streams|videos)$/i, '')
     .toLowerCase();
 }
 
@@ -358,12 +361,14 @@ export function CreatorProspectingPage() {
       }
 
       setProspects((current) => current.map((item) => {
+        const inputKey = normalizeInputKey(item.inputUrl);
         const channel = result.channels?.find((candidate) => (
-          normalizeInputKey(candidate.sourceUrl || '') === normalizeInputKey(item.inputUrl)
-          || normalizeInputKey(candidate.url || '') === normalizeInputKey(item.inputUrl)
+          normalizeInputKey(candidate.inputUrl || '') === inputKey
+          || normalizeInputKey(candidate.sourceUrl || '') === inputKey
+          || normalizeInputKey(candidate.url || '') === inputKey
           || (item.channelId && candidate.channelId === item.channelId)
         ));
-        const matchedError = result.errors?.find((error) => normalizeInputKey(error.sourceUrl) === normalizeInputKey(item.inputUrl));
+        const matchedError = result.errors?.find((error) => normalizeInputKey(error.sourceUrl) === inputKey);
         if (channel) {
           return {
             ...item,
@@ -741,28 +746,40 @@ export function CreatorProspectingPage() {
 
                     <div className="min-w-0 flex-1 space-y-3">
                       <div className="rounded-lg border border-white/70 bg-white/70 p-3">
-                        <p className="text-xs font-semibold text-muted-foreground">频道简介摘要</p>
-                        <p className="mt-1 max-h-24 overflow-hidden text-sm leading-6 text-foreground/85">
-                          {prospect.description || '暂未读取到频道简介。'}
-                        </p>
-                      </div>
-                      <div className="rounded-lg border border-white/70 bg-white/70 p-3">
-                        <p className="text-xs font-semibold text-muted-foreground">最近视频</p>
-                        <div className="mt-2 grid gap-2 md:grid-cols-2">
+                        <p className="text-xs font-semibold text-muted-foreground">最近 4 个视频</p>
+                        <div className="mt-2 grid gap-2 sm:grid-cols-2 xl:grid-cols-4">
                           {(prospect.recentVideos || []).slice(0, 4).map((video) => (
                             <a
                               key={video.videoId || video.url || video.title}
-                              href={video.url}
+                              href={video.url || channelUrl}
                               target="_blank"
                               rel="noreferrer"
-                              className="rounded-md border border-slate-100 bg-white/70 px-2 py-1.5 text-xs hover:border-primary/40"
+                              className="group overflow-hidden rounded-lg border border-slate-100 bg-white/75 text-xs shadow-sm transition hover:border-primary/40 hover:shadow-md"
                             >
-                              <span className="block truncate font-medium">{video.title || '未命名视频'}</span>
-                              <span className="text-muted-foreground">{shortDate(video.publishedAt)}</span>
+                              <div className="relative aspect-video overflow-hidden bg-slate-100">
+                                {video.thumbnail ? (
+                                  <img
+                                    src={video.thumbnail}
+                                    alt={video.title || 'YouTube video thumbnail'}
+                                    loading="lazy"
+                                    className="h-full w-full object-cover transition duration-200 group-hover:scale-[1.03]"
+                                  />
+                                ) : (
+                                  <div className="flex h-full w-full items-center justify-center text-muted-foreground">
+                                    <Youtube className="h-5 w-5" aria-hidden="true" />
+                                  </div>
+                                )}
+                              </div>
+                              <div className="space-y-1 p-2">
+                                <span className="line-clamp-2 min-h-8 font-medium leading-4">{video.title || '未命名视频'}</span>
+                                <span className="block text-muted-foreground">{shortDate(video.publishedAt)}</span>
+                              </div>
                             </a>
                           ))}
                           {!(prospect.recentVideos || []).length && (
-                            <p className="text-xs text-muted-foreground">暂未读取到最近公开视频。</p>
+                            <p className="rounded-lg border border-dashed border-slate-200 bg-white/60 p-3 text-xs text-muted-foreground sm:col-span-2 xl:col-span-4">
+                              暂未读取到最近公开视频。
+                            </p>
                           )}
                         </div>
                       </div>

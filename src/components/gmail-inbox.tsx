@@ -176,6 +176,12 @@ function normalizeEmailAddress(value?: string): string {
   return email.trim().replace(/^mailto:/i, '').toLowerCase();
 }
 
+function isLatestMessageFromEmail(thread: GmailThread, email?: string): boolean {
+  const latestMessage = thread.messages[thread.messages.length - 1];
+  if (!latestMessage || !email) return false;
+  return normalizeEmailAddress(latestMessage.from) === normalizeEmailAddress(email);
+}
+
 function normalizeBase64(data: string) {
   const normalized = data.replace(/-/g, '+').replace(/_/g, '/');
   return normalized.padEnd(Math.ceil(normalized.length / 4) * 4, '=');
@@ -380,10 +386,12 @@ export function GmailInbox({
   const { settings } = useSettings();
   const latestFetchIdRef = useRef(0);
   const subjectTranslationRunRef = useRef(0);
+  const manuallyPreservedUnreadThreadIdsRef = useRef<Set<string>>(new Set());
   const [threads, setThreads] = useState<GmailThread[]>([]);
   const [loading, setLoading] = useState(false);
   const [translatingSubjects, setTranslatingSubjects] = useState(false);
   const [actionThreadId, setActionThreadId] = useState<string | null>(null);
+  const [openingThreadId, setOpeningThreadId] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [subjectTranslationError, setSubjectTranslationError] = useState<string | null>(null);
   const [searchQuery, setSearchQuery] = useState('');
@@ -410,6 +418,11 @@ export function GmailInbox({
 
   useEffect(() => {
     if (!updatedThread) return;
+    if (updatedThread.hasUnread && isLatestMessageFromEmail(updatedThread, auth?.email)) {
+      manuallyPreservedUnreadThreadIdsRef.current.add(updatedThread.id);
+    } else if (!updatedThread.hasUnread) {
+      manuallyPreservedUnreadThreadIdsRef.current.delete(updatedThread.id);
+    }
     setThreads((current) => {
       if (mailbox === 'unread' && !updatedThread.hasUnread) {
         return current.filter((thread) => thread.id !== updatedThread.id);
@@ -595,19 +608,19 @@ export function GmailInbox({
   useEffect(() => {
     if (!auth?.isConnected || !auth.accessToken) return undefined;
     const timer = window.setInterval(() => {
-      if (document.visibilityState === 'visible' && !loading && !actionThreadId) {
+      if (document.visibilityState === 'visible' && !loading && !actionThreadId && !openingThreadId) {
         void fetchThreads();
       }
     }, GMAIL_AUTO_REFRESH_MS);
 
     return () => window.clearInterval(timer);
-  }, [actionThreadId, auth?.accessToken, auth?.isConnected, fetchThreads, loading]);
+  }, [actionThreadId, auth?.accessToken, auth?.isConnected, fetchThreads, loading, openingThreadId]);
 
   useEffect(() => {
     if (!auth?.isConnected || !auth.accessToken) return undefined;
 
     const refreshWhenActive = () => {
-      if (document.visibilityState === 'visible' && !loading && !actionThreadId) {
+      if (document.visibilityState === 'visible' && !loading && !actionThreadId && !openingThreadId) {
         void fetchThreads();
       }
     };
@@ -619,7 +632,7 @@ export function GmailInbox({
       window.removeEventListener('focus', refreshWhenActive);
       document.removeEventListener('visibilitychange', refreshWhenActive);
     };
-  }, [actionThreadId, auth?.accessToken, auth?.isConnected, fetchThreads, loading]);
+  }, [actionThreadId, auth?.accessToken, auth?.isConnected, fetchThreads, loading, openingThreadId]);
 
   const goToPreviousPage = () => {
     if (loading || pageIndex === 0) return;
@@ -663,6 +676,13 @@ export function GmailInbox({
       if (!response.ok) {
         const result = await response.json().catch(() => ({}));
         throw new Error(result.error?.message || '\u66f4\u65b0\u90ae\u4ef6\u72b6\u6001\u5931\u8d25');
+      }
+
+      if (addLabelIds.includes('UNREAD')) {
+        manuallyPreservedUnreadThreadIdsRef.current.add(thread.id);
+      }
+      if (removeLabelIds.includes('UNREAD')) {
+        manuallyPreservedUnreadThreadIdsRef.current.delete(thread.id);
       }
 
       const nextLabels = Array.from(new Set([
@@ -717,7 +737,8 @@ export function GmailInbox({
   };
 
   const handleOpenThread = async (thread: GmailThread) => {
-    setActionThreadId(thread.id);
+    if (openingThreadId === thread.id) return;
+    setOpeningThreadId(thread.id);
     let nextThread = thread;
 
     try {
@@ -733,11 +754,21 @@ export function GmailInbox({
     } catch {
       // The lightweight list data is still usable if full content loading fails.
     } finally {
-      setActionThreadId(null);
+      setOpeningThreadId(null);
     }
 
-    if (nextThread.hasUnread) {
+    const shouldPreserveUnread = nextThread.hasUnread
+      && (
+        manuallyPreservedUnreadThreadIdsRef.current.has(nextThread.id)
+        || isLatestMessageFromEmail(nextThread, auth?.email)
+      );
+
+    if (nextThread.hasUnread && !shouldPreserveUnread) {
       nextThread = await modifyThread(nextThread, [], ['UNREAD']);
+    } else {
+      setThreads((current) =>
+        sortThreadsByLatest(current.map((item) => item.id === nextThread.id ? nextThread : item)),
+      );
     }
     onSelectThread(nextThread);
   };

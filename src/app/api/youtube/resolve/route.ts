@@ -32,6 +32,17 @@ type YouTubeSearchResponse = YouTubeErrorResponse & {
   items?: YouTubeSearchItem[];
 };
 
+type YouTubeVideoItem = {
+  id?: string;
+  snippet?: {
+    channelId?: string;
+  };
+};
+
+type YouTubeVideosResponse = YouTubeErrorResponse & {
+  items?: YouTubeVideoItem[];
+};
+
 type YouTubeChannelItem = {
   id: string;
   snippet?: {
@@ -55,10 +66,14 @@ type YouTubeChannelsResponse = YouTubeErrorResponse & {
 };
 
 type ResolvedInput = {
+  inputUrl: string;
   sourceUrl: string;
   channelId?: string;
   lookupQuery?: string;
-  resolution: 'direct' | 'search';
+  handle?: string;
+  username?: string;
+  videoId?: string;
+  resolution: 'direct' | 'handle' | 'username' | 'video' | 'search';
 };
 
 async function resolveYouTubeKey(request: NextRequest, providedKey?: string) {
@@ -86,9 +101,17 @@ function normalizeMaybeUrl(input: string) {
   const trimmed = input.trim();
   if (!trimmed) return '';
   if (trimmed.startsWith('http://') || trimmed.startsWith('https://')) return trimmed;
-  if (/^(www\.)?(youtube\.com|m\.youtube\.com)\//i.test(trimmed)) return `https://${trimmed}`;
+  if (/^(www\.)?(youtube\.com|m\.youtube\.com|youtu\.be)\//i.test(trimmed)) return `https://${trimmed}`;
   if (trimmed.startsWith('@')) return `https://www.youtube.com/${trimmed}`;
   return trimmed;
+}
+
+function cleanChannelPathSegment(value: string) {
+  return decodeURIComponent(value || '')
+    .trim()
+    .replace(/^@+/, '')
+    .replace(/[?#].*$/, '')
+    .replace(/\/+$/, '');
 }
 
 function parseYouTubeInput(input: string): ResolvedInput | null {
@@ -96,19 +119,49 @@ function parseYouTubeInput(input: string): ResolvedInput | null {
   if (!normalized) return null;
 
   if (/^UC[\w-]{20,}$/i.test(normalized)) {
-    return { sourceUrl: `https://www.youtube.com/channel/${normalized}`, channelId: normalized, resolution: 'direct' };
+    return { inputUrl: input, sourceUrl: `https://www.youtube.com/channel/${normalized}`, channelId: normalized, resolution: 'direct' };
   }
 
   try {
     const url = new URL(normalized);
     const host = url.hostname.replace(/^www\./, '').replace(/^m\./, '');
+    const segments = url.pathname.split('/').filter(Boolean);
+
+    if (host === 'youtu.be' && segments[0]) {
+      return {
+        inputUrl: input,
+        sourceUrl: `https://youtu.be/${segments[0]}`,
+        videoId: segments[0],
+        resolution: 'video',
+      };
+    }
+
     if (!host.includes('youtube.com')) return null;
 
-    const segments = url.pathname.split('/').filter(Boolean);
+    if (url.pathname === '/watch' && url.searchParams.get('v')) {
+      const videoId = url.searchParams.get('v') || '';
+      return {
+        inputUrl: input,
+        sourceUrl: `https://www.youtube.com/watch?v=${videoId}`,
+        videoId,
+        resolution: 'video',
+      };
+    }
+
+    if ((segments[0] === 'shorts' || segments[0] === 'live' || segments[0] === 'embed') && segments[1]) {
+      return {
+        inputUrl: input,
+        sourceUrl: `https://www.youtube.com/${segments[0]}/${segments[1]}`,
+        videoId: segments[1],
+        resolution: 'video',
+      };
+    }
+
     if (!segments.length) return null;
 
     if (segments[0] === 'channel' && segments[1]) {
       return {
+        inputUrl: input,
         sourceUrl: `https://www.youtube.com/channel/${segments[1]}`,
         channelId: segments[1],
         resolution: 'direct',
@@ -116,31 +169,51 @@ function parseYouTubeInput(input: string): ResolvedInput | null {
     }
 
     if (segments[0].startsWith('@')) {
+      const handle = cleanChannelPathSegment(segments[0]);
       return {
-        sourceUrl: `https://www.youtube.com/${segments[0]}`,
-        lookupQuery: segments[0],
-        resolution: 'search',
+        inputUrl: input,
+        sourceUrl: `https://www.youtube.com/@${handle}`,
+        lookupQuery: handle,
+        handle,
+        resolution: 'handle',
       };
     }
 
     if ((segments[0] === 'c' || segments[0] === 'user') && segments[1]) {
+      const lookup = cleanChannelPathSegment(segments[1]);
       return {
-        sourceUrl: `https://www.youtube.com/${segments[0]}/${segments[1]}`,
-        lookupQuery: segments[1],
+        inputUrl: input,
+        sourceUrl: `https://www.youtube.com/${segments[0]}/${lookup}`,
+        lookupQuery: lookup,
+        username: segments[0] === 'user' ? lookup : undefined,
+        resolution: segments[0] === 'user' ? 'username' : 'search',
+      };
+    }
+
+    const lookup = cleanChannelPathSegment(segments[0]);
+    if (lookup && !['feed', 'playlist', 'results', 'watch'].includes(lookup.toLowerCase())) {
+      return {
+        inputUrl: input,
+        sourceUrl: `https://www.youtube.com/${lookup}`,
+        lookupQuery: lookup,
         resolution: 'search',
       };
     }
   } catch {
     if (normalized.startsWith('@')) {
+      const handle = cleanChannelPathSegment(normalized);
       return {
-        sourceUrl: `https://www.youtube.com/${normalized}`,
-        lookupQuery: normalized,
-        resolution: 'search',
+        inputUrl: input,
+        sourceUrl: `https://www.youtube.com/@${handle}`,
+        lookupQuery: handle,
+        handle,
+        resolution: 'handle',
       };
     }
   }
 
   return {
+    inputUrl: input,
     sourceUrl: normalized,
     lookupQuery: normalized.replace(/^@/, ''),
     resolution: 'search',
@@ -150,6 +223,59 @@ function parseYouTubeInput(input: string): ResolvedInput | null {
 function extractPublicEmail(text: string) {
   const match = text.match(/[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}/i);
   return match?.[0] || '';
+}
+
+async function fetchChannelIdByHandle(apiKey: string, handle: string) {
+  const cleanHandle = cleanChannelPathSegment(handle);
+  if (!cleanHandle) return '';
+
+  for (const candidate of [cleanHandle, `@${cleanHandle}`]) {
+    const url = buildYouTubeUrl('channels', {
+      part: 'snippet',
+      forHandle: candidate,
+      key: apiKey,
+    });
+
+    const response = await fetch(url, { cache: 'no-store' });
+    const data = await response.json() as YouTubeChannelsResponse;
+    if (response.ok && !data.error && data.items?.[0]?.id) {
+      return data.items[0].id;
+    }
+  }
+
+  return '';
+}
+
+async function fetchChannelIdByUsername(apiKey: string, username: string) {
+  const cleanUsername = cleanChannelPathSegment(username);
+  if (!cleanUsername) return '';
+
+  const url = buildYouTubeUrl('channels', {
+    part: 'snippet',
+    forUsername: cleanUsername,
+    key: apiKey,
+  });
+
+  const response = await fetch(url, { cache: 'no-store' });
+  const data = await response.json() as YouTubeChannelsResponse;
+  if (!response.ok || data.error) return '';
+  return data.items?.[0]?.id || '';
+}
+
+async function fetchVideoChannelId(apiKey: string, videoId: string) {
+  if (!videoId) return '';
+  const url = buildYouTubeUrl('videos', {
+    part: 'snippet',
+    id: videoId,
+    key: apiKey,
+  });
+
+  const response = await fetch(url, { cache: 'no-store' });
+  const data = await response.json() as YouTubeVideosResponse;
+  if (!response.ok || data.error) {
+    throw new Error(data.error?.message || `YouTube 视频读取失败 (${response.status})`);
+  }
+  return data.items?.[0]?.snippet?.channelId || '';
 }
 
 async function searchChannelId(apiKey: string, query: string, regionCode: string, relevanceLanguage: string) {
@@ -169,6 +295,31 @@ async function searchChannelId(apiKey: string, query: string, regionCode: string
     throw new Error(data.error?.message || `YouTube 频道搜索失败 (${response.status})`);
   }
   return data.items?.[0]?.id?.channelId || '';
+}
+
+async function resolveChannelId(apiKey: string, item: ResolvedInput, regionCode: string, relevanceLanguage: string) {
+  if (item.channelId) return item.channelId;
+
+  if (item.videoId) {
+    return await fetchVideoChannelId(apiKey, item.videoId);
+  }
+
+  if (item.handle) {
+    const direct = await fetchChannelIdByHandle(apiKey, item.handle);
+    if (direct) return direct;
+  }
+
+  if (item.username) {
+    const direct = await fetchChannelIdByUsername(apiKey, item.username);
+    if (direct) return direct;
+  }
+
+  return await searchChannelId(
+    apiKey,
+    item.lookupQuery || item.inputUrl,
+    regionCode,
+    relevanceLanguage,
+  );
 }
 
 async function fetchChannels(apiKey: string, channelIds: string[]) {
@@ -248,14 +399,10 @@ export async function POST(request: NextRequest) {
         errors.push({ sourceUrl: item.input, error: '无法识别为 YouTube 频道链接。' });
         continue;
       }
-      if (item.parsed.channelId) {
-        resolvedInputs.push(item.parsed);
-        continue;
-      }
       try {
-        const channelId = await searchChannelId(
+        const channelId = await resolveChannelId(
           apiKey,
-          item.parsed.lookupQuery || item.input,
+          item.parsed,
           regionCode,
           relevanceLanguage,
         );
@@ -293,6 +440,7 @@ export async function POST(request: NextRequest) {
 
         const description = channel.snippet?.description || '';
         return {
+          inputUrl: source?.inputUrl,
           sourceUrl: source?.sourceUrl || `https://www.youtube.com/channel/${channel.id}`,
           channelId: channel.id,
           title: channel.snippet?.title || '',
@@ -309,7 +457,7 @@ export async function POST(request: NextRequest) {
           publicEmail: extractPublicEmail(description),
           recentVideos,
           resolution: source?.resolution || 'direct',
-          confidence: source?.resolution === 'direct' ? 'high' : 'medium',
+          confidence: source?.resolution === 'search' ? 'medium' : 'high',
         };
       }),
     );
