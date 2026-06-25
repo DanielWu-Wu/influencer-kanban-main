@@ -173,7 +173,7 @@ export function YouTubeApiSettings({ expanded, onToggle }: YouTubeApiSettingsPro
                 className="rounded-lg border-white/65 bg-white/75"
               />
               <p className="text-xs text-muted-foreground">
-                用于之后读取频道简介、订阅数、视频数据和搜索合适红人。
+                用于之后读取订阅数、视频数据、头像等公开资料；频道简介仅作为 AI 起草开发信的参考。
               </p>
             </div>
 
@@ -244,7 +244,7 @@ export function YouTubeApiSettings({ expanded, onToggle }: YouTubeApiSettingsPro
           <div className="flex items-center justify-between rounded-lg border border-white/65 bg-white/55 p-3">
             <div>
               <p className="text-sm font-medium">自动补全频道资料</p>
-              <p className="text-xs text-muted-foreground">后续连接红人库时，自动补全频道简介、粉丝量、最新视频等信息。</p>
+              <p className="text-xs text-muted-foreground">后续连接红人库时，自动补全粉丝量、最新视频等信息；频道简介不写入飞书字段。</p>
             </div>
             <Switch checked={autoEnrichEnabled} onCheckedChange={setAutoEnrichEnabled} />
           </div>

@@ -219,7 +219,6 @@ function buildFeishuFields(prospect: Prospect, mapping: FeishuFieldMapping) {
     prospect.avatarUrl ? `频道头像：${prospect.avatarUrl}` : '',
     prospect.videoCount !== undefined && prospect.videoCount !== null ? `视频数：${prospect.videoCount}` : '',
     prospect.viewCount !== undefined && prospect.viewCount !== null ? `总观看量：${prospect.viewCount}` : '',
-    prospect.description ? `频道简介：${prospect.description}` : '',
     summarizeVideos(prospect.recentVideos),
   ].filter(Boolean).join('\n');
 
@@ -228,7 +227,6 @@ function buildFeishuFields(prospect: Prospect, mapping: FeishuFieldMapping) {
   putMappedField(fields, mapping, 'region', countryLabel(prospect.country));
   putMappedField(fields, mapping, 'followers', maybeFollowerValue(followerField, prospect.subscriberCount));
   putMappedField(fields, mapping, 'channelUrl', firstValue(prospect.url, prospect.sourceUrl, prospect.inputUrl));
-  putMappedField(fields, mapping, 'description', prospect.description);
   putMappedField(fields, mapping, 'email', prospect.publicEmail);
   putMappedField(fields, mapping, 'collaborationStatus', '暂未合作');
   putMappedField(fields, mapping, 'notes', notes);

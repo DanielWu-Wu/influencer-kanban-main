@@ -90,12 +90,6 @@ export const FEISHU_FIELD_TARGETS: Array<{
     keywords: ['互动率', '互动', 'engagement'],
   },
   {
-    key: 'description',
-    label: '频道简介',
-    description: '用于 AI 个性化冷开发邮件',
-    keywords: ['频道简介', '红人频道简介', '简介', 'description', 'bio'],
-  },
-  {
     key: 'firstOutreach',
     label: '初次开发信',
     description: '用于记录是否已发首封邮件',
