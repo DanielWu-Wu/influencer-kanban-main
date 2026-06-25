@@ -1,12 +1,14 @@
 'use client';
 
 import { useEffect, useMemo, useState } from 'react';
+import type { ReactNode } from 'react';
 import {
   AlertTriangle,
   CheckCircle2,
   Copy,
   Database,
   ExternalLink,
+  Info,
   Loader2,
   MailPlus,
   RefreshCw,
@@ -27,6 +29,7 @@ import {
   DialogTitle,
 } from '@/components/ui/dialog';
 import { Textarea } from '@/components/ui/textarea';
+import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip';
 import { generateId, useGmailAuth, useProducts, useSettings } from '@/lib/data';
 import type { Product } from '@/lib/types';
 import type { FeishuFieldKey, FeishuFieldMapping } from '@/lib/feishu-mapping';
@@ -99,6 +102,25 @@ type FeishuWritePreview = {
   prospect: Prospect;
   fields: Record<string, unknown>;
 };
+
+function ButtonHelpTooltip({ label, children }: { label: string; children: ReactNode }) {
+  return (
+    <Tooltip>
+      <TooltipTrigger asChild>
+        <button
+          type="button"
+          aria-label={label}
+          className="absolute -right-1.5 -top-1.5 z-10 inline-flex h-4 w-4 items-center justify-center rounded-full border border-amber-200 bg-amber-50 text-amber-700 shadow-sm transition-colors hover:bg-amber-100 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-amber-300"
+        >
+          <Info className="h-2.5 w-2.5" />
+        </button>
+      </TooltipTrigger>
+      <TooltipContent side="top" align="center" sideOffset={6} className="max-w-64 bg-slate-950 px-3 py-2 text-xs leading-relaxed text-white">
+        {children}
+      </TooltipContent>
+    </Tooltip>
+  );
+}
 
 const STATUS_META: Record<ProspectStatus, { label: string; className: string }> = {
   pending: { label: '待识别', className: 'border-slate-200 bg-slate-50 text-slate-600' },
@@ -636,14 +658,24 @@ export function CreatorProspectingPage() {
               {resolving ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <RefreshCw className="mr-2 h-4 w-4" />}
               识别频道
             </Button>
-            <Button variant="outline" onClick={() => setInput('')} className="rounded-lg">
-              清空输入
-            </Button>
-            {selectedProspects.length > 0 && (
-              <Button variant="outline" onClick={() => openFeishuPreview(selectedProspects)} className="rounded-lg">
-                <Database className="mr-2 h-4 w-4" />
-                写入选中
+            <div className="relative inline-flex">
+              <Button variant="outline" onClick={() => setInput('')} className="rounded-lg">
+                清空输入
               </Button>
+              <ButtonHelpTooltip label="清空输入说明">
+                清空上方频道链接输入框；不会删除下方已识别线索、已选线索或已生成草稿。
+              </ButtonHelpTooltip>
+            </div>
+            {selectedProspects.length > 0 && (
+              <div className="relative inline-flex">
+                <Button variant="outline" onClick={() => openFeishuPreview(selectedProspects)} className="rounded-lg">
+                  <Database className="mr-2 h-4 w-4" />
+                  写入选中
+                </Button>
+                <ButtonHelpTooltip label="写入选中说明">
+                  将你勾选的红人线索写入当前连接的飞书表；点击后会先弹出写入预览，确认后才真正写入。
+                </ButtonHelpTooltip>
+              </div>
             )}
           </div>
 
