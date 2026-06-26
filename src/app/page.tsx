@@ -231,10 +231,10 @@ export default function DashboardPage() {
                   setCurrentView(item.id as View);
                   setMobileMenuOpen(false);
                 }}
-                className={`flex h-11 w-full items-center gap-3 rounded-lg px-3 text-sm font-medium transition-all duration-200 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring ${
+                className={`flex h-11 w-full cursor-pointer items-center gap-3 rounded-lg px-3 text-sm font-medium transition-all duration-200 ease-out active:scale-[0.99] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring motion-reduce:transition-none motion-reduce:active:scale-100 ${
                   isActive
-                    ? 'bg-primary text-primary-foreground shadow-apple'
-                    : 'text-muted-foreground hover:bg-white/70 hover:text-foreground'
+                    ? 'bg-primary text-primary-foreground shadow-apple hover:bg-primary/95 hover:shadow-apple-hover'
+                    : 'text-muted-foreground hover:bg-white/82 hover:text-foreground hover:shadow-sm'
                 }`}
               >
                 <Icon className="h-4 w-4 flex-shrink-0" />
@@ -280,7 +280,7 @@ export default function DashboardPage() {
             {stats.todayTodos > 0 && (
               <button
                 onClick={() => setCurrentView('todo')}
-                className="glass-control hidden h-9 items-center gap-2 rounded-lg px-3 text-sm font-medium text-primary transition-colors hover:bg-white md:flex"
+                className="glass-control hidden h-9 cursor-pointer items-center gap-2 rounded-lg px-3 text-sm font-medium text-primary transition-all duration-200 ease-out hover:bg-white/85 hover:shadow-sm active:scale-[0.98] motion-reduce:transition-none motion-reduce:active:scale-100 md:flex"
               >
                 <CheckSquare className="w-4 h-4" />
                 {stats.todayTodos} {label.todo}
@@ -289,7 +289,7 @@ export default function DashboardPage() {
             {stats.upcoming > 0 && (
               <button
                 onClick={() => setCurrentView('reminders')}
-                className="glass-control hidden h-9 items-center gap-2 rounded-lg px-3 text-sm font-medium text-amber-700 transition-colors hover:bg-white md:flex"
+                className="glass-control hidden h-9 cursor-pointer items-center gap-2 rounded-lg px-3 text-sm font-medium text-amber-700 transition-all duration-200 ease-out hover:bg-white/85 hover:shadow-sm active:scale-[0.98] motion-reduce:transition-none motion-reduce:active:scale-100 md:flex"
               >
                 <Bell className="w-4 h-4" />
                 {stats.upcoming} {label.followUps}

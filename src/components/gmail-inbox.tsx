@@ -1000,10 +1000,10 @@ export function GmailInbox({
             <button
               key={id}
               type="button"
-              className={`flex h-11 items-center justify-center gap-2 border-b-2 text-sm transition-colors ${
+              className={`flex h-11 cursor-pointer items-center justify-center gap-2 border-b-2 text-sm transition-all duration-200 ease-out active:scale-[0.99] motion-reduce:transition-none motion-reduce:active:scale-100 ${
                 category === id
-                  ? 'border-primary bg-white/55 font-medium text-primary'
-                  : 'border-transparent text-muted-foreground hover:bg-white/50'
+                  ? 'border-primary bg-white/55 font-medium text-primary shadow-[inset_0_-1px_0_var(--primary)] hover:bg-white/70'
+                  : 'border-transparent text-muted-foreground hover:bg-white/65 hover:text-foreground'
               }`}
               onClick={() => onCategoryChange(id)}
             >
@@ -1051,7 +1051,7 @@ export function GmailInbox({
                 key={thread.id}
                 role="button"
                 tabIndex={0}
-                className={`glass-list-row group border-b border-white/55 px-3 py-2.5 transition-all duration-200 ${
+                className={`glass-list-row group cursor-pointer border-b border-white/55 px-3 py-2.5 outline-none transition-all duration-200 ease-out hover:bg-white/72 hover:shadow-sm active:bg-white/85 focus-visible:ring-2 focus-visible:ring-ring/40 motion-reduce:transition-none ${
                   selectedThreadId === thread.id ? 'bg-white/85 shadow-[inset_3px_0_0_var(--primary)]' : ''
                 } ${thread.hasUnread ? 'bg-primary/[0.055]' : ''}`}
                 onClick={() => handleOpenThread(thread)}

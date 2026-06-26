@@ -145,6 +145,16 @@
     background:
       linear-gradient(135deg, rgba(239, 246, 255, 0.92) 0%, rgba(248, 250, 252, 0.96) 46%, rgba(236, 253, 245, 0.76) 100%);
   }
+
+  button:not(:disabled),
+  [role='button']:not([aria-disabled='true']) {
+    cursor: pointer;
+  }
+
+  button:disabled,
+  [aria-disabled='true'] {
+    cursor: not-allowed;
+  }
   
   /* Apple-style smooth scrolling */
   html {

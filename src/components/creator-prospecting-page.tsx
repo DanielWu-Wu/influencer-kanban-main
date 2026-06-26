@@ -784,7 +784,7 @@ export function CreatorProspectingPage() {
                               href={video.url || channelUrl}
                               target="_blank"
                               rel="noreferrer"
-                              className="group overflow-hidden rounded-lg border border-slate-100 bg-white/75 text-xs shadow-sm transition hover:border-primary/40 hover:shadow-md"
+                              className="group cursor-pointer overflow-hidden rounded-lg border border-slate-100 bg-white/75 text-xs shadow-sm transition-all duration-200 ease-out hover:border-primary/40 hover:bg-white/90 hover:shadow-md active:scale-[0.99] motion-reduce:transition-none motion-reduce:active:scale-100"
                             >
                               <div className="relative aspect-video overflow-hidden bg-slate-100">
                                 {video.thumbnail ? (
