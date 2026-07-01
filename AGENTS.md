@@ -1,153 +1,90 @@
-# 红人推广看板 - 项目文档
+# AGENTS.md
 
-## 项目概述
+## 项目简介
 
-专为跨境电商海外红人推广专员设计的看板工作台，帮助管理红人数据库、跟踪合作进度、管理邮件往来。
+这是一个面向跨境电商海外红人推广专员的工作流看板。
+核心目标是把红人开发、Gmail 邮件跟进、AI 辅助回复、飞书多维表格记录、YouTube 频道资料、产品资料和合作进度管理放在同一个工作台中。
+产品定位是高效、清晰、可控的 B2B 运营工具，不是营销展示页。
 
 ## 技术栈
 
-- **Framework**: Next.js 16 (App Router)
-- **Core**: React 19
-- **Language**: TypeScript 5
-- **UI 组件**: shadcn/ui (基于 Radix UI)
-- **样式**: Tailwind CSS 4
-- **拖拽**: @dnd-kit
-- **数据存储**: localStorage (MVP阶段)
+- Framework: Next.js 16 App Router
+- Frontend: React 19, TypeScript 5
+- UI: Tailwind CSS 4, shadcn/ui, Radix UI, lucide-react
+- Drag/drop: @dnd-kit
+- Backend/API: Next.js Route Handlers under `src/app/api/**`
+- Auth/storage: Supabase Auth, Supabase tables/RPC for cloud settings and user secrets
+- External integrations: Gmail API, Feishu Open Platform/Base API, YouTube Data API, OpenAI-compatible AI APIs
+- Main folders:
+  - `src/app`: app shell, pages, API routes
+  - `src/components`: feature UI components
+  - `src/components/ui`: shared shadcn-style UI primitives
+  - `src/lib`: types, storage, API helpers, business logic
+  - `docs`: handoff and project docs
 
-## 目录结构
+## 业务背景简述
 
-```
-src/
-├── app/
-│   ├── page.tsx              # 主页面（看板工作台）
-│   ├── layout.tsx            # 根布局
-│   ├── globals.css           # 全局样式
-│   └── api/
-│       ├── ai/route.ts       # AI 邮件生成 API (DeepSeek)
-│       ├── translate/route.ts # 邮件翻译 API (DeepSeek)
-│       ├── gmail/route.ts    # Gmail API 代理（获取邮件/创建草稿）
-│       └── auth/
-│           ├── callback/route.ts  # OAuth 回调处理
-│           ├── token/route.ts     # OAuth Token 交换
-│           └── refresh/route.ts   # OAuth Token 刷新
-├── components/
-│   ├── kanban-board.tsx      # 看板主组件
-│   ├── kanban-column.tsx     # 看板列组件
-│   ├── influencer-card.tsx   # 红人卡片组件
-│   ├── influencer-form.tsx   # 红人表单组件
-│   ├── email-template-manager.tsx  # 邮件模板管理
-│   ├── reminder-panel.tsx    # 跟进提醒面板
-│   ├── settings-panel.tsx    # 设置面板
-│   ├── gmail-page.tsx        # Gmail 邮件页面
-│   ├── gmail-inbox.tsx       # Gmail 收件箱
-│   ├── email-detail.tsx      # 邮件详情（含翻译）
-│   ├── email-composer.tsx    # AI 邮件助手
-│   └── gmail-settings.tsx    # Gmail 设置
-├── lib/
-│   ├── types.ts              # 类型定义
-│   ├── data.ts               # 数据管理 hooks
-│   └── utils.ts              # 工具函数
-└── components/ui/           # shadcn/ui 组件库
-```
+用户主要做 YouTube 海外红人推广，重点市场包括西班牙、荷兰，未来可能扩展到波兰、比利时、葡萄牙等。
+典型流程：手动/YouTube 工具发现红人 -> 建档 -> 待联系 -> 开发信 -> 已联系 -> 有意向 -> 谈价格/方式 -> 确认 -> 寄样 -> 拍摄 -> 发布 -> 复盘/归档。
+AI 的角色是辅助判断、起草、翻译、提取信息、生成写回预览和汇报；最终决策和写入确认由用户完成。
 
-## 功能模块
+## 代码修改原则
 
-### 1. 红人数据库管理
-- 添加/编辑/删除红人信息
-- 字段：频道名称、链接、邮箱、国家、粉丝数、类目、评级、备注
+- 保持小步、可验证、低风险改动；不要顺手重构无关模块。
+- 优先沿用现有组件、数据结构、样式变量和 API 约定。
+- 不要改变业务逻辑，除非用户明确要求。
+- 涉及外部写入时必须保留用户确认步骤，尤其是 Gmail 发送、Gmail 草稿、飞书写回、AI Agent 操作。
+- UI 修改要保持桌面工作台的信息密度，偏清爽、现代、轻 Glassmorphism，不做花哨落地页风格。
+- 用户界面主要使用中文；避免新增乱码文案。
+- 不要把 DeepSeek 描述为项目内置服务；模型 API 由用户自己配置，项目只提供 OpenAI-compatible 接口适配。
+- 手动编辑文件使用 `apply_patch`。
 
-### 2. 可视化看板
-- 10个状态列：红人库、待联系、已联系、有意向、洽谈中、已确认、样品中、拍摄中、已发布、已归档
-- 拖拽流转，状态自动更新
-- 筛选和搜索功能
+## 文件查看原则
 
-### 3. 邮件模板管理
-- 5个预设模板：冷开发信、跟进提醒(3种)、关怀邮件、感谢邮件
-- 模板变量替换
-- 一键复制到剪贴板
+- 先看与任务直接相关的文件，不要无目的扫描整个仓库。
+- 常见入口：
+  - 主壳/导航：`src/app/page.tsx`
+  - 全局样式：`src/app/globals.css`
+  - 业务类型：`src/lib/types.ts`
+  - 数据/设置：`src/lib/data.ts`
+  - Gmail：`src/components/gmail-page.tsx`, `src/components/gmail-inbox.tsx`, `src/components/email-detail.tsx`
+  - 红人开发台：`src/components/creator-prospecting-page.tsx`
+  - 飞书：`src/components/feishu-settings.tsx`, `src/lib/feishu-base.ts`, `src/lib/feishu-mapping.ts`
+  - AI Agent/记录助手：`src/components/record-assistant-provider.tsx`, `src/lib/record-assistant.ts`, `src/lib/agent-assistant.ts`
+  - 设置中心：`src/components/settings-panel.tsx`
+  - 项目交接：`docs/AI_HANDOFF.md`
+- 搜索优先用 `rg`；Windows 环境下路径要注意 PowerShell 转义。
 
-### 4. 跟进提醒系统
-- 手动添加提醒
-- 逾期提醒高亮
-- 完成/跳过操作
+## 不要做的事情
 
-### 5. Gmail 邮件集成
-- Gmail OAuth 授权连接（Client ID/Secret 配置）
-- OAuth 回调自动处理（token 交换 + 刷新）
-- 邮件列表展示（从 Gmail API 实时拉取）
-- 邮件详情查看（原文 + 中文对照）
-- 手动翻译功能（DeepSeek AI 驱动）
-- AI 邮件回复建议（DeepSeek AI 驱动，流式输出）
-- 保存回复到草稿箱（通过 Gmail API）
+- 不要使用 `git reset --hard`、`git checkout --` 等破坏性命令，除非用户明确要求。
+- 不要删除或覆盖用户未提交的本地修改。
+- 不要自动发送邮件、自动群发开发信、自动写飞书，除非用户明确确认。
+- 不要硬编码飞书字段名；写飞书必须使用用户保存的字段映射。
+- 不要假设 YouTube API 能拿到隐藏邮箱；只能从公开简介中提取邮箱。
+- 不要把手动标记的 Gmail 未读邮件当作异常状态；它应被视为正常未读。
+- 不要为了视觉效果牺牲邮件列表、表格、看板的信息密度。
+- 不要把临时任务、聊天历史、一次性排查过程写进本文件。
 
-### 6. 设置面板
-- Gmail OAuth 配置入口
-- 模型 API 设置（内置 DeepSeek / 自定义 OpenAI 兼容 API）
-- 邮件自动检查设置
-- 新邮件通知开关
-- 红人邮箱自动匹配
+## 验证/测试命令
 
-## 开发命令
+项目脚本：
 
 ```bash
-pnpm install    # 安装依赖
-pnpm dev        # 启动开发服务器 (端口 5000)
-pnpm build      # 构建生产版本
-pnpm lint       # 代码检查
-pnpm ts-check   # TypeScript 类型检查
+pnpm install
+pnpm dev
+pnpm ts-check
+pnpm lint
+pnpm build
 ```
 
-## 数据存储
+本机 Codex 环境可能没有系统 `pnpm/node/git` PATH，可使用 Codex bundled runtime：
 
-MVP 阶段使用 localStorage 存储：
-- `influencer-board-influencers`: 红人数据
-- `influencer-board-templates`: 邮件模板
-- `influencer-board-reminders`: 跟进提醒
-- `influencer-board-emails`: 邮件记录
-- `gmail-auth`: Gmail OAuth 授权信息
-- `gmail-threads`: Gmail 邮件对话缓存
-- `gmail-translations`: 邮件翻译记录
-- `gmail-drafts`: 邮件草稿
-- `gmail-ai-suggestions`: AI 回复建议
-- `gmail-settings`: Gmail 设置
+```powershell
+C:\Users\Admin\.cache\codex-runtimes\codex-primary-runtime\dependencies\bin\pnpm.cmd ts-check
+C:\Users\Admin\.cache\codex-runtimes\codex-primary-runtime\dependencies\node\bin\node.exe node_modules\typescript\bin\tsc -p tsconfig.json
+C:\Users\Admin\.cache\codex-runtimes\codex-primary-runtime\dependencies\native\git\cmd\git.exe status --short
+```
 
-## Gmail 集成配置
+如果 `pnpm` 尝试重装依赖并因无 TTY 失败，可直接用 bundled Node 执行本地 `tsc` 做类型检查。
 
-### 需要配置的内容
-
-1. **Google Cloud Console**
-   - 创建 OAuth 2.0 客户端
-   - 启用 Gmail API
-   - 配置授权重定向 URI
-
-2. **DeepSeek AI**
-   - 已内置集成，无需额外配置
-   - 支持切换到自定义 OpenAI 兼容 API（GPT-4o, Qwen, GLM-4 等）
-   - 通过 OpenAI 兼容 API 调用 DeepSeek 或其他模型
-
-### 需要的 API 权限
-
-- `gmail.readonly`: 读取邮件
-- `gmail.compose`: 撰写邮件
-- `gmail.send`: 发送邮件
-- `gmail.modify`: 修改邮件标签
-
-## 后续规划
-
-### 近期功能
-- [x] Gmail OAuth 集成（已完成完整流程）
-- [x] AI 邮件回复建议（已集成 DeepSeek AI）
-- [x] 翻译 API 集成（已集成 DeepSeek AI）
-- [x] Gmail API 代理（已完成后端代理）
-- [x] 邮件草稿创建（已完成 Gmail API 对接）
-
-### 中期功能
-- [ ] Supabase 数据库集成
-- [ ] 飞书多维表格双向同步
-- [ ] YouTube Data API 接入（视频数据自动获取）
-- [ ] 邮件往来智能回复建议
-
-### 远期功能
-- [ ] 自动化邮件发送流程
-- [ ] 数据统计报表
-- [ ] 多语言支持

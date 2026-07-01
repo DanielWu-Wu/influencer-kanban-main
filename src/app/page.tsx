@@ -25,6 +25,8 @@ import {
   LogOut,
   LoaderCircle,
   UserPlus,
+  PanelLeftClose,
+  PanelLeftOpen,
 } from 'lucide-react';
 import {
   useInfluencers,
@@ -93,6 +95,8 @@ const NAV_ITEMS = [
   { id: 'prompts', label: label.prompts, icon: MessageSquareText, group: label.tools },
 ];
 
+const SIDEBAR_COLLAPSED_STORAGE_KEY = 'influencer-board-sidebar-collapsed';
+
 export default function DashboardPage() {
   const router = useRouter();
   const { user, loading: authLoading, configured, signOut } = useAuth();
@@ -102,6 +106,7 @@ export default function DashboardPage() {
   const [searchQuery, setSearchQuery] = useState('');
   const [filterCountry, setFilterCountry] = useState<string>('all');
   const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
+  const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
 
   useEffect(() => {
     if (!authLoading && configured && !user) {
@@ -123,6 +128,10 @@ export default function DashboardPage() {
       setCurrentView('settings');
     }
   }, [authLoading, configured, router, user]);
+
+  useEffect(() => {
+    setSidebarCollapsed(window.localStorage.getItem(SIDEBAR_COLLAPSED_STORAGE_KEY) === 'true');
+  }, []);
 
   const { influencers, addInfluencer, updateInfluencer, deleteInfluencer, updateStatus } = useInfluencers();
   const { templates } = useEmailTemplates();
@@ -200,6 +209,14 @@ export default function DashboardPage() {
         newStatus: status,
         statusLabel: STATUS_LABELS[status],
       },
+    });
+  };
+
+  const toggleSidebar = () => {
+    setSidebarCollapsed((collapsed) => {
+      const nextCollapsed = !collapsed;
+      window.localStorage.setItem(SIDEBAR_COLLAPSED_STORAGE_KEY, String(nextCollapsed));
+      return nextCollapsed;
     });
   };
 
@@ -329,24 +346,66 @@ export default function DashboardPage() {
       </header>
 
       <div className="flex p-3 pt-4 md:p-4">
-        <aside className="glass-panel-soft sticky top-20 hidden h-[calc(100vh-5rem)] w-60 shrink-0 flex-col rounded-lg p-3 md:flex">
-          <div className="mb-3 rounded-lg border border-white/60 bg-white/55 p-3">
-            <p className="text-xs font-medium text-muted-foreground">今日作战台</p>
-            <div className="mt-2 grid grid-cols-2 gap-2 text-xs">
-              <div className="rounded-md bg-white/70 px-2 py-1.5">
-                <p className="text-muted-foreground">待办</p>
-                <p className="text-base font-semibold">{stats.todayTodos}</p>
+        <aside
+          id="desktop-sidebar"
+          aria-hidden={sidebarCollapsed}
+          className={`glass-panel-soft sticky top-20 hidden h-[calc(100vh-5rem)] shrink-0 flex-col overflow-hidden rounded-lg transition-[width,transform,opacity,padding] duration-200 ease-out motion-reduce:transition-none md:flex ${
+            sidebarCollapsed
+              ? 'pointer-events-none w-0 -translate-x-4 p-0 opacity-0'
+              : 'relative w-60 translate-x-0 p-3 opacity-100'
+          }`}
+        >
+          {!sidebarCollapsed && (
+            <>
+              <Button
+                type="button"
+                variant="outline"
+                size="icon"
+                onClick={toggleSidebar}
+                aria-label="收起菜单"
+                aria-controls="desktop-sidebar"
+                aria-expanded
+                title="收起菜单"
+                className="absolute right-2 top-2 z-10 hidden h-7 w-7 rounded-md bg-white/95 shadow-sm md:inline-flex"
+              >
+                <PanelLeftClose className="h-4 w-4" />
+              </Button>
+
+              <div className="mb-3 rounded-lg border border-white/60 bg-white/55 p-3">
+                <p className="text-xs font-medium text-muted-foreground">今日作战台</p>
+                <div className="mt-2 grid grid-cols-2 gap-2 text-xs">
+                  <div className="rounded-md bg-white/70 px-2 py-1.5">
+                    <p className="text-muted-foreground">待办</p>
+                    <p className="text-base font-semibold">{stats.todayTodos}</p>
+                  </div>
+                  <div className="rounded-md bg-white/70 px-2 py-1.5">
+                    <p className="text-muted-foreground">Gmail</p>
+                    <p className="text-base font-semibold">{unreadCount}</p>
+                  </div>
+                </div>
               </div>
-              <div className="rounded-md bg-white/70 px-2 py-1.5">
-                <p className="text-muted-foreground">Gmail</p>
-                <p className="text-base font-semibold">{unreadCount}</p>
+              <div className="min-h-0 overflow-y-auto pr-1">
+                {renderNav()}
               </div>
-            </div>
-          </div>
-          <div className="min-h-0 overflow-y-auto pr-1">
-            {renderNav()}
-          </div>
+            </>
+          )}
         </aside>
+
+        {sidebarCollapsed && (
+          <Button
+            type="button"
+            variant="outline"
+            size="icon"
+            onClick={toggleSidebar}
+            aria-label="展开菜单"
+            aria-controls="desktop-sidebar"
+            aria-expanded={false}
+            title="展开菜单"
+            className="fixed left-0 top-24 z-40 hidden h-9 w-9 rounded-l-none bg-white/95 shadow-md md:inline-flex"
+          >
+            <PanelLeftOpen className="h-4 w-4" />
+          </Button>
+        )}
 
         <Sheet open={mobileMenuOpen} onOpenChange={setMobileMenuOpen}>
           <SheetContent side="left" className="w-72 p-4">
@@ -360,7 +419,11 @@ export default function DashboardPage() {
           </SheetContent>
         </Sheet>
 
-        <main className="ml-0 flex h-[calc(100vh-5rem)] min-h-0 flex-1 flex-col overflow-hidden md:ml-4">
+        <main
+          className={`ml-0 flex h-[calc(100vh-5rem)] min-h-0 flex-1 flex-col overflow-hidden transition-[margin] duration-200 ease-out motion-reduce:transition-none ${
+            sidebarCollapsed ? 'md:ml-0' : 'md:ml-4'
+          }`}
+        >
           {currentView === 'kanban' && (
             <div className="glass-panel-strong flex-1 overflow-auto rounded-lg p-4">
               <div className="flex gap-3 mb-4 flex-shrink-0">
