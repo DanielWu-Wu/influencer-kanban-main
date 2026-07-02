@@ -39,11 +39,13 @@ type OutreachChannel = {
   title?: string;
   description?: string;
   country?: string;
+  language?: string;
   publicEmail?: string;
   url?: string;
   subscriberCount?: number | null;
   videoCount?: number | null;
   viewCount?: number | null;
+  recentAverageViews?: number | null;
   recentVideos?: OutreachVideo[];
 };
 
@@ -188,8 +190,10 @@ export async function POST(request: NextRequest) {
 {
   "subject": "邮件主题",
   "body": "用目标语言撰写的完整开发信正文",
+  "translatedBody": "外语邮件正文的完整中文翻译",
   "translatedSummary": "中文解释，包括邮件意图和主要内容",
   "personalizationNotes": ["使用了哪些频道资料做个性化"],
+  "riskNotes": ["保存草稿或发送前需要人工核对的事实和风险"],
   "missingInfo": ["仍然缺少哪些信息"],
   "language": "en",
   "tone": "professional"
@@ -208,6 +212,14 @@ ${JSON.stringify(channel.recentVideos || [], null, 2)}
 
 产品数据库：
 ${JSON.stringify(safeArray(body.products), null, 2)}
+
+本次人工确认的邀约方向：
+${JSON.stringify({
+  targetProduct: body.targetProduct || '',
+  cooperationType: body.cooperationType || '',
+  cooperationIdea: body.cooperationIdea || '',
+  priority: body.priority || '',
+}, null, 2)}
 
 品牌信息：
 ${JSON.stringify({

@@ -1,0 +1,296 @@
+'use client';
+
+import { useMemo, useState } from 'react';
+import {
+  AlertTriangle,
+  CheckCircle2,
+  Database,
+  ExternalLink,
+  Loader2,
+  RefreshCw,
+  Search,
+  Trash2,
+  UserCheck,
+  UserPlus,
+  Youtube,
+} from 'lucide-react';
+import { Badge } from '@/components/ui/badge';
+import { Button } from '@/components/ui/button';
+import { Checkbox } from '@/components/ui/checkbox';
+import { Input } from '@/components/ui/input';
+import {
+  Table,
+  TableBody,
+  TableCell,
+  TableHead,
+  TableHeader,
+  TableRow,
+} from '@/components/ui/table';
+import { Textarea } from '@/components/ui/textarea';
+import {
+  canConfirmInvitation,
+  canCreateFeishuRecord,
+  countryLabel,
+  DEDUPE_META,
+  formatCompactNumber,
+  type Prospect,
+  WORKFLOW_META,
+} from '@/lib/creator-prospecting';
+
+type Props = {
+  prospects: Prospect[];
+  selectedIds: string[];
+  input: string;
+  preference: string;
+  resolving: boolean;
+  checkingDedupe: boolean;
+  writingFeishu: boolean;
+  onInputChange: (value: string) => void;
+  onPreferenceChange: (value: string) => void;
+  onResolve: () => void;
+  onCheckDedupe: (items: Prospect[]) => void;
+  onCreateRecords: (items: Prospect[]) => void;
+  onConfirmInvitation: (items: Prospect[]) => void;
+  onToggleSelected: (id: string, checked: boolean) => void;
+  onToggleAll: (ids: string[], checked: boolean) => void;
+  onConfirmSuspected: (id: string) => void;
+  onUseExisting: (id: string) => void;
+  onRemove: (id: string) => void;
+  onClearInput: () => void;
+};
+
+export function InfluencerImportTab({
+  prospects,
+  selectedIds,
+  input,
+  preference,
+  resolving,
+  checkingDedupe,
+  writingFeishu,
+  onInputChange,
+  onPreferenceChange,
+  onResolve,
+  onCheckDedupe,
+  onCreateRecords,
+  onConfirmInvitation,
+  onToggleSelected,
+  onToggleAll,
+  onConfirmSuspected,
+  onUseExisting,
+  onRemove,
+  onClearInput,
+}: Props) {
+  const [query, setQuery] = useState('');
+  const selected = useMemo(
+    () => prospects.filter((item) => selectedIds.includes(item.id)),
+    [prospects, selectedIds],
+  );
+  const visibleProspects = useMemo(() => {
+    const normalized = query.trim().toLowerCase();
+    if (!normalized) return prospects;
+    return prospects.filter((item) => [
+      item.title,
+      item.channelId,
+      item.publicEmail,
+      item.url,
+      item.inputUrl,
+    ].some((value) => String(value || '').toLowerCase().includes(normalized)));
+  }, [prospects, query]);
+  const allVisibleSelected = visibleProspects.length > 0
+    && visibleProspects.every((item) => selectedIds.includes(item.id));
+  const canCheck = selected.some((item) => item.workflowStatus === 'resolved');
+  const canCreate = selected.some(canCreateFeishuRecord);
+  const canConfirm = selected.some(canConfirmInvitation);
+
+  return (
+    <div className="flex min-h-0 flex-1 flex-col gap-3">
+      <section className="grid gap-3 border-b border-border/70 pb-4 xl:grid-cols-[minmax(360px,0.9fr)_minmax(0,1.1fr)]">
+        <div>
+          <label htmlFor="creator-links" className="mb-1.5 block text-sm font-semibold">
+            批量导入频道链接
+          </label>
+          <Textarea
+            id="creator-links"
+            value={input}
+            onChange={(event) => onInputChange(event.target.value)}
+            placeholder={'每行一个 YouTube 频道链接\n支持 @handle、channel/UC、c/、user/ 和视频链接'}
+            className="min-h-28 resize-y bg-white/75"
+          />
+        </div>
+        <div>
+          <label htmlFor="creator-preference" className="mb-1.5 block text-sm font-semibold">
+            本次开发备注
+          </label>
+          <Textarea
+            id="creator-preference"
+            value={preference}
+            onChange={(event) => onPreferenceChange(event.target.value)}
+            placeholder="填写开发目的、主推产品、预算范围、语气要求等；后续生成开发信时会作为补充背景。"
+            className="min-h-28 resize-y bg-white/75"
+          />
+        </div>
+      </section>
+
+      <div className="flex flex-wrap items-center gap-2">
+        <Button onClick={onResolve} disabled={resolving}>
+          {resolving ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <RefreshCw className="mr-2 h-4 w-4" />}
+          识别频道
+        </Button>
+        <Button variant="outline" onClick={() => onCheckDedupe(selected)} disabled={!canCheck || checkingDedupe}>
+          {checkingDedupe ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <Database className="mr-2 h-4 w-4" />}
+          飞书查重
+        </Button>
+        <Button variant="outline" onClick={() => onCreateRecords(selected)} disabled={!canCreate || writingFeishu}>
+          {writingFeishu ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <UserPlus className="mr-2 h-4 w-4" />}
+          新建线索记录
+        </Button>
+        <Button variant="outline" onClick={() => onConfirmInvitation(selected)} disabled={!canConfirm}>
+          <UserCheck className="mr-2 h-4 w-4" />
+          确认待开发
+        </Button>
+        <Button variant="ghost" onClick={onClearInput} disabled={!input}>
+          清空输入
+        </Button>
+        <div className="relative ml-auto min-w-56">
+          <Search className="absolute left-2.5 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
+          <Input
+            value={query}
+            onChange={(event) => setQuery(event.target.value)}
+            placeholder="筛选频道、邮箱或链接"
+            className="h-9 bg-white/75 pl-8"
+          />
+        </div>
+      </div>
+
+      <div className="min-h-0 flex-1 overflow-auto rounded-lg border border-border/70 bg-white/70">
+        <Table className="min-w-[1180px]">
+          <TableHeader className="sticky top-0 z-10 bg-slate-50/95 backdrop-blur">
+            <TableRow>
+              <TableHead className="w-10">
+                <Checkbox
+                  checked={allVisibleSelected}
+                  onCheckedChange={(checked) => onToggleAll(visibleProspects.map((item) => item.id), Boolean(checked))}
+                  aria-label="选择全部可见线索"
+                />
+              </TableHead>
+              <TableHead className="w-12">头像</TableHead>
+              <TableHead className="min-w-44">频道</TableHead>
+              <TableHead>国家/语言</TableHead>
+              <TableHead className="text-right">粉丝</TableHead>
+              <TableHead className="text-right">近期均播</TableHead>
+              <TableHead>邮箱</TableHead>
+              <TableHead>飞书查重</TableHead>
+              <TableHead>当前状态</TableHead>
+              <TableHead className="w-28 text-right">操作</TableHead>
+            </TableRow>
+          </TableHeader>
+          <TableBody>
+            {visibleProspects.map((prospect) => {
+              const workflow = WORKFLOW_META[prospect.workflowStatus];
+              const dedupe = DEDUPE_META[prospect.dedupeStatus];
+              const channelUrl = prospect.url || prospect.sourceUrl || prospect.inputUrl;
+              return (
+                <TableRow key={prospect.id} className="align-middle">
+                  <TableCell>
+                    <Checkbox
+                      checked={selectedIds.includes(prospect.id)}
+                      onCheckedChange={(checked) => onToggleSelected(prospect.id, Boolean(checked))}
+                      aria-label={`选择 ${prospect.title || prospect.inputUrl}`}
+                    />
+                  </TableCell>
+                  <TableCell>
+                    <div className="flex h-9 w-9 items-center justify-center overflow-hidden rounded-md bg-slate-100">
+                      {prospect.avatarUrl ? (
+                        // eslint-disable-next-line @next/next/no-img-element
+                        <img src={prospect.avatarUrl} alt="" className="h-full w-full object-cover" />
+                      ) : (
+                        <Youtube className="h-4 w-4 text-muted-foreground" />
+                      )}
+                    </div>
+                  </TableCell>
+                  <TableCell>
+                    <div className="max-w-64">
+                      <p className="truncate font-medium">{prospect.title || prospect.inputUrl}</p>
+                      <a
+                        href={channelUrl}
+                        target="_blank"
+                        rel="noreferrer"
+                        className="mt-0.5 inline-flex max-w-full items-center gap-1 truncate text-xs text-primary hover:underline"
+                      >
+                        <span className="truncate">{prospect.customUrl || prospect.channelId || '打开频道'}</span>
+                        <ExternalLink className="h-3 w-3 shrink-0" />
+                      </a>
+                    </div>
+                  </TableCell>
+                  <TableCell>
+                    <p>{countryLabel(prospect.country)}</p>
+                    <p className="text-xs text-muted-foreground">
+                      {prospect.language ? `${prospect.language}${prospect.languageSource === 'inferred' ? '（推断）' : ''}` : '语言未知'}
+                    </p>
+                  </TableCell>
+                  <TableCell className="text-right tabular-nums">{formatCompactNumber(prospect.subscriberCount)}</TableCell>
+                  <TableCell className="text-right tabular-nums">{formatCompactNumber(prospect.recentAverageViews)}</TableCell>
+                  <TableCell>
+                    {prospect.publicEmail ? (
+                      <span className="text-emerald-700">已获取</span>
+                    ) : (
+                      <span className="inline-flex items-center gap-1 text-amber-700">
+                        <AlertTriangle className="h-3.5 w-3.5" />
+                        待补充
+                      </span>
+                    )}
+                  </TableCell>
+                  <TableCell>
+                    <p className={dedupe.className}>{dedupe.label}</p>
+                    {prospect.duplicateReason && (
+                      <p className="mt-0.5 max-w-40 truncate text-xs text-muted-foreground" title={prospect.duplicateReason}>
+                        {prospect.duplicateReason}
+                      </p>
+                    )}
+                  </TableCell>
+                  <TableCell>
+                    <Badge variant="outline" className={workflow.className}>{workflow.label}</Badge>
+                  </TableCell>
+                  <TableCell className="text-right">
+                    <div className="flex justify-end gap-1">
+                      {prospect.dedupeStatus === 'suspected' && !prospect.duplicateConfirmedUnique && (
+                        <Button variant="ghost" size="sm" onClick={() => onConfirmSuspected(prospect.id)}>
+                          <CheckCircle2 className="mr-1 h-4 w-4" />
+                          确认可建
+                        </Button>
+                      )}
+                      {prospect.dedupeStatus === 'duplicate' && prospect.duplicateRecordId && (
+                        <Button variant="ghost" size="sm" onClick={() => onUseExisting(prospect.id)}>
+                          使用现有记录
+                        </Button>
+                      )}
+                      <Button
+                        variant="ghost"
+                        size="icon"
+                        title="移除线索"
+                        aria-label={`移除 ${prospect.title || prospect.inputUrl}`}
+                        onClick={() => onRemove(prospect.id)}
+                        className="text-muted-foreground hover:text-destructive"
+                      >
+                        <Trash2 className="h-4 w-4" />
+                      </Button>
+                    </div>
+                  </TableCell>
+                </TableRow>
+              );
+            })}
+            {visibleProspects.length === 0 && (
+              <TableRow>
+                <TableCell colSpan={10} className="h-44 text-center">
+                  <Youtube className="mx-auto mb-2 h-8 w-8 text-muted-foreground" />
+                  <p className="font-medium">{prospects.length ? '没有符合筛选条件的线索' : '还没有录入红人'}</p>
+                  <p className="mt-1 text-sm text-muted-foreground">粘贴 YouTube 频道链接并点击“识别频道”。</p>
+                </TableCell>
+              </TableRow>
+            )}
+          </TableBody>
+        </Table>
+      </div>
+    </div>
+  );
+}

@@ -1,0 +1,324 @@
+'use client';
+
+import { useEffect, useMemo, useState } from 'react';
+import {
+  ArrowLeft,
+  CheckCircle2,
+  Clock3,
+  ExternalLink,
+  Loader2,
+  Mail,
+  Search,
+  SkipForward,
+  Sparkles,
+  Youtube,
+} from 'lucide-react';
+import { Badge } from '@/components/ui/badge';
+import { Button } from '@/components/ui/button';
+import { Input } from '@/components/ui/input';
+import { Label } from '@/components/ui/label';
+import { Textarea } from '@/components/ui/textarea';
+import {
+  COOPERATION_TYPES,
+  countryLabel,
+  formatCompactNumber,
+  type Prospect,
+  type ProspectPriority,
+  WORKFLOW_META,
+} from '@/lib/creator-prospecting';
+
+type Props = {
+  prospects: Prospect[];
+  productOptions: string[];
+  checkingHistoryId: string | null;
+  onPatch: (id: string, patch: Partial<Prospect>) => void;
+  onSave: (prospect: Prospect) => void;
+  onConfirmOutreach: (prospect: Prospect) => void;
+  onBack: (prospect: Prospect) => void;
+  onSkip: (prospect: Prospect) => void;
+  onCheckHistory: (prospect: Prospect) => void;
+};
+
+function yesNoUnknown(value?: boolean) {
+  if (value === true) return '是';
+  if (value === false) return '否';
+  return '待确认';
+}
+
+export function InvitationConfirmTab({
+  prospects,
+  productOptions,
+  checkingHistoryId,
+  onPatch,
+  onSave,
+  onConfirmOutreach,
+  onBack,
+  onSkip,
+  onCheckHistory,
+}: Props) {
+  const [query, setQuery] = useState('');
+  const [selectedId, setSelectedId] = useState<string>('');
+  const visible = useMemo(() => {
+    const normalized = query.trim().toLowerCase();
+    if (!normalized) return prospects;
+    return prospects.filter((item) => [
+      item.title,
+      item.country,
+      item.language,
+      item.publicEmail,
+    ].some((value) => String(value || '').toLowerCase().includes(normalized)));
+  }, [prospects, query]);
+  const selected = prospects.find((item) => item.id === selectedId) || visible[0];
+
+  useEffect(() => {
+    if (selectedId && !prospects.some((item) => item.id === selectedId)) setSelectedId('');
+  }, [prospects, selectedId]);
+
+  if (!prospects.length) {
+    return (
+      <div className="flex min-h-96 flex-1 flex-col items-center justify-center rounded-lg border border-dashed bg-white/45 text-center">
+        <CheckCircle2 className="mb-3 h-10 w-10 text-muted-foreground" />
+        <h3 className="font-semibold">没有待确认邀约方向的红人</h3>
+        <p className="mt-1 text-sm text-muted-foreground">先在“红人录入”完成识别、查重、新建线索和确认待开发。</p>
+      </div>
+    );
+  }
+
+  return (
+    <div className="grid min-h-0 flex-1 gap-3 lg:grid-cols-[300px_minmax(0,1fr)]">
+      <aside className="flex min-h-0 flex-col border-r border-border/70 pr-3">
+        <div className="relative mb-3">
+          <Search className="absolute left-2.5 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
+          <Input
+            value={query}
+            onChange={(event) => setQuery(event.target.value)}
+            placeholder="筛选待确认红人"
+            className="h-9 bg-white/75 pl-8"
+          />
+        </div>
+        <div className="min-h-0 space-y-1 overflow-y-auto">
+          {visible.map((prospect) => (
+            <button
+              key={prospect.id}
+              type="button"
+              onClick={() => setSelectedId(prospect.id)}
+              className={`flex w-full items-center gap-3 rounded-md px-2.5 py-2 text-left transition-colors ${
+                selected?.id === prospect.id ? 'bg-primary text-primary-foreground' : 'hover:bg-white/80'
+              }`}
+            >
+              <div className="flex h-9 w-9 shrink-0 items-center justify-center overflow-hidden rounded-md bg-slate-100">
+                {prospect.avatarUrl ? (
+                  // eslint-disable-next-line @next/next/no-img-element
+                  <img src={prospect.avatarUrl} alt="" className="h-full w-full object-cover" />
+                ) : (
+                  <Youtube className="h-4 w-4 text-muted-foreground" />
+                )}
+              </div>
+              <div className="min-w-0 flex-1">
+                <p className="truncate text-sm font-medium">{prospect.title || prospect.inputUrl}</p>
+                <p className={`truncate text-xs ${selected?.id === prospect.id ? 'text-primary-foreground/75' : 'text-muted-foreground'}`}>
+                  {countryLabel(prospect.country)} · {prospect.language || '语言未知'}
+                </p>
+              </div>
+            </button>
+          ))}
+        </div>
+      </aside>
+
+      {selected && (
+        <section className="min-h-0 overflow-y-auto pr-1">
+          <div className="flex flex-wrap items-start justify-between gap-3 border-b border-border/70 pb-3">
+            <div className="flex min-w-0 items-start gap-3">
+              <div className="flex h-12 w-12 shrink-0 items-center justify-center overflow-hidden rounded-md bg-slate-100">
+                {selected.avatarUrl ? (
+                  // eslint-disable-next-line @next/next/no-img-element
+                  <img src={selected.avatarUrl} alt="" className="h-full w-full object-cover" />
+                ) : (
+                  <Youtube className="h-5 w-5 text-muted-foreground" />
+                )}
+              </div>
+              <div className="min-w-0">
+                <div className="flex flex-wrap items-center gap-2">
+                  <h2 className="truncate text-lg font-semibold">{selected.title || selected.inputUrl}</h2>
+                  <Badge variant="outline" className={WORKFLOW_META[selected.workflowStatus].className}>
+                    {WORKFLOW_META[selected.workflowStatus].label}
+                  </Badge>
+                </div>
+                <p className="mt-1 text-sm text-muted-foreground">
+                  {countryLabel(selected.country)} · {selected.language || '语言未知'} · 粉丝 {formatCompactNumber(selected.subscriberCount)}
+                  {' · '}近期均播 {formatCompactNumber(selected.recentAverageViews)}
+                </p>
+              </div>
+            </div>
+            <a
+              href={selected.url || selected.sourceUrl || selected.inputUrl}
+              target="_blank"
+              rel="noreferrer"
+              className="inline-flex items-center gap-1 text-sm text-primary hover:underline"
+            >
+              打开频道
+              <ExternalLink className="h-4 w-4" />
+            </a>
+          </div>
+
+          <div className="grid gap-4 py-4 xl:grid-cols-[minmax(0,1fr)_360px]">
+            <div className="space-y-4">
+              <div>
+                <p className="text-sm font-semibold">最近视频</p>
+                <div className="mt-2 grid gap-2 sm:grid-cols-2">
+                  {(selected.recentVideos || []).slice(0, 8).map((video) => (
+                    <a
+                      key={video.videoId || video.url || video.title}
+                      href={video.url || selected.url}
+                      target="_blank"
+                      rel="noreferrer"
+                      className="flex items-center gap-2 rounded-md border bg-white/70 p-2 hover:border-primary/40"
+                    >
+                      <div className="h-12 w-20 shrink-0 overflow-hidden rounded bg-slate-100">
+                        {video.thumbnail ? (
+                          // eslint-disable-next-line @next/next/no-img-element
+                          <img src={video.thumbnail} alt="" loading="lazy" className="h-full w-full object-cover" />
+                        ) : null}
+                      </div>
+                      <div className="min-w-0">
+                        <p className="line-clamp-2 text-xs font-medium">{video.title}</p>
+                        <p className="mt-1 text-xs text-muted-foreground">播放 {formatCompactNumber(video.viewCount)}</p>
+                      </div>
+                    </a>
+                  ))}
+                </div>
+              </div>
+
+              <div>
+                <p className="text-sm font-semibold">频道简介摘要</p>
+                <p className="mt-2 whitespace-pre-wrap rounded-md bg-slate-50/80 p-3 text-sm leading-6 text-muted-foreground">
+                  {selected.description?.slice(0, 900) || '暂无频道简介。'}
+                </p>
+              </div>
+
+              <div>
+                <div className="flex flex-wrap items-center justify-between gap-2">
+                  <p className="text-sm font-semibold">历史判断</p>
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    onClick={() => onCheckHistory(selected)}
+                    disabled={checkingHistoryId === selected.id || !selected.publicEmail}
+                  >
+                    {checkingHistoryId === selected.id ? <Loader2 className="mr-1 h-4 w-4 animate-spin" /> : <Clock3 className="mr-1 h-4 w-4" />}
+                    检查 Gmail 历史
+                  </Button>
+                </div>
+                <dl className="mt-2 grid grid-cols-3 gap-2 text-sm">
+                  <div className="rounded-md bg-slate-50 p-2">
+                    <dt className="text-xs text-muted-foreground">曾联系过</dt>
+                    <dd className="mt-1 font-medium">{yesNoUnknown(selected.contactedBefore)}</dd>
+                  </div>
+                  <div className="rounded-md bg-slate-50 p-2">
+                    <dt className="text-xs text-muted-foreground">曾合作过</dt>
+                    <dd className="mt-1 font-medium">{yesNoUnknown(selected.collaboratedBefore)}</dd>
+                  </div>
+                  <div className="rounded-md bg-slate-50 p-2">
+                    <dt className="text-xs text-muted-foreground">疑似竞品合作</dt>
+                    <dd className="mt-1 font-medium">
+                      {selected.competitorCollaboration === 'suspected' ? '疑似' : selected.competitorCollaboration === 'yes' ? '是' : selected.competitorCollaboration === 'no' ? '否' : '待人工判断'}
+                    </dd>
+                  </div>
+                </dl>
+              </div>
+            </div>
+
+            <div className="space-y-3 border-l border-border/70 pl-4">
+              <div>
+                <Label htmlFor={`product-${selected.id}`}>目标产品 *</Label>
+                <select
+                  id={`product-${selected.id}`}
+                  value={selected.targetProduct || ''}
+                  onChange={(event) => onPatch(selected.id, { targetProduct: event.target.value })}
+                  className="mt-1.5 h-10 w-full rounded-md border bg-white px-3 text-sm"
+                >
+                  <option value="">请选择目标产品</option>
+                  {productOptions.map((option) => <option key={option} value={option}>{option}</option>)}
+                </select>
+              </div>
+              <div>
+                <Label htmlFor={`cooperation-${selected.id}`}>合作形式 *</Label>
+                <select
+                  id={`cooperation-${selected.id}`}
+                  value={selected.cooperationType || ''}
+                  onChange={(event) => onPatch(selected.id, { cooperationType: event.target.value })}
+                  className="mt-1.5 h-10 w-full rounded-md border bg-white px-3 text-sm"
+                >
+                  <option value="">请选择合作形式</option>
+                  {COOPERATION_TYPES.map((option) => <option key={option} value={option}>{option}</option>)}
+                </select>
+              </div>
+              <div>
+                <Label htmlFor={`idea-${selected.id}`}>合作想法 *</Label>
+                <Textarea
+                  id={`idea-${selected.id}`}
+                  value={selected.cooperationIdea || ''}
+                  onChange={(event) => onPatch(selected.id, { cooperationIdea: event.target.value })}
+                  placeholder="写明为什么适合、建议切入角度、希望重点展示的功能。"
+                  className="mt-1.5 min-h-28 resize-y bg-white"
+                />
+              </div>
+              <div>
+                <Label htmlFor={`priority-${selected.id}`}>优先级</Label>
+                <select
+                  id={`priority-${selected.id}`}
+                  value={selected.priority || 'medium'}
+                  onChange={(event) => onPatch(selected.id, { priority: event.target.value as ProspectPriority })}
+                  className="mt-1.5 h-10 w-full rounded-md border bg-white px-3 text-sm"
+                >
+                  <option value="high">高</option>
+                  <option value="medium">中</option>
+                  <option value="low">低</option>
+                </select>
+              </div>
+              <div>
+                <Label htmlFor={`email-${selected.id}`}>邮箱</Label>
+                <div className="relative mt-1.5">
+                  <Mail className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
+                  <Input
+                    id={`email-${selected.id}`}
+                    type="email"
+                    value={selected.publicEmail || ''}
+                    onChange={(event) => onPatch(selected.id, {
+                      publicEmail: event.target.value,
+                      emailStatus: event.target.value.trim() ? 'manual' : 'missing',
+                    })}
+                    placeholder="未获取到邮箱，请人工补充"
+                    className="bg-white pl-9"
+                  />
+                </div>
+              </div>
+
+              <div className="flex flex-wrap gap-2 border-t pt-3">
+                <Button variant="outline" onClick={() => onSave(selected)}>
+                  <CheckCircle2 className="mr-1 h-4 w-4" />
+                  保存邀约方向
+                </Button>
+                <Button
+                  onClick={() => onConfirmOutreach(selected)}
+                  disabled={!selected.targetProduct?.trim() || !selected.cooperationType?.trim() || !selected.cooperationIdea?.trim()}
+                >
+                  <Sparkles className="mr-1 h-4 w-4" />
+                  确认生成开发信
+                </Button>
+                <Button variant="ghost" onClick={() => onBack(selected)}>
+                  <ArrowLeft className="mr-1 h-4 w-4" />
+                  返回录入
+                </Button>
+                <Button variant="ghost" onClick={() => onSkip(selected)} className="text-muted-foreground">
+                  <SkipForward className="mr-1 h-4 w-4" />
+                  跳过该红人
+                </Button>
+              </div>
+            </div>
+          </div>
+        </section>
+      )}
+    </div>
+  );
+}

@@ -6,6 +6,9 @@ export type FeishuFieldKey =
   | 'contentType'
   | 'engagementRate'
   | 'channelUrl'
+  | 'channelId'
+  | 'language'
+  | 'recentAverageViews'
   | 'description'
   | 'email'
   | 'firstOutreach'
@@ -13,6 +16,12 @@ export type FeishuFieldKey =
   | 'thirdOutreach'
   | 'hasReply'
   | 'collaborationStatus'
+  | 'prospectingStatus'
+  | 'targetProduct'
+  | 'cooperationType'
+  | 'cooperationIdea'
+  | 'priority'
+  | 'gmailDraftId'
   | 'notes'
   | 'campaignName'
   | 'quote'
@@ -58,6 +67,24 @@ export const FEISHU_FIELD_TARGETS: Array<{
     description: '用于打开 YouTube 频道和后续接 YouTube API',
     keywords: ['频道链接', '频道地址', 'youtube', 'url', 'link'],
     required: true,
+  },
+  {
+    key: 'channelId',
+    label: 'YouTube Channel ID',
+    description: '用于稳定查重，不受频道改名或 handle 变化影响',
+    keywords: ['youtube channel id', 'channel id', '频道id', '频道 ID'],
+  },
+  {
+    key: 'language',
+    label: '频道语言',
+    description: '用于选择开发信语言和市场策略',
+    keywords: ['频道语言', '语言', 'language', 'locale'],
+  },
+  {
+    key: 'recentAverageViews',
+    label: '最近视频平均播放量',
+    description: '用于评估频道近期真实影响力',
+    keywords: ['最近视频平均播放量', '平均播放量', '均播', 'average views'],
   },
   {
     key: 'region',
@@ -119,6 +146,42 @@ export const FEISHU_FIELD_TARGETS: Array<{
     description: '用于同步看板阶段',
     keywords: ['合作状态', '状态', 'status'],
     required: true,
+  },
+  {
+    key: 'prospectingStatus',
+    label: '开发流程状态',
+    description: '用于同步红人录入、邀约确认和 Gmail 草稿阶段',
+    keywords: ['开发流程状态', '开发状态', '线索状态', 'prospecting status'],
+  },
+  {
+    key: 'targetProduct',
+    label: '目标产品',
+    description: '本次邀约希望推广的产品',
+    keywords: ['目标产品', '主推产品', '产品', 'target product'],
+  },
+  {
+    key: 'cooperationType',
+    label: '合作形式',
+    description: '送样、付费、联盟或长期合作等邀约形式',
+    keywords: ['合作形式', '合作方式', 'cooperation type'],
+  },
+  {
+    key: 'cooperationIdea',
+    label: '合作想法',
+    description: '人工确认的合作切入角度和内容建议',
+    keywords: ['合作想法', '合作角度', '邀约想法', 'cooperation idea'],
+  },
+  {
+    key: 'priority',
+    label: '开发优先级',
+    description: '红人开发优先级',
+    keywords: ['开发优先级', '优先级', 'priority'],
+  },
+  {
+    key: 'gmailDraftId',
+    label: 'Gmail 草稿 ID',
+    description: '用于记录已创建的 Gmail 草稿并避免重复创建',
+    keywords: ['gmail 草稿 id', '草稿 id', 'gmail draft id'],
   },
   {
     key: 'collaborationProgress',

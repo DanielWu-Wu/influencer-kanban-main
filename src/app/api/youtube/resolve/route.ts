@@ -37,6 +37,9 @@ type YouTubeVideoItem = {
   snippet?: {
     channelId?: string;
   };
+  statistics?: {
+    viewCount?: string;
+  };
 };
 
 type YouTubeVideosResponse = YouTubeErrorResponse & {
@@ -354,7 +357,7 @@ async function fetchRecentVideos(apiKey: string, channelId: string, maxVideos: n
     throw new Error(data.error?.message || `YouTube 最近视频读取失败 (${response.status})`);
   }
 
-  return (data.items || [])
+  const videos = (data.items || [])
     .filter((item) => item.id?.videoId)
     .map((item) => ({
       videoId: item.id?.videoId || '',
@@ -364,6 +367,27 @@ async function fetchRecentVideos(apiKey: string, channelId: string, maxVideos: n
       thumbnail: bestThumbnail(item.snippet?.thumbnails),
       url: `https://www.youtube.com/watch?v=${item.id?.videoId}`,
     }));
+  const videoIds = videos.map((item) => item.videoId).filter(Boolean);
+  if (!videoIds.length) return videos;
+
+  const statisticsUrl = buildYouTubeUrl('videos', {
+    part: 'statistics',
+    id: videoIds.join(','),
+    key: apiKey,
+  });
+  const statisticsResponse = await fetch(statisticsUrl, { cache: 'no-store' });
+  const statisticsData = await statisticsResponse.json() as YouTubeVideosResponse;
+  if (!statisticsResponse.ok || statisticsData.error) return videos;
+  const viewsById = new Map(
+    (statisticsData.items || []).map((item) => [
+      item.id || '',
+      Number(item.statistics?.viewCount || 0),
+    ]),
+  );
+  return videos.map((item) => ({
+    ...item,
+    viewCount: viewsById.get(item.videoId) ?? null,
+  }));
 }
 
 export async function POST(request: NextRequest) {
@@ -386,7 +410,7 @@ export async function POST(request: NextRequest) {
     return NextResponse.json({ error: '请先粘贴至少一个 YouTube 频道链接。' }, { status: 400 });
   }
 
-  const maxVideos = Math.min(5, Math.max(1, Number(body.maxVideos) || 3));
+  const maxVideos = Math.min(8, Math.max(1, Number(body.maxVideos) || 5));
   const regionCode = typeof body.regionCode === 'string' ? body.regionCode.trim().toUpperCase().slice(0, 2) : '';
   const relevanceLanguage = typeof body.relevanceLanguage === 'string' ? body.relevanceLanguage.trim().toLowerCase() : '';
   const parsedInputs = links.map((link: string) => ({ input: link, parsed: parseYouTubeInput(link) }));
