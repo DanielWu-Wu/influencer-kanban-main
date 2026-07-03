@@ -11,6 +11,7 @@ export type FeishuFieldKey =
   | 'recentAverageViews'
   | 'description'
   | 'email'
+  | 'developmentDate'
   | 'firstOutreach'
   | 'secondOutreach'
   | 'thirdOutreach'
@@ -60,6 +61,12 @@ export const FEISHU_FIELD_TARGETS: Array<{
     description: '用于 Gmail 自动匹配红人',
     keywords: ['联系邮箱', '邮箱', 'email', 'mail'],
     required: true,
+  },
+  {
+    key: 'developmentDate',
+    label: '开发日期',
+    description: '用于记录首次建立开发记录的日期',
+    keywords: ['开发日期', '开发时间', 'outreach date', 'development date'],
   },
   {
     key: 'channelUrl',

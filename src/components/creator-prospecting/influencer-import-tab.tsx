@@ -31,8 +31,9 @@ import {
   canConfirmInvitation,
   canCreateFeishuRecord,
   countryLabel,
-  DEDUPE_META,
+  DEVELOPMENT_STATUS_META,
   formatCompactNumber,
+  RESOURCE_STATUS_META,
   type Prospect,
   WORKFLOW_META,
 } from '@/lib/creator-prospecting';
@@ -49,11 +50,13 @@ type Props = {
   onPreferenceChange: (value: string) => void;
   onResolve: () => void;
   onCheckDedupe: (items: Prospect[]) => void;
+  onAddResources: (items: Prospect[]) => void;
   onCreateRecords: (items: Prospect[]) => void;
   onConfirmInvitation: (items: Prospect[]) => void;
   onToggleSelected: (id: string, checked: boolean) => void;
   onToggleAll: (ids: string[], checked: boolean) => void;
   onConfirmSuspected: (id: string) => void;
+  onUseExistingResource: (id: string) => void;
   onUseExisting: (id: string) => void;
   onRemove: (id: string) => void;
   onClearInput: () => void;
@@ -71,11 +74,13 @@ export function InfluencerImportTab({
   onPreferenceChange,
   onResolve,
   onCheckDedupe,
+  onAddResources,
   onCreateRecords,
   onConfirmInvitation,
   onToggleSelected,
   onToggleAll,
   onConfirmSuspected,
+  onUseExistingResource,
   onUseExisting,
   onRemove,
   onClearInput,
@@ -100,6 +105,7 @@ export function InfluencerImportTab({
     && visibleProspects.every((item) => selectedIds.includes(item.id));
   const canCheck = selected.some((item) => item.workflowStatus === 'resolved');
   const canCreate = selected.some(canCreateFeishuRecord);
+  const canAddResource = selected.some((item) => item.resourceStatus === 'missing' && !item.resourceRecordId);
   const canConfirm = selected.some(canConfirmInvitation);
 
   return (
@@ -140,9 +146,13 @@ export function InfluencerImportTab({
           {checkingDedupe ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <Database className="mr-2 h-4 w-4" />}
           飞书查重
         </Button>
+        <Button variant="outline" onClick={() => onAddResources(selected)} disabled={!canAddResource || writingFeishu}>
+          <UserPlus className="mr-2 h-4 w-4" />
+          加入资源库
+        </Button>
         <Button variant="outline" onClick={() => onCreateRecords(selected)} disabled={!canCreate || writingFeishu}>
           {writingFeishu ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <UserPlus className="mr-2 h-4 w-4" />}
-          新建线索记录
+          新建开发记录
         </Button>
         <Button variant="outline" onClick={() => onConfirmInvitation(selected)} disabled={!canConfirm}>
           <UserCheck className="mr-2 h-4 w-4" />
@@ -179,7 +189,7 @@ export function InfluencerImportTab({
               <TableHead className="text-right">粉丝</TableHead>
               <TableHead className="text-right">近期均播</TableHead>
               <TableHead>邮箱</TableHead>
-              <TableHead>飞书查重</TableHead>
+              <TableHead>飞书双表状态</TableHead>
               <TableHead>当前状态</TableHead>
               <TableHead className="w-28 text-right">操作</TableHead>
             </TableRow>
@@ -187,7 +197,8 @@ export function InfluencerImportTab({
           <TableBody>
             {visibleProspects.map((prospect) => {
               const workflow = WORKFLOW_META[prospect.workflowStatus];
-              const dedupe = DEDUPE_META[prospect.dedupeStatus];
+              const resourceStatus = RESOURCE_STATUS_META[prospect.resourceStatus];
+              const developmentStatus = DEVELOPMENT_STATUS_META[prospect.developmentStatus];
               const channelUrl = prospect.url || prospect.sourceUrl || prospect.inputUrl;
               return (
                 <TableRow key={prospect.id} className="align-middle">
@@ -241,7 +252,8 @@ export function InfluencerImportTab({
                     )}
                   </TableCell>
                   <TableCell>
-                    <p className={dedupe.className}>{dedupe.label}</p>
+                    <p className={resourceStatus.className}>{resourceStatus.label}</p>
+                    <p className={`mt-0.5 text-xs ${developmentStatus.className}`}>{developmentStatus.label}</p>
                     {prospect.duplicateReason && (
                       <p className="mt-0.5 max-w-40 truncate text-xs text-muted-foreground" title={prospect.duplicateReason}>
                         {prospect.duplicateReason}
@@ -253,15 +265,21 @@ export function InfluencerImportTab({
                   </TableCell>
                   <TableCell className="text-right">
                     <div className="flex justify-end gap-1">
-                      {prospect.dedupeStatus === 'suspected' && !prospect.duplicateConfirmedUnique && (
+                      {(prospect.resourceStatus === 'suspected' || prospect.developmentStatus === 'suspected')
+                        && !prospect.duplicateConfirmedUnique && (
                         <Button variant="ghost" size="sm" onClick={() => onConfirmSuspected(prospect.id)}>
                           <CheckCircle2 className="mr-1 h-4 w-4" />
                           确认可建
                         </Button>
                       )}
-                      {prospect.dedupeStatus === 'duplicate' && prospect.duplicateRecordId && (
+                      {prospect.resourceStatus === 'suspected' && prospect.resourceRecordId && (
+                        <Button variant="ghost" size="sm" onClick={() => onUseExistingResource(prospect.id)}>
+                          关联资源记录
+                        </Button>
+                      )}
+                      {prospect.developmentStatus === 'suspected' && prospect.duplicateRecordId && (
                         <Button variant="ghost" size="sm" onClick={() => onUseExisting(prospect.id)}>
-                          使用现有记录
+                          关联开发记录
                         </Button>
                       )}
                       <Button

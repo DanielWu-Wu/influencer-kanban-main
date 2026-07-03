@@ -22,7 +22,6 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/com
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
-import { Separator } from '@/components/ui/separator';
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table';
 import { useSettings } from '@/lib/data';
 import {
@@ -49,6 +48,50 @@ type Inspection = {
   sampleRecords: Array<{ record_id: string; fields: Record<string, unknown> }>;
 };
 
+type TableRole = 'resource' | 'development';
+
+const ROLE_CONFIG: Record<TableRole, {
+  title: string;
+  description: string;
+  placeholder: string;
+  mappingKeys: FeishuFieldKey[];
+}> = {
+  resource: {
+    title: '红人资源库',
+    description: '连接“红人信息数据库”，用于频道查重、读取基础资料；不会因为已收录而阻止开发。',
+    placeholder: '粘贴“红人信息数据库”的完整网址，需包含 table=tbl...',
+    mappingKeys: [
+      'channelName',
+      'email',
+      'channelUrl',
+      'channelId',
+      'region',
+      'language',
+      'followers',
+      'recentAverageViews',
+      'notes',
+    ],
+  },
+  development: {
+    title: '红人开发记录表',
+    description: '连接“红人开发情况表”，一位红人固定一行，后续开发、跟进和回复都更新这一行。',
+    placeholder: '粘贴“红人开发情况表”的完整网址，需包含 table=tbl...',
+    mappingKeys: [
+      'channelName',
+      'region',
+      'channelUrl',
+      'email',
+      'developmentDate',
+      'firstOutreach',
+      'secondOutreach',
+      'thirdOutreach',
+      'hasReply',
+      'collaborationStatus',
+      'notes',
+    ],
+  },
+};
+
 export function FeishuSettings({
   expanded,
   onToggle,
@@ -57,37 +100,12 @@ export function FeishuSettings({
   onToggle: () => void;
 }) {
   const { settings, updateSettings, loading: settingsLoading } = useSettings();
-  const [url, setUrl] = useState('');
   const [connection, setConnection] = useState<ConnectionState>({
     loading: true,
     configured: false,
     connected: false,
   });
-  const [inspecting, setInspecting] = useState(false);
-  const [inspection, setInspection] = useState<Inspection | null>(null);
-  const [fieldMapping, setFieldMapping] = useState<FeishuFieldMapping>({});
-  const [mappingSaved, setMappingSaved] = useState(false);
   const [message, setMessage] = useState('');
-
-  useEffect(() => {
-    if (!settingsLoading) setUrl(settings.feishuUrl || '');
-  }, [settings.feishuUrl, settingsLoading]);
-
-  useEffect(() => {
-    if (!settingsLoading) setFieldMapping(settings.feishuFieldMapping || {});
-  }, [settings.feishuFieldMapping, settingsLoading]);
-
-  const mappedCount = useMemo(
-    () => Object.values(compactFeishuFieldMapping(fieldMapping)).length,
-    [fieldMapping],
-  );
-
-  const previewTargets = useMemo(
-    () => FEISHU_FIELD_TARGETS.filter((target) =>
-      ['channelName', 'email', 'region', 'followers', 'channelUrl', 'collaborationStatus', 'quote', 'notes'].includes(target.key),
-    ),
-    [],
-  );
 
   useEffect(() => {
     const params = new URLSearchParams(window.location.search);
@@ -102,93 +120,38 @@ export function FeishuSettings({
       };
       setMessage(messages[error] || `飞书连接失败：${error}`);
     } else if (params.get('feishu_connected')) {
-      setMessage('飞书账号已连接。下一步请粘贴红人资源库网址并执行只读检查。');
+      setMessage('飞书账号已连接。请分别配置资源库和开发记录表。');
     }
   }, []);
 
-  const loadConnection = async () => {
-    setConnection((current) => ({ ...current, loading: true, error: undefined }));
-    try {
-      const response = await fetch('/api/auth/feishu/session', { cache: 'no-store' });
-      const result = await response.json();
-      if (!response.ok) throw new Error(result.error || '读取飞书连接状态失败。');
-      setConnection({
-        loading: false,
-        configured: Boolean(result.configured),
-        connected: Boolean(result.connected),
-        name: result.data?.name,
-      });
-    } catch (error) {
-      setConnection({
-        loading: false,
-        configured: false,
-        connected: false,
-        error: error instanceof Error ? error.message : '读取飞书连接状态失败。',
-      });
-    }
-  };
-
   useEffect(() => {
+    const loadConnection = async () => {
+      try {
+        const response = await fetch('/api/auth/feishu/session', { cache: 'no-store' });
+        const result = await response.json();
+        if (!response.ok) throw new Error(result.error || '读取飞书连接状态失败。');
+        setConnection({
+          loading: false,
+          configured: Boolean(result.configured),
+          connected: Boolean(result.connected),
+          name: result.data?.name,
+        });
+      } catch (error) {
+        setConnection({
+          loading: false,
+          configured: false,
+          connected: false,
+          error: error instanceof Error ? error.message : '读取飞书连接状态失败。',
+        });
+      }
+    };
     void loadConnection();
   }, []);
 
   const disconnect = async () => {
     await fetch('/api/auth/feishu/session', { method: 'DELETE' });
     setConnection((current) => ({ ...current, connected: false, name: undefined }));
-    setInspection(null);
-    setMappingSaved(false);
     setMessage('飞书连接已断开。');
-  };
-
-  const inspect = async () => {
-    if (!url.trim()) {
-      setMessage('请先粘贴红人资源库的完整网址。');
-      return;
-    }
-    setInspecting(true);
-    setMessage('');
-    setInspection(null);
-    try {
-      const response = await fetch('/api/feishu/inspect', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ url: url.trim() }),
-      });
-      const result = await response.json();
-      if (!response.ok) throw new Error(result.error || '只读检查失败。');
-      setInspection(result.data);
-      setFieldMapping(autoMapFeishuFields(result.data.fields || [], settings.feishuFieldMapping || fieldMapping));
-      setMappingSaved(false);
-      updateSettings({ feishuUrl: url.trim() });
-      setMessage('只读检查成功。当前没有修改任何飞书记录。');
-    } catch (error) {
-      setMessage(error instanceof Error ? error.message : '只读检查失败。');
-    } finally {
-      setInspecting(false);
-    }
-  };
-
-  const updateMapping = (key: FeishuFieldKey, value: string) => {
-    setFieldMapping((current) => ({
-      ...current,
-      [key]: value === 'none' ? undefined : value,
-    }));
-    setMappingSaved(false);
-  };
-
-  const remapFields = () => {
-    if (!inspection) return;
-    setFieldMapping(autoMapFeishuFields(inspection.fields, fieldMapping));
-    setMappingSaved(false);
-    setMessage('已根据当前字段重新自动匹配，请检查后保存。');
-  };
-
-  const saveFieldMapping = () => {
-    const compacted = compactFeishuFieldMapping(fieldMapping);
-    updateSettings({ feishuUrl: url.trim(), feishuFieldMapping: compacted });
-    setFieldMapping(compacted);
-    setMappingSaved(true);
-    setMessage('字段映射已保存。后续 Gmail 匹配、AI 分析和写回飞书都会基于这套映射。');
   };
 
   return (
@@ -201,9 +164,9 @@ export function FeishuSettings({
                 <FileSpreadsheet className="h-4 w-4 text-blue-600" />
               </div>
               <div className="min-w-0">
-                <CardTitle className="text-base">飞书红人资源库</CardTitle>
+                <CardTitle className="text-base">飞书多维表格</CardTitle>
                 <CardDescription className="mt-0.5 text-xs">
-                  一键授权后，通过 API 实时读取和更新多维表格
+                  分别连接红人资源库和开发记录表，避免查重与开发进度混写
                 </CardDescription>
               </div>
             </div>
@@ -220,14 +183,9 @@ export function FeishuSettings({
       {expanded && (
         <CardContent className="space-y-4 pt-0">
           {connection.loading ? (
-            <div className="flex items-center gap-2 rounded-lg border border-white/65 bg-white/55 p-3 text-sm text-muted-foreground">
-              <LoaderCircle className="h-4 w-4 animate-spin" />
-              正在检查飞书连接状态...
-            </div>
+            <StatusBox icon={<LoaderCircle className="h-4 w-4 animate-spin" />} text="正在检查飞书连接状态..." />
           ) : !connection.configured ? (
-            <div className="rounded-lg border border-amber-200/80 bg-amber-50/80 p-3 text-sm text-amber-800">
-              网站功能已经准备好，等待在 Vercel 填写飞书 App ID、App Secret 和回调地址。
-            </div>
+            <StatusBox tone="warning" text="网站功能已经准备好，等待在 Vercel 填写飞书 App ID、App Secret 和回调地址。" />
           ) : connection.connected ? (
             <div className="flex items-center justify-between gap-4 rounded-lg border border-emerald-200/80 bg-emerald-50/80 p-3">
               <div className="min-w-0">
@@ -235,24 +193,20 @@ export function FeishuSettings({
                   <CheckCircle2 className="h-4 w-4" />
                   飞书账号已连接
                 </div>
-                <p className="mt-1 truncate text-xs text-emerald-700">
-                  {connection.name || '当前飞书账号'}
-                </p>
+                <p className="mt-1 truncate text-xs text-emerald-700">{connection.name || '当前飞书账号'}</p>
               </div>
-              <Button variant="outline" size="sm" className="h-9 shrink-0 gap-1.5 rounded-lg border-white/70 bg-white/70" onClick={disconnect}>
+              <Button variant="outline" size="sm" className="h-9 shrink-0 gap-1.5 bg-white/70" onClick={disconnect}>
                 <LogOut className="h-4 w-4" />
                 断开
               </Button>
             </div>
           ) : (
             <div className="space-y-3 rounded-lg border border-white/65 bg-white/55 p-4">
-              <div>
-                <p className="text-sm font-medium">授权你的飞书账号</p>
-                <p className="mt-1 text-xs leading-5 text-muted-foreground">
-                  授权后，看板只能访问你本人原本有权限使用的多维表格。
-                </p>
-              </div>
-              <Button className="h-10 w-full gap-2 rounded-lg bg-blue-600 shadow-apple hover:bg-blue-700" asChild>
+              <p className="text-sm font-medium">授权你的飞书账号</p>
+              <p className="text-xs leading-5 text-muted-foreground">
+                授权后，看板只能访问你本人原本有权限使用的多维表格。
+              </p>
+              <Button className="h-10 w-full gap-2 rounded-lg bg-blue-600 hover:bg-blue-700" asChild>
                 <a href="/api/auth/feishu">
                   <Plug className="h-4 w-4" />
                   一键连接飞书
@@ -261,176 +215,26 @@ export function FeishuSettings({
             </div>
           )}
 
-          {connection.connected && (
-            <div className="space-y-3 border-t border-white/60 pt-4">
-              <div className="flex items-center gap-2 text-sm font-medium">
-                <Database className="h-4 w-4" />
-                连接红人资源库
-              </div>
-              <div className="space-y-2">
-                <Label htmlFor="feishu-base-url">飞书多维表格网址</Label>
-                <Input
-                  id="feishu-base-url"
-                  value={url}
-                  onChange={(event) => setUrl(event.target.value)}
-                  placeholder="https://xxx.feishu.cn/base/..."
-                  className="rounded-lg border-white/65 bg-white/75"
-                />
-              </div>
-              <Button
-                type="button"
-                variant="outline"
-                className="h-10 w-full gap-2 rounded-lg border-white/70 bg-white/65"
-                onClick={inspect}
-                disabled={inspecting}
-              >
-                {inspecting
-                  ? <LoaderCircle className="h-4 w-4 animate-spin" />
-                  : <RefreshCw className="h-4 w-4" />}
-                只读检查表格
-              </Button>
-            </div>
-          )}
+          {message && <StatusBox tone="warning" text={message} />}
+          {connection.error && <StatusBox tone="error" text={connection.error} />}
 
-          {message && (
-            <div className={`rounded-lg border p-3 text-sm ${
-              inspection ? 'border-emerald-200/80 bg-emerald-50/80 text-emerald-800' : 'border-amber-200/80 bg-amber-50/80 text-amber-800'
-            }`}>
-              {message}
-            </div>
-          )}
-
-          {connection.error && (
-            <div className="rounded-lg border border-red-200/80 bg-red-50/80 p-3 text-sm text-red-700">
-              {connection.error}
-            </div>
-          )}
-
-          {inspection && (
-            <div className="space-y-3 rounded-lg border border-white/65 bg-white/50 p-4 shadow-sm">
-              <div className="flex items-center gap-2 text-sm font-medium">
-                <ShieldCheck className="h-4 w-4 text-emerald-600" />
-                已完成只读检查
-              </div>
-              <div className="grid grid-cols-2 gap-3 sm:grid-cols-4">
-                <Metric label="数据表" value={inspection.tables.length} />
-                <Metric label="当前表" value={inspection.selectedTable.name} />
-                <Metric label="字段" value={inspection.fields.length} />
-                <Metric label="记录" value={inspection.totalRecords} />
-              </div>
-              <div>
-                <p className="mb-2 text-xs font-medium text-muted-foreground">当前表字段</p>
-                <div className="flex flex-wrap gap-1.5">
-                  {inspection.fields.slice(0, 24).map((field) => (
-                    <Badge key={field.field_id} variant="outline" className="font-normal">
-                      {field.field_name}
-                    </Badge>
-                  ))}
-                  {inspection.fields.length > 24 && (
-                    <Badge variant="secondary">+{inspection.fields.length - 24}</Badge>
-                  )}
-                </div>
-              </div>
-
-              <Separator />
-
-              <div className="space-y-3">
-                <div className="flex flex-wrap items-center justify-between gap-3">
-                  <div>
-                    <div className="flex items-center gap-2 text-sm font-medium">
-                      <Wand2 className="h-4 w-4 text-blue-600" />
-                      字段映射
-                    </div>
-                    <p className="mt-1 text-xs text-muted-foreground">
-                      已映射 {mappedCount}/{FEISHU_FIELD_TARGETS.length} 个业务字段。保存后，后续 Gmail 匹配和 AI 分析会按这里读取。
-                    </p>
-                  </div>
-                  <div className="flex gap-2">
-                    <Button type="button" variant="outline" size="sm" className="h-9 gap-1.5 rounded-lg border-white/70 bg-white/65" onClick={remapFields}>
-                      <RefreshCw className="h-4 w-4" />
-                      重新识别
-                    </Button>
-                    <Button type="button" size="sm" className="h-9 gap-1.5 rounded-lg shadow-apple" onClick={saveFieldMapping}>
-                      {mappingSaved ? <CheckCircle2 className="h-4 w-4" /> : <Save className="h-4 w-4" />}
-                      {mappingSaved ? '已保存' : '保存映射'}
-                    </Button>
-                  </div>
-                </div>
-
-                <div className="grid gap-2 md:grid-cols-2">
-                  {FEISHU_FIELD_TARGETS.map((target) => (
-                    <div key={target.key} className="rounded-lg border border-white/65 bg-white/60 p-3">
-                      <div className="mb-2 flex items-start justify-between gap-2">
-                        <div className="min-w-0">
-                          <div className="flex items-center gap-1.5">
-                            <p className="text-sm font-medium">{target.label}</p>
-                            {target.required && <Badge variant="secondary" className="rounded-md bg-white/75 text-[10px]">关键</Badge>}
-                          </div>
-                          <p className="mt-0.5 text-xs text-muted-foreground">{target.description}</p>
-                        </div>
-                      </div>
-                      <Select
-                        value={fieldMapping[target.key] || 'none'}
-                        onValueChange={(value) => updateMapping(target.key, value)}
-                      >
-                        <SelectTrigger className="w-full rounded-lg border-white/65 bg-white/75">
-                          <SelectValue placeholder="选择飞书字段" />
-                        </SelectTrigger>
-                        <SelectContent>
-                          <SelectItem value="none">暂不映射</SelectItem>
-                          {inspection.fields.map((field) => (
-                            <SelectItem key={`${target.key}-${field.field_id}`} value={field.field_name}>
-                              {field.field_name}
-                            </SelectItem>
-                          ))}
-                        </SelectContent>
-                      </Select>
-                    </div>
-                  ))}
-                </div>
-              </div>
-
-              <Separator />
-
-              <div className="space-y-3">
-                <div>
-                  <div className="flex items-center gap-2 text-sm font-medium">
-                    <Eye className="h-4 w-4 text-emerald-600" />
-                    红人资料预览
-                  </div>
-                  <p className="mt-1 text-xs text-muted-foreground">
-                    只展示前 {inspection.sampleRecords.length} 条样例，用于确认字段是否对应正确。
-                  </p>
-                </div>
-                <div className="overflow-hidden rounded-lg border border-white/65 bg-white/60">
-                  <Table>
-                    <TableHeader>
-                      <TableRow>
-                        {previewTargets.map((target) => (
-                          <TableHead key={target.key} className="min-w-[120px]">
-                            {target.label}
-                          </TableHead>
-                        ))}
-                      </TableRow>
-                    </TableHeader>
-                    <TableBody>
-                      {inspection.sampleRecords.map((record) => (
-                        <TableRow key={record.record_id}>
-                          {previewTargets.map((target) => (
-                            <TableCell key={`${record.record_id}-${target.key}`} className="max-w-[240px] truncate">
-                              {formatFeishuValue(getMappedRecordValue(record.fields, fieldMapping[target.key]))}
-                            </TableCell>
-                          ))}
-                        </TableRow>
-                      ))}
-                    </TableBody>
-                  </Table>
-                </div>
-              </div>
-
-              <p className="text-xs text-muted-foreground">
-                已读取 {inspection.sampleRecords.length} 条样例用于连通性检查，未执行新增、更新或删除。
-              </p>
+          {connection.connected && !settingsLoading && (
+            <div className="grid gap-4 xl:grid-cols-2">
+              <TableConfiguration
+                role="resource"
+                initialUrl={settings.feishuUrl || ''}
+                initialMapping={settings.feishuFieldMapping || {}}
+                onSave={(url, mapping) => updateSettings({ feishuUrl: url, feishuFieldMapping: mapping })}
+              />
+              <TableConfiguration
+                role="development"
+                initialUrl={settings.feishuProspectingUrl || ''}
+                initialMapping={settings.feishuProspectingFieldMapping || {}}
+                onSave={(url, mapping) => updateSettings({
+                  feishuProspectingUrl: url,
+                  feishuProspectingFieldMapping: mapping,
+                })}
+              />
             </div>
           )}
         </CardContent>
@@ -439,41 +243,247 @@ export function FeishuSettings({
   );
 }
 
-function Metric({ label, value }: { label: string; value: string | number }) {
+function TableConfiguration({
+  role,
+  initialUrl,
+  initialMapping,
+  onSave,
+}: {
+  role: TableRole;
+  initialUrl: string;
+  initialMapping: FeishuFieldMapping;
+  onSave: (url: string, mapping: FeishuFieldMapping) => void;
+}) {
+  const config = ROLE_CONFIG[role];
+  const [url, setUrl] = useState(initialUrl);
+  const [mapping, setMapping] = useState<FeishuFieldMapping>(initialMapping);
+  const [inspection, setInspection] = useState<Inspection | null>(null);
+  const [inspecting, setInspecting] = useState(false);
+  const [saved, setSaved] = useState(false);
+  const [message, setMessage] = useState('');
+  const targets = useMemo(
+    () => FEISHU_FIELD_TARGETS.filter((target) => config.mappingKeys.includes(target.key)),
+    [config.mappingKeys],
+  );
+  const mappedCount = targets.filter((target) => Boolean(mapping[target.key])).length;
+
+  useEffect(() => setUrl(initialUrl), [initialUrl]);
+  useEffect(() => setMapping(initialMapping), [initialMapping]);
+
+  const inspect = async () => {
+    if (!url.trim()) {
+      setMessage(`请先粘贴${config.title}的完整网址。`);
+      return;
+    }
+    try {
+      if (!new URL(url.trim()).searchParams.get('table')) {
+        setMessage('当前网址没有包含 table=tbl...，无法确认具体子表。请打开目标子表后重新复制地址栏网址。');
+        return;
+      }
+    } catch {
+      setMessage('网址格式不正确，请从飞书目标子表的浏览器地址栏重新复制。');
+      return;
+    }
+    setInspecting(true);
+    setMessage('');
+    setInspection(null);
+    try {
+      const response = await fetch('/api/feishu/inspect', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ url: url.trim() }),
+      });
+      const result = await response.json();
+      if (!response.ok) throw new Error(result.error || '只读检查失败。');
+      const nextInspection = result.data as Inspection;
+      setInspection(nextInspection);
+      setMapping(autoMapFeishuFields(nextInspection.fields || [], initialMapping));
+      setSaved(false);
+      setMessage(`已识别子表“${nextInspection.selectedTable.name}”，当前没有修改任何飞书记录。`);
+    } catch (error) {
+      setMessage(error instanceof Error ? error.message : '只读检查失败。');
+    } finally {
+      setInspecting(false);
+    }
+  };
+
+  const save = () => {
+    if (!inspection) {
+      setMessage('请先执行只读检查，确认网址指向正确的子表。');
+      return;
+    }
+    const compacted = compactFeishuFieldMapping(mapping);
+    onSave(url.trim(), compacted);
+    setMapping(compacted);
+    setSaved(true);
+    setMessage(`${config.title}配置已保存。`);
+  };
+
   return (
-    <div className="rounded-lg border border-white/60 bg-white/55 p-3">
-      <p className="text-xs text-muted-foreground">{label}</p>
-      <p className="mt-1 truncate text-sm font-semibold">{value}</p>
-    </div>
+    <section className="space-y-3 rounded-lg border border-white/70 bg-white/55 p-4">
+      <div className="flex items-start gap-3">
+        <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg bg-slate-100">
+          <Database className="h-4 w-4 text-slate-700" />
+        </div>
+        <div>
+          <h3 className="text-sm font-semibold">{config.title}</h3>
+          <p className="mt-1 text-xs leading-5 text-muted-foreground">{config.description}</p>
+        </div>
+      </div>
+
+      <div className="space-y-2">
+        <Label htmlFor={`feishu-${role}-url`}>子表网址</Label>
+        <Input
+          id={`feishu-${role}-url`}
+          value={url}
+          onChange={(event) => {
+            setUrl(event.target.value);
+            setSaved(false);
+          }}
+          placeholder={config.placeholder}
+          className="bg-white/80"
+        />
+        <p className="text-xs text-muted-foreground">请从目标子表浏览器地址栏复制，网址中应包含 `table=tbl...`。</p>
+      </div>
+
+      <Button type="button" variant="outline" className="h-10 w-full gap-2 bg-white/70" onClick={inspect} disabled={inspecting}>
+        {inspecting ? <LoaderCircle className="h-4 w-4 animate-spin" /> : <RefreshCw className="h-4 w-4" />}
+        只读检查子表
+      </Button>
+
+      {message && (
+        <div className={`rounded-md border p-2.5 text-xs ${
+          inspection ? 'border-emerald-200 bg-emerald-50 text-emerald-800' : 'border-amber-200 bg-amber-50 text-amber-800'
+        }`}>
+          {message}
+        </div>
+      )}
+
+      {inspection && (
+        <div className="space-y-3 border-t pt-3">
+          <div className="flex items-center justify-between gap-3">
+            <div className="flex items-center gap-2 text-sm font-medium">
+              <ShieldCheck className="h-4 w-4 text-emerald-600" />
+              {inspection.selectedTable.name}
+            </div>
+            <Badge variant="outline">{inspection.totalRecords} 条记录</Badge>
+          </div>
+
+          <div className="flex items-center justify-between gap-3">
+            <div>
+              <div className="flex items-center gap-2 text-sm font-medium">
+                <Wand2 className="h-4 w-4 text-blue-600" />
+                字段映射
+              </div>
+              <p className="mt-1 text-xs text-muted-foreground">已映射 {mappedCount} 个字段，不需要在飞书新增字段。</p>
+            </div>
+            <Button
+              type="button"
+              variant="ghost"
+              size="sm"
+              onClick={() => {
+                setMapping(autoMapFeishuFields(inspection.fields, mapping));
+                setSaved(false);
+              }}
+            >
+              <RefreshCw className="mr-1 h-4 w-4" />
+              重识别
+            </Button>
+          </div>
+
+          <div className="grid gap-2 sm:grid-cols-2">
+            {targets.map((target) => (
+              <div key={target.key} className="space-y-1.5 rounded-md border bg-white/70 p-2.5">
+                <Label className="text-xs">{target.label}</Label>
+                <Select
+                  value={mapping[target.key] || 'none'}
+                  onValueChange={(value) => {
+                    setMapping((current) => ({ ...current, [target.key]: value === 'none' ? undefined : value }));
+                    setSaved(false);
+                  }}
+                >
+                  <SelectTrigger className="h-9 w-full bg-white">
+                    <SelectValue placeholder="选择飞书字段" />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="none">暂不映射</SelectItem>
+                    {inspection.fields.map((field) => (
+                      <SelectItem key={`${target.key}-${field.field_id}`} value={field.field_name}>
+                        {field.field_name}
+                      </SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+              </div>
+            ))}
+          </div>
+
+          {inspection.sampleRecords.length > 0 && (
+            <details className="group">
+              <summary className="flex cursor-pointer list-none items-center gap-2 text-xs font-medium text-muted-foreground">
+                <Eye className="h-4 w-4" />
+                查看前 {inspection.sampleRecords.length} 条只读样例
+              </summary>
+              <div className="mt-2 max-h-48 overflow-auto rounded-md border bg-white/70">
+                <Table>
+                  <TableHeader>
+                    <TableRow>
+                      {targets.slice(0, 5).map((target) => <TableHead key={target.key}>{target.label}</TableHead>)}
+                    </TableRow>
+                  </TableHeader>
+                  <TableBody>
+                    {inspection.sampleRecords.map((record) => (
+                      <TableRow key={record.record_id}>
+                        {targets.slice(0, 5).map((target) => (
+                          <TableCell key={`${record.record_id}-${target.key}`} className="max-w-40 truncate">
+                            {formatFeishuValue(mapping[target.key] ? record.fields[mapping[target.key]!] : undefined)}
+                          </TableCell>
+                        ))}
+                      </TableRow>
+                    ))}
+                  </TableBody>
+                </Table>
+              </div>
+            </details>
+          )}
+
+          <Button type="button" className="h-10 w-full gap-2" onClick={save}>
+            {saved ? <CheckCircle2 className="h-4 w-4" /> : <Save className="h-4 w-4" />}
+            {saved ? '配置已保存' : `保存${config.title}配置`}
+          </Button>
+        </div>
+      )}
+    </section>
   );
 }
 
-function getMappedRecordValue(fields: Record<string, unknown>, fieldName?: string) {
-  if (!fieldName) return undefined;
-  return fields[fieldName];
+function StatusBox({
+  text,
+  icon,
+  tone = 'neutral',
+}: {
+  text: string;
+  icon?: React.ReactNode;
+  tone?: 'neutral' | 'warning' | 'error';
+}) {
+  const className = tone === 'error'
+    ? 'border-red-200 bg-red-50 text-red-700'
+    : tone === 'warning'
+      ? 'border-amber-200 bg-amber-50 text-amber-800'
+      : 'border-white/65 bg-white/55 text-muted-foreground';
+  return <div className={`flex items-center gap-2 rounded-lg border p-3 text-sm ${className}`}>{icon}{text}</div>;
 }
 
 function formatFeishuValue(value: unknown): string {
   if (value === null || value === undefined || value === '') return '-';
-  if (typeof value === 'string' || typeof value === 'number' || typeof value === 'boolean') {
-    return String(value);
-  }
-  if (Array.isArray(value)) {
-    const text = value.map(formatFeishuValue).filter((item) => item && item !== '-').join(', ');
-    return text || '-';
-  }
+  if (typeof value === 'string' || typeof value === 'number' || typeof value === 'boolean') return String(value);
+  if (Array.isArray(value)) return value.map(formatFeishuValue).filter((item) => item !== '-').join(', ') || '-';
   if (typeof value === 'object') {
     const objectValue = value as Record<string, unknown>;
-    const preferredKeys = ['text', 'name', 'email', 'link', 'url', 'value', 'title'];
-    for (const key of preferredKeys) {
+    for (const key of ['text', 'name', 'email', 'link', 'url', 'value', 'title']) {
       if (objectValue[key]) return formatFeishuValue(objectValue[key]);
     }
-
-    const text = Object.values(objectValue)
-      .map(formatFeishuValue)
-      .filter((item) => item && item !== '-')
-      .join(', ');
-    return text || '-';
+    return Object.values(objectValue).map(formatFeishuValue).filter((item) => item !== '-').join(', ') || '-';
   }
   return '-';
 }

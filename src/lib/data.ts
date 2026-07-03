@@ -46,6 +46,8 @@ const GMAIL_STORAGE_KEYS = {
 export interface AppSettings {
   feishuUrl?: string;
   feishuFieldMapping?: FeishuFieldMapping;
+  feishuProspectingUrl?: string;
+  feishuProspectingFieldMapping?: FeishuFieldMapping;
   recordAssistantSettings?: RecordAssistantSettings;
   brandName?: string;
   senderName?: string;

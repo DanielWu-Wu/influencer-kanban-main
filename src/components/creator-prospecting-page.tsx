@@ -26,6 +26,7 @@ import {
 } from '@/components/ui/dialog';
 import { generateId, useGmailAuth, useProducts, useSettings } from '@/lib/data';
 import type { FeishuFieldKey, FeishuFieldMapping } from '@/lib/feishu-mapping';
+import { getSupabaseBrowserClient } from '@/lib/supabase/client';
 import {
   calculateRecentAverageViews,
   canCreateFeishuRecord,
@@ -76,6 +77,7 @@ type FeishuRecord = {
 type FeishuWritePreview = {
   prospect: Prospect;
   fields: Record<string, unknown>;
+  target: 'resource' | 'development';
 };
 
 const TAB_META: Array<{
@@ -118,12 +120,11 @@ function summarizeVideos(videos?: RecentVideo[]) {
     .join('\n');
 }
 
-function buildFeishuFields(prospect: Prospect, mapping: FeishuFieldMapping) {
+function buildResourceFields(prospect: Prospect, mapping: FeishuFieldMapping) {
   const fields: Record<string, unknown> = {};
   const notes = [
     '来源：红人开发台',
     prospect.avatarUrl ? `频道头像：${prospect.avatarUrl}` : '',
-    prospect.cooperationIdea ? `合作想法：${prospect.cooperationIdea}` : '',
     summarizeVideos(prospect.recentVideos),
   ].filter(Boolean).join('\n');
 
@@ -135,9 +136,30 @@ function buildFeishuFields(prospect: Prospect, mapping: FeishuFieldMapping) {
   putMappedField(fields, mapping, 'channelId', prospect.channelId);
   putMappedField(fields, mapping, 'language', prospect.language);
   putMappedField(fields, mapping, 'recentAverageViews', prospect.recentAverageViews);
-  putMappedField(fields, mapping, 'description', prospect.description);
   putMappedField(fields, mapping, 'email', prospect.publicEmail);
-  putMappedField(fields, mapping, 'collaborationStatus', '暂未合作');
+  putMappedField(fields, mapping, 'notes', notes);
+  return fields;
+}
+
+function buildDevelopmentFields(prospect: Prospect, mapping: FeishuFieldMapping) {
+  const fields: Record<string, unknown> = {};
+  const notes = [
+    '来源：红人开发台',
+    prospect.targetProduct ? `目标产品：${prospect.targetProduct}` : '',
+    prospect.cooperationType ? `合作形式：${prospect.cooperationType}` : '',
+    prospect.cooperationIdea ? `合作想法：${prospect.cooperationIdea}` : '',
+    prospect.priority ? `优先级：${prospect.priority === 'high' ? '高' : prospect.priority === 'low' ? '低' : '中'}` : '',
+    `流程状态：${WORKFLOW_META[prospect.workflowStatus].label}`,
+    prospect.gmailDraftId ? `Gmail 草稿 ID：${prospect.gmailDraftId}` : '',
+  ].filter(Boolean).join('\n');
+
+  putMappedField(fields, mapping, 'channelName', prospect.title);
+  putMappedField(fields, mapping, 'region', prospect.country || '');
+  putMappedField(fields, mapping, 'channelUrl', firstValue(prospect.url, prospect.sourceUrl, prospect.inputUrl));
+  putMappedField(fields, mapping, 'email', prospect.publicEmail);
+  const developmentDate = new Date(prospect.createdAt);
+  developmentDate.setHours(0, 0, 0, 0);
+  putMappedField(fields, mapping, 'developmentDate', developmentDate.getTime());
   putMappedField(fields, mapping, 'prospectingStatus', WORKFLOW_META[prospect.workflowStatus].label);
   putMappedField(fields, mapping, 'targetProduct', prospect.targetProduct);
   putMappedField(fields, mapping, 'cooperationType', prospect.cooperationType);
@@ -145,6 +167,18 @@ function buildFeishuFields(prospect: Prospect, mapping: FeishuFieldMapping) {
   putMappedField(fields, mapping, 'priority', prospect.priority === 'high' ? '高' : prospect.priority === 'low' ? '低' : '中');
   putMappedField(fields, mapping, 'gmailDraftId', prospect.gmailDraftId);
   putMappedField(fields, mapping, 'notes', notes);
+  return fields;
+}
+
+function buildDevelopmentSyncFields(prospect: Prospect, mapping: FeishuFieldMapping) {
+  const fields: Record<string, unknown> = {};
+  putMappedField(fields, mapping, 'email', prospect.publicEmail);
+  putMappedField(fields, mapping, 'prospectingStatus', WORKFLOW_META[prospect.workflowStatus].label);
+  putMappedField(fields, mapping, 'targetProduct', prospect.targetProduct);
+  putMappedField(fields, mapping, 'cooperationType', prospect.cooperationType);
+  putMappedField(fields, mapping, 'cooperationIdea', prospect.cooperationIdea);
+  putMappedField(fields, mapping, 'priority', prospect.priority === 'high' ? '高' : prospect.priority === 'low' ? '低' : '中');
+  putMappedField(fields, mapping, 'gmailDraftId', prospect.gmailDraftId);
   return fields;
 }
 
@@ -185,6 +219,52 @@ function extractRecordId(result: unknown) {
   return data?.record?.record_id || data?.record?.id || '';
 }
 
+function formatPreviewValue(value: unknown) {
+  if (typeof value === 'number' && value > 1_000_000_000_000) {
+    return new Date(value).toLocaleDateString('zh-CN');
+  }
+  return String(value);
+}
+
+function findRecordMatch(
+  prospect: Prospect,
+  records: FeishuRecord[],
+  mapping: FeishuFieldMapping,
+) {
+  const channelId = String(prospect.channelId || '').trim().toLowerCase();
+  const urlKey = normalizeYouTubeKey(firstValue(prospect.url, prospect.sourceUrl, prospect.inputUrl));
+  const handle = extractHandle(prospect.customUrl || prospect.sourceUrl || prospect.inputUrl);
+  const email = String(prospect.publicEmail || '').trim().toLowerCase();
+  const title = String(prospect.title || '').trim().toLowerCase();
+  let suspected: FeishuRecord | undefined;
+  let suspectedReason = '';
+
+  for (const record of records) {
+    const recordChannelId = flattenFeishuValue(mapping.channelId ? record.fields[mapping.channelId] : '').trim().toLowerCase();
+    const recordUrl = normalizeYouTubeKey(flattenFeishuValue(mapping.channelUrl ? record.fields[mapping.channelUrl] : ''));
+    const recordEmail = flattenFeishuValue(mapping.email ? record.fields[mapping.email] : '').trim().toLowerCase();
+    const recordName = flattenFeishuValue(mapping.channelName ? record.fields[mapping.channelName] : '').trim().toLowerCase();
+    const recordHandle = extractHandle(recordUrl);
+    if (channelId && recordChannelId && channelId === recordChannelId) {
+      return { exact: record, reason: 'Channel ID 一致' };
+    }
+    if (urlKey && recordUrl && urlKey === recordUrl) {
+      return { exact: record, reason: '标准化 YouTube 链接一致' };
+    }
+    if (email && recordEmail && email === recordEmail) {
+      return { exact: record, reason: '联系邮箱一致' };
+    }
+    if (!suspected && handle && recordHandle && handle === recordHandle) {
+      suspected = record;
+      suspectedReason = 'handle 相同，请人工确认';
+    } else if (!suspected && title && recordName && title === recordName) {
+      suspected = record;
+      suspectedReason = '频道名相同，请人工确认';
+    }
+  }
+  return suspected ? { suspected, reason: suspectedReason } : {};
+}
+
 export function CreatorProspectingPage() {
   const { settings } = useSettings();
   const { products } = useProducts();
@@ -195,6 +275,8 @@ export function CreatorProspectingPage() {
   const [prospects, setProspects] = useState<Prospect[]>([]);
   const [selectedIds, setSelectedIds] = useState<string[]>([]);
   const [loaded, setLoaded] = useState(false);
+  const [cloudReady, setCloudReady] = useState(false);
+  const [cloudAvailable, setCloudAvailable] = useState(true);
   const [resolving, setResolving] = useState(false);
   const [checkingDedupe, setCheckingDedupe] = useState(false);
   const [writingFeishu, setWritingFeishu] = useState(false);
@@ -204,19 +286,91 @@ export function CreatorProspectingPage() {
   const [previewItems, setPreviewItems] = useState<FeishuWritePreview[]>([]);
 
   useEffect(() => {
-    try {
-      setProspects(migrateProspects(JSON.parse(localStorage.getItem(CREATOR_PROSPECTS_STORAGE_KEY) || '[]')));
-    } catch {
-      setProspects([]);
-    } finally {
-      setLoaded(true);
-    }
+    const localProspects = (() => {
+      try {
+        return migrateProspects(JSON.parse(localStorage.getItem(CREATOR_PROSPECTS_STORAGE_KEY) || '[]'));
+      } catch {
+        return [];
+      }
+    })();
+    setProspects(localProspects);
+    setLoaded(true);
+
+    const loadCloudProspects = async () => {
+      const supabase = getSupabaseBrowserClient();
+      if (!supabase) {
+        setCloudReady(true);
+        return;
+      }
+      const { data: authData } = await supabase.auth.getUser();
+      if (!authData.user) {
+        setCloudReady(true);
+        return;
+      }
+      const { data, error } = await supabase
+        .from('creator_prospects')
+        .select('data')
+        .eq('user_id', authData.user.id)
+        .order('updated_at', { ascending: false });
+      if (error) {
+        console.warn('云端红人开发状态读取失败，将继续使用本地数据:', error.message);
+        setCloudAvailable(false);
+        setCloudReady(true);
+        return;
+      }
+      const cloudProspects = migrateProspects((data || []).map((row) => row.data));
+      if (cloudProspects.length) {
+        const merged = new Map<string, Prospect>();
+        [...localProspects, ...cloudProspects].forEach((item) => {
+          const current = merged.get(item.id);
+          if (!current || item.updatedAt > current.updatedAt) merged.set(item.id, item);
+        });
+        setProspects(Array.from(merged.values()).sort((a, b) => b.updatedAt.localeCompare(a.updatedAt)));
+      }
+      setCloudReady(true);
+    };
+    void loadCloudProspects();
   }, []);
 
   useEffect(() => {
     if (!loaded) return;
     localStorage.setItem(CREATOR_PROSPECTS_STORAGE_KEY, JSON.stringify(prospects));
   }, [loaded, prospects]);
+
+  useEffect(() => {
+    if (!loaded || !cloudReady || !cloudAvailable || !prospects.length) return;
+    const timeout = window.setTimeout(async () => {
+      const supabase = getSupabaseBrowserClient();
+      if (!supabase) return;
+      const { data: authData } = await supabase.auth.getUser();
+      if (!authData.user) return;
+      const { error } = await supabase.from('creator_prospects').upsert(
+        prospects.map((prospect) => ({
+          id: prospect.id,
+          user_id: authData.user!.id,
+          data: prospect,
+          created_at: prospect.createdAt,
+          updated_at: prospect.updatedAt,
+        })),
+      );
+      if (error) console.warn('云端红人开发状态保存失败:', error.message);
+    }, 600);
+    return () => window.clearTimeout(timeout);
+  }, [cloudAvailable, cloudReady, loaded, prospects]);
+
+  /*
+   * Keep localStorage as an offline fallback. Supabase becomes the durable source
+   * once the optional creator_prospects migration has been applied.
+   */
+  useEffect(() => {
+    try {
+      if (cloudReady && !cloudAvailable) {
+        console.info('红人开发台当前使用本地存储；执行 Supabase 迁移后会自动启用云同步。');
+      }
+    } catch {
+      // Logging must never block the workflow.
+    }
+  }, [cloudAvailable, cloudReady]);
 
   const updateProspect = (id: string, patch: Partial<Prospect>) => {
     setProspects((current) => current.map((item) => (
@@ -246,9 +400,9 @@ export function CreatorProspectingPage() {
   );
 
   const syncFeishuProspect = async (prospect: Prospect, patch: Partial<Prospect> = {}) => {
-    if (!settings.feishuUrl || !prospect.feishuRecordId) return true;
+    if (!settings.feishuProspectingUrl || !prospect.feishuRecordId) return true;
     const next = { ...prospect, ...patch } as Prospect;
-    const fields = buildFeishuFields(next, settings.feishuFieldMapping || {});
+    const fields = buildDevelopmentSyncFields(next, settings.feishuProspectingFieldMapping || {});
     if (!Object.keys(fields).length) return true;
     try {
       const response = await fetch('/api/feishu/records', {
@@ -256,7 +410,7 @@ export function CreatorProspectingPage() {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           action: 'update',
-          url: settings.feishuUrl,
+          url: settings.feishuProspectingUrl,
           recordId: prospect.feishuRecordId,
           fields,
         }),
@@ -291,6 +445,8 @@ export function CreatorProspectingPage() {
       workflowStatus: 'recorded',
       emailStatus: 'missing',
       dedupeStatus: 'unchecked',
+      resourceStatus: 'unchecked',
+      developmentStatus: 'unchecked',
       competitorCollaboration: 'unknown',
       createdAt: now,
       updatedAt: now,
@@ -360,8 +516,8 @@ export function CreatorProspectingPage() {
     }
   };
 
-  const loadFeishuRecords = async () => {
-    if (!settings.feishuUrl) throw new Error('请先在设置中连接飞书红人资源库。');
+  const loadFeishuRecords = async (url: string, label: string) => {
+    if (!url) throw new Error(`请先在设置中连接${label}。`);
     const records: FeishuRecord[] = [];
     let pageToken = '';
     for (let page = 0; page < 10; page += 1) {
@@ -370,7 +526,7 @@ export function CreatorProspectingPage() {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           action: 'list',
-          url: settings.feishuUrl,
+          url,
           pageSize: 500,
           pageToken,
         }),
@@ -392,103 +548,127 @@ export function CreatorProspectingPage() {
       return;
     }
     setCheckingDedupe(true);
-    targets.forEach((item) => updateProspect(item.id, { dedupeStatus: 'checking' }));
+    targets.forEach((item) => updateProspect(item.id, {
+      dedupeStatus: 'checking',
+      resourceStatus: 'checking',
+      developmentStatus: 'checking',
+    }));
     try {
-      const records = await loadFeishuRecords();
-      const mapping = settings.feishuFieldMapping || {};
+      if (!settings.feishuUrl || !settings.feishuProspectingUrl) {
+        throw new Error('请先在设置中分别连接“红人信息数据库”和“红人开发情况表”。');
+      }
+      const [resourceRecords, developmentRecords] = await Promise.all([
+        loadFeishuRecords(settings.feishuUrl, '红人信息数据库'),
+        loadFeishuRecords(settings.feishuProspectingUrl, '红人开发情况表'),
+      ]);
+      const resourceMapping = settings.feishuFieldMapping || {};
+      const developmentMapping = settings.feishuProspectingFieldMapping || {};
       setProspects((current) => current.map((prospect) => {
         if (!targets.some((item) => item.id === prospect.id)) return prospect;
-        const channelId = String(prospect.channelId || '').toLowerCase();
-        const urlKey = normalizeYouTubeKey(firstValue(prospect.url, prospect.sourceUrl, prospect.inputUrl));
-        const handle = extractHandle(prospect.customUrl || prospect.sourceUrl || prospect.inputUrl);
-        const title = String(prospect.title || '').trim().toLowerCase();
-        let suspected: FeishuRecord | undefined;
-        let suspectedReason = '';
-
-        for (const record of records) {
-          const recordChannelId = flattenFeishuValue(mapping.channelId ? record.fields[mapping.channelId] : '').trim().toLowerCase();
-          const recordUrl = normalizeYouTubeKey(flattenFeishuValue(mapping.channelUrl ? record.fields[mapping.channelUrl] : ''));
-          const recordName = flattenFeishuValue(mapping.channelName ? record.fields[mapping.channelName] : '').trim().toLowerCase();
-          const recordHandle = extractHandle(recordUrl);
-          if (channelId && recordChannelId && channelId === recordChannelId) {
-            return {
-              ...prospect,
-              workflowStatus: 'duplicate',
-              dedupeStatus: 'duplicate',
-              duplicateRecordId: record.record_id,
-              duplicateReason: 'Channel ID 与飞书现有记录一致',
-              updatedAt: new Date().toISOString(),
-            };
-          }
-          if (urlKey && recordUrl && urlKey === recordUrl) {
-            return {
-              ...prospect,
-              workflowStatus: 'duplicate',
-              dedupeStatus: 'duplicate',
-              duplicateRecordId: record.record_id,
-              duplicateReason: '标准化 YouTube 链接与飞书现有记录一致',
-              updatedAt: new Date().toISOString(),
-            };
-          }
-          if (!suspected && handle && recordHandle && handle === recordHandle) {
-            suspected = record;
-            suspectedReason = 'handle 与飞书记录相同，请人工确认';
-          } else if (!suspected && title && recordName && title === recordName) {
-            suspected = record;
-            suspectedReason = '频道名与飞书记录相同，请人工确认';
-          }
-        }
-        if (suspected) {
-          return {
-            ...prospect,
-            dedupeStatus: 'suspected',
-            duplicateRecordId: suspected.record_id,
-            duplicateReason: suspectedReason,
-            duplicateConfirmedUnique: false,
-            updatedAt: new Date().toISOString(),
-          };
-        }
+        const resourceMatch = findRecordMatch(prospect, resourceRecords, resourceMapping);
+        const developmentMatch = findRecordMatch(prospect, developmentRecords, developmentMapping);
+        const resourceStatus = resourceMatch.exact
+          ? 'exists'
+          : resourceMatch.suspected
+            ? 'suspected'
+            : 'missing';
+        const developmentStatus = developmentMatch.exact
+          ? 'exists'
+          : developmentMatch.suspected
+            ? 'suspected'
+            : 'missing';
+        const linkedDevelopmentId = developmentMatch.exact?.record_id;
         return {
           ...prospect,
-          dedupeStatus: 'unique',
-          duplicateRecordId: undefined,
-          duplicateReason: undefined,
+          workflowStatus: linkedDevelopmentId ? 'dedupe_completed' : 'resolved',
+          dedupeStatus: developmentMatch.exact
+            ? 'duplicate'
+            : developmentMatch.suspected || resourceMatch.suspected
+              ? 'suspected'
+              : 'unique',
+          resourceStatus,
+          developmentStatus,
+          resourceRecordId: resourceMatch.exact?.record_id || resourceMatch.suspected?.record_id,
+          feishuRecordId: linkedDevelopmentId,
+          duplicateRecordId: developmentMatch.suspected?.record_id || resourceMatch.suspected?.record_id,
+          duplicateReason: developmentMatch.exact
+            ? `已关联现有开发记录：${developmentMatch.reason}`
+            : developmentMatch.suspected
+              ? `开发记录疑似重复：${developmentMatch.reason}`
+              : resourceMatch.suspected
+                ? `资源库疑似重复：${resourceMatch.reason}`
+                : resourceMatch.exact
+                  ? `资源库已收录：${resourceMatch.reason}`
+                  : '资源库未收录，可人工确认加入；不影响创建开发记录',
           duplicateConfirmedUnique: false,
           updatedAt: new Date().toISOString(),
         };
       }));
-      toast.success(`飞书查重完成，共检查 ${targets.length} 个频道。`);
+      toast.success(`双表查重完成：已同时检查资源库和开发记录表中的 ${targets.length} 个频道。`);
     } catch (error) {
       const message = error instanceof Error ? error.message : '飞书查重失败。';
-      targets.forEach((item) => updateProspect(item.id, { dedupeStatus: 'error', error: message }));
+      targets.forEach((item) => updateProspect(item.id, {
+        dedupeStatus: 'error',
+        resourceStatus: 'error',
+        developmentStatus: 'error',
+        error: message,
+      }));
       toast.error(message);
     } finally {
       setCheckingDedupe(false);
     }
   };
 
-  const openFeishuPreview = (items: Prospect[]) => {
+  const openDevelopmentPreview = (items: Prospect[]) => {
     const targets = items.filter(canCreateFeishuRecord);
     if (!targets.length) {
       toast.error('没有可创建的线索。请先完成识别和飞书查重，并排除重复记录。');
+      return;
+    }
+    const mapping = settings.feishuProspectingFieldMapping || {};
+    const previews = targets
+      .map((prospect) => ({
+        prospect,
+        target: 'development' as const,
+        fields: buildDevelopmentFields({ ...prospect, workflowStatus: 'dedupe_completed' }, mapping),
+      }))
+      .filter((item) => Object.keys(item.fields).length > 0);
+    if (!previews.length) {
+      toast.error('没有可写入字段，请先检查“红人开发情况表”的字段映射。');
+      return;
+    }
+    setPreviewItems(previews);
+  };
+
+  const openResourcePreview = (items: Prospect[]) => {
+    const targets = items.filter((item) => (
+      item.resourceStatus === 'missing'
+      && !item.resourceRecordId
+    ));
+    if (!targets.length) {
+      toast.error('所选红人没有需要加入资源库的记录。');
       return;
     }
     const mapping = settings.feishuFieldMapping || {};
     const previews = targets
       .map((prospect) => ({
         prospect,
-        fields: buildFeishuFields({ ...prospect, workflowStatus: 'dedupe_completed' }, mapping),
+        target: 'resource' as const,
+        fields: buildResourceFields(prospect, mapping),
       }))
       .filter((item) => Object.keys(item.fields).length > 0);
     if (!previews.length) {
-      toast.error('没有可写入字段，请先检查飞书字段映射。');
+      toast.error('没有可写入字段，请先检查“红人信息数据库”的字段映射。');
       return;
     }
     setPreviewItems(previews);
   };
 
   const confirmWriteFeishu = async () => {
-    if (!settings.feishuUrl || !previewItems.length) return;
+    if (!previewItems.length) return;
+    const target = previewItems[0].target;
+    const targetUrl = target === 'resource' ? settings.feishuUrl : settings.feishuProspectingUrl;
+    if (!targetUrl) return;
     setWritingFeishu(true);
     const successes: Array<{ id: string; recordId: string }> = [];
     const failures: string[] = [];
@@ -499,7 +679,7 @@ export function CreatorProspectingPage() {
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({
             action: 'create',
-            url: settings.feishuUrl,
+            url: targetUrl,
             fields: item.fields,
           }),
         });
@@ -517,8 +697,18 @@ export function CreatorProspectingPage() {
       return success
         ? {
             ...item,
-            workflowStatus: 'dedupe_completed',
-            feishuRecordId: success.recordId,
+            ...(target === 'resource'
+              ? {
+                  resourceStatus: 'exists' as const,
+                  resourceRecordId: success.recordId,
+                  duplicateReason: '已由用户确认加入红人资源库',
+                }
+              : {
+                  workflowStatus: 'dedupe_completed' as const,
+                  developmentStatus: 'exists' as const,
+                  feishuRecordId: success.recordId,
+                  duplicateReason: '已新建红人开发记录',
+                }),
             updatedAt: new Date().toISOString(),
           }
         : item;
@@ -528,7 +718,11 @@ export function CreatorProspectingPage() {
     if (failures.length) {
       toast.error(`已创建 ${successes.length} 个，失败 ${failures.length} 个。${failures[0]}`);
     } else {
-      toast.success(`已在飞书新建 ${successes.length} 条线索记录。`);
+      toast.success(
+        target === 'resource'
+          ? `已在红人资源库新增 ${successes.length} 条记录。`
+          : `已在红人开发情况表新增 ${successes.length} 条开发记录。`,
+      );
     }
   };
 
@@ -783,7 +977,8 @@ export function CreatorProspectingPage() {
             onPreferenceChange={setUserPreference}
             onResolve={handleResolve}
             onCheckDedupe={handleCheckDedupe}
-            onCreateRecords={openFeishuPreview}
+            onAddResources={openResourcePreview}
+            onCreateRecords={openDevelopmentPreview}
             onConfirmInvitation={handleConfirmInvitation}
             onToggleSelected={(id, checked) => setSelectedIds((current) => (
               checked ? Array.from(new Set([...current, id])) : current.filter((item) => item !== id)
@@ -795,22 +990,42 @@ export function CreatorProspectingPage() {
             ))}
             onConfirmSuspected={(id) => updateProspect(id, {
               dedupeStatus: 'unique',
+              resourceStatus: prospects.find((item) => item.id === id)?.resourceStatus === 'suspected' ? 'missing' : prospects.find((item) => item.id === id)?.resourceStatus,
+              developmentStatus: prospects.find((item) => item.id === id)?.developmentStatus === 'suspected' ? 'missing' : prospects.find((item) => item.id === id)?.developmentStatus,
+              resourceRecordId: prospects.find((item) => item.id === id)?.resourceStatus === 'suspected' ? undefined : prospects.find((item) => item.id === id)?.resourceRecordId,
               duplicateConfirmedUnique: true,
-              duplicateReason: '疑似重复已由人工确认可创建',
+              duplicateRecordId: undefined,
+              duplicateReason: '疑似重复已由人工确认，不关联现有记录',
             })}
+            onUseExistingResource={(id) => {
+              const prospect = prospects.find((item) => item.id === id);
+              if (!prospect?.resourceRecordId) return;
+              updateProspect(id, {
+                resourceStatus: 'exists',
+                duplicateReason: '已由用户确认关联红人资源库中的现有记录',
+              });
+              toast.success('已关联资源库现有记录，不会重复建档。');
+            }}
             onUseExisting={(id) => {
               const prospect = prospects.find((item) => item.id === id);
               if (!prospect?.duplicateRecordId) return;
               updateProspect(id, {
                 workflowStatus: 'dedupe_completed',
+                developmentStatus: 'exists',
                 feishuRecordId: prospect.duplicateRecordId,
-                duplicateReason: '已关联飞书现有记录，不会重复创建',
+                duplicateReason: '已关联红人开发情况表中的现有记录，不会重复创建',
               });
-              toast.success('已关联飞书现有记录，可以继续确认邀约方向。');
+              toast.success('已关联现有开发记录，可以继续确认邀约方向。');
             }}
             onRemove={(id) => {
               setProspects((current) => current.filter((item) => item.id !== id));
               setSelectedIds((current) => current.filter((item) => item !== id));
+              const supabase = getSupabaseBrowserClient();
+              if (supabase) {
+                void supabase.from('creator_prospects').delete().eq('id', id).then(({ error }) => {
+                  if (error) console.warn('云端红人线索删除失败:', error.message);
+                });
+              }
             }}
             onClearInput={() => setInput('')}
           />
@@ -845,9 +1060,14 @@ export function CreatorProspectingPage() {
       <Dialog open={previewItems.length > 0} onOpenChange={(open) => !open && setPreviewItems([])}>
         <DialogContent className="max-h-[82vh] max-w-3xl overflow-hidden">
           <DialogHeader>
-            <DialogTitle>确认新建飞书线索记录</DialogTitle>
+            <DialogTitle>
+              {previewItems[0]?.target === 'resource' ? '确认加入红人资源库' : '确认新建红人开发记录'}
+            </DialogTitle>
             <DialogDescription>
-              已通过查重的线索才会出现在这里。确认后将逐条创建，单条失败不会影响其他记录。
+              {previewItems[0]?.target === 'resource'
+                ? '只有资源库未收录的红人才会出现在这里。确认后写入“红人信息数据库”。'
+                : '只有开发记录表中不存在的红人才会出现在这里。确认后写入“红人开发情况表”。'}
+              单条失败不会影响其他记录。
             </DialogDescription>
           </DialogHeader>
           <div className="min-h-0 overflow-auto rounded-lg border bg-slate-50/80">
@@ -861,7 +1081,7 @@ export function CreatorProspectingPage() {
                   {Object.entries(item.fields).map(([key, value]) => (
                     <div key={key} className="rounded-md bg-white px-2 py-1.5">
                       <dt className="text-xs text-muted-foreground">{key}</dt>
-                      <dd className="mt-0.5 max-h-16 overflow-auto whitespace-pre-wrap">{String(value)}</dd>
+                      <dd className="mt-0.5 max-h-16 overflow-auto whitespace-pre-wrap">{formatPreviewValue(value)}</dd>
                     </div>
                   ))}
                 </dl>

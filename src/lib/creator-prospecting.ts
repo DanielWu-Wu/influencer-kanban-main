@@ -1,5 +1,5 @@
 export const CREATOR_PROSPECTS_STORAGE_KEY = 'influencer-board-creator-prospects';
-export const CREATOR_PROSPECTS_SCHEMA_VERSION = 2;
+export const CREATOR_PROSPECTS_SCHEMA_VERSION = 3;
 
 export type ProspectingTab = 'import' | 'invitation' | 'outreach';
 
@@ -22,6 +22,20 @@ export type ProspectDedupeStatus =
   | 'unique'
   | 'suspected'
   | 'duplicate'
+  | 'error';
+export type ProspectResourceStatus =
+  | 'unchecked'
+  | 'checking'
+  | 'exists'
+  | 'suspected'
+  | 'missing'
+  | 'error';
+export type ProspectDevelopmentStatus =
+  | 'unchecked'
+  | 'checking'
+  | 'exists'
+  | 'suspected'
+  | 'missing'
   | 'error';
 export type ProspectPriority = 'high' | 'medium' | 'low';
 
@@ -73,6 +87,9 @@ export type Prospect = {
   duplicateReason?: string;
   duplicateRecordId?: string;
   duplicateConfirmedUnique?: boolean;
+  resourceStatus: ProspectResourceStatus;
+  developmentStatus: ProspectDevelopmentStatus;
+  resourceRecordId?: string;
   feishuRecordId?: string;
   targetProduct?: string;
   cooperationType?: string;
@@ -116,6 +133,24 @@ export const DEDUPE_META: Record<ProspectDedupeStatus, { label: string; classNam
   suspected: { label: '疑似重复', className: 'text-amber-700' },
   duplicate: { label: '已存在', className: 'text-red-700' },
   error: { label: '查重失败', className: 'text-red-700' },
+};
+
+export const RESOURCE_STATUS_META: Record<ProspectResourceStatus, { label: string; className: string }> = {
+  unchecked: { label: '资源库未查', className: 'text-slate-500' },
+  checking: { label: '资源库查重中', className: 'text-blue-600' },
+  exists: { label: '资源库已收录', className: 'text-emerald-700' },
+  suspected: { label: '资源库疑似收录', className: 'text-amber-700' },
+  missing: { label: '资源库未收录', className: 'text-amber-700' },
+  error: { label: '资源库读取失败', className: 'text-red-700' },
+};
+
+export const DEVELOPMENT_STATUS_META: Record<ProspectDevelopmentStatus, { label: string; className: string }> = {
+  unchecked: { label: '开发记录未查', className: 'text-slate-500' },
+  checking: { label: '开发记录查重中', className: 'text-blue-600' },
+  exists: { label: '已有开发记录', className: 'text-emerald-700' },
+  suspected: { label: '疑似已有开发记录', className: 'text-amber-700' },
+  missing: { label: '可新建开发记录', className: 'text-blue-700' },
+  error: { label: '开发记录读取失败', className: 'text-red-700' },
 };
 
 export const COOPERATION_TYPES = [
@@ -218,6 +253,7 @@ export function migrateProspects(value: unknown): Prospect[] {
   if (!Array.isArray(value)) return [];
   return value.map((raw, index) => {
     const item = (raw || {}) as LegacyProspect;
+    const legacySingleTableRecord = (item.schemaVersion || 0) < 3 && Boolean(item.feishuRecordId);
     const legacyStatusMap: Record<string, ProspectWorkflowStatus> = {
       pending: 'recorded',
       resolved: 'resolved',
@@ -227,9 +263,12 @@ export function migrateProspects(value: unknown): Prospect[] {
       error: 'error',
     };
     const now = new Date().toISOString();
-    const workflowStatus = item.status === 'added_to_feishu' && !item.feishuRecordId
+    const migratedWorkflowStatus = item.status === 'added_to_feishu' && !item.feishuRecordId
       ? 'resolved'
       : item.workflowStatus || legacyStatusMap[item.status || ''] || 'recorded';
+    const workflowStatus = legacySingleTableRecord && migratedWorkflowStatus === 'dedupe_completed'
+      ? 'resolved'
+      : migratedWorkflowStatus;
     const publicEmail = String(item.publicEmail || '').trim();
     return {
       ...item,
@@ -245,6 +284,18 @@ export function migrateProspects(value: unknown): Prospect[] {
           ? 'unique'
           : 'unchecked'
         ),
+      resourceStatus: item.resourceStatus || (
+        legacySingleTableRecord ? 'exists'
+          : item.dedupeStatus === 'duplicate' ? 'exists'
+          : item.dedupeStatus === 'suspected' ? 'suspected'
+            : item.dedupeStatus === 'unique' ? 'missing'
+              : 'unchecked'
+      ),
+      developmentStatus: item.developmentStatus || (
+        legacySingleTableRecord ? 'unchecked' : item.feishuRecordId ? 'exists' : 'unchecked'
+      ),
+      resourceRecordId: item.resourceRecordId || (legacySingleTableRecord ? item.feishuRecordId : undefined),
+      feishuRecordId: legacySingleTableRecord ? undefined : item.feishuRecordId,
       publicEmail,
       competitorCollaboration: item.competitorCollaboration || 'unknown',
       recentAverageViews: item.recentAverageViews ?? calculateRecentAverageViews(item.recentVideos),
@@ -256,12 +307,18 @@ export function migrateProspects(value: unknown): Prospect[] {
 
 export function canCreateFeishuRecord(prospect: Prospect) {
   return prospect.workflowStatus === 'resolved'
-    && prospect.dedupeStatus === 'unique'
+    && prospect.resourceStatus !== 'unchecked'
+    && prospect.resourceStatus !== 'checking'
+    && prospect.resourceStatus !== 'error'
+    && prospect.resourceStatus !== 'suspected'
+    && prospect.developmentStatus === 'missing'
     && !prospect.feishuRecordId;
 }
 
 export function canConfirmInvitation(prospect: Prospect) {
-  return prospect.workflowStatus === 'dedupe_completed' && Boolean(prospect.feishuRecordId);
+  return prospect.workflowStatus === 'dedupe_completed'
+    && prospect.developmentStatus === 'exists'
+    && Boolean(prospect.feishuRecordId);
 }
 
 export function canGenerateOutreach(prospect: Prospect) {
