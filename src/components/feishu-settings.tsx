@@ -185,7 +185,7 @@ export function FeishuSettings({
           {connection.loading ? (
             <StatusBox icon={<LoaderCircle className="h-4 w-4 animate-spin" />} text="正在检查飞书连接状态..." />
           ) : !connection.configured ? (
-            <StatusBox tone="warning" text="网站功能已经准备好，等待在 Vercel 填写飞书 App ID、App Secret 和回调地址。" />
+            <StatusBox tone="warning" text="当前本地环境尚未配置飞书 App ID 和 App Secret。你可以先填写并暂存两个子表网址，配置凭证后再授权和检查字段。" />
           ) : connection.connected ? (
             <div className="flex items-center justify-between gap-4 rounded-lg border border-emerald-200/80 bg-emerald-50/80 p-3">
               <div className="min-w-0">
@@ -218,18 +218,22 @@ export function FeishuSettings({
           {message && <StatusBox tone="warning" text={message} />}
           {connection.error && <StatusBox tone="error" text={connection.error} />}
 
-          {connection.connected && !settingsLoading && (
+          {!settingsLoading && (
             <div className="grid gap-4 xl:grid-cols-2">
               <TableConfiguration
                 role="resource"
+                canInspect={connection.connected}
                 initialUrl={settings.feishuUrl || ''}
                 initialMapping={settings.feishuFieldMapping || {}}
+                onSaveUrl={(url) => updateSettings({ feishuUrl: url })}
                 onSave={(url, mapping) => updateSettings({ feishuUrl: url, feishuFieldMapping: mapping })}
               />
               <TableConfiguration
                 role="development"
+                canInspect={connection.connected}
                 initialUrl={settings.feishuProspectingUrl || ''}
                 initialMapping={settings.feishuProspectingFieldMapping || {}}
+                onSaveUrl={(url) => updateSettings({ feishuProspectingUrl: url })}
                 onSave={(url, mapping) => updateSettings({
                   feishuProspectingUrl: url,
                   feishuProspectingFieldMapping: mapping,
@@ -245,13 +249,17 @@ export function FeishuSettings({
 
 function TableConfiguration({
   role,
+  canInspect,
   initialUrl,
   initialMapping,
+  onSaveUrl,
   onSave,
 }: {
   role: TableRole;
+  canInspect: boolean;
   initialUrl: string;
   initialMapping: FeishuFieldMapping;
+  onSaveUrl: (url: string) => void;
   onSave: (url: string, mapping: FeishuFieldMapping) => void;
 }) {
   const config = ROLE_CONFIG[role];
@@ -273,6 +281,10 @@ function TableConfiguration({
   const inspect = async () => {
     if (!url.trim()) {
       setMessage(`请先粘贴${config.title}的完整网址。`);
+      return;
+    }
+    if (!canInspect) {
+      setMessage('网址可以先保存；完成飞书应用配置和账号授权后，才能执行只读检查。');
       return;
     }
     try {
@@ -340,15 +352,28 @@ function TableConfiguration({
             setUrl(event.target.value);
             setSaved(false);
           }}
+          onBlur={() => {
+            const trimmed = url.trim();
+            if (trimmed) {
+              onSaveUrl(trimmed);
+              setMessage('网址已暂存。完成飞书授权后再执行只读检查。');
+            }
+          }}
           placeholder={config.placeholder}
           className="bg-white/80"
         />
         <p className="text-xs text-muted-foreground">请从目标子表浏览器地址栏复制，网址中应包含 `table=tbl...`。</p>
       </div>
 
-      <Button type="button" variant="outline" className="h-10 w-full gap-2 bg-white/70" onClick={inspect} disabled={inspecting}>
+      <Button
+        type="button"
+        variant="outline"
+        className="h-10 w-full gap-2 bg-white/70"
+        onClick={inspect}
+        disabled={inspecting || !canInspect}
+      >
         {inspecting ? <LoaderCircle className="h-4 w-4 animate-spin" /> : <RefreshCw className="h-4 w-4" />}
-        只读检查子表
+        {canInspect ? '只读检查子表' : '完成飞书授权后检查'}
       </Button>
 
       {message && (

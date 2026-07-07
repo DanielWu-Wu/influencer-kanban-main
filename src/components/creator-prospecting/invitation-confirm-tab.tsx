@@ -3,11 +3,18 @@
 import { useEffect, useMemo, useState } from 'react';
 import {
   ArrowLeft,
+  Check,
   CheckCircle2,
+  CircleAlert,
+  CircleCheck,
+  CircleX,
   Clock3,
+  ChevronsUpDown,
+  Eye,
   ExternalLink,
   Loader2,
   Mail,
+  RefreshCw,
   Search,
   SkipForward,
   Sparkles,
@@ -15,9 +22,28 @@ import {
 } from 'lucide-react';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
+import {
+  Command,
+  CommandEmpty,
+  CommandGroup,
+  CommandInput,
+  CommandItem,
+  CommandList,
+} from '@/components/ui/command';
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogHeader,
+  DialogTitle,
+  DialogTrigger,
+} from '@/components/ui/dialog';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
+import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover';
+import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { Textarea } from '@/components/ui/textarea';
+import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip';
 import {
   COOPERATION_TYPES,
   countryLabel,
@@ -26,10 +52,21 @@ import {
   type ProspectPriority,
   WORKFLOW_META,
 } from '@/lib/creator-prospecting';
+import type { OutreachAiContext } from '@/lib/outreach-context';
+import {
+  OUTREACH_LANGUAGE_OPTIONS,
+  outreachLanguageLabel,
+} from '@/lib/outreach-languages';
+import { cn } from '@/lib/utils';
 
 type Props = {
   prospects: Prospect[];
   productOptions: string[];
+  outreachPrompt: string;
+  getOutreachContext: (prospect: Prospect) => OutreachAiContext;
+  translatingVideoTitleIds: string[];
+  inferringContactNameIds: string[];
+  inferringOutreachLanguageIds: string[];
   checkingHistoryId: string | null;
   onPatch: (id: string, patch: Partial<Prospect>) => void;
   onSave: (prospect: Prospect) => void;
@@ -37,6 +74,8 @@ type Props = {
   onBack: (prospect: Prospect) => void;
   onSkip: (prospect: Prospect) => void;
   onCheckHistory: (prospect: Prospect) => void;
+  onInferContactName: (prospect: Prospect, force?: boolean) => Promise<void>;
+  onInferOutreachLanguage: (prospect: Prospect, force?: boolean) => Promise<void>;
 };
 
 function yesNoUnknown(value?: boolean) {
@@ -45,9 +84,201 @@ function yesNoUnknown(value?: boolean) {
   return '待确认';
 }
 
+function formatVideoEngagementRate(video: NonNullable<Prospect['recentVideos']>[number]) {
+  if (
+    typeof video.viewCount !== 'number'
+    || video.viewCount <= 0
+    || typeof video.likeCount !== 'number'
+    || typeof video.commentCount !== 'number'
+  ) {
+    return '-';
+  }
+  return `${(((video.likeCount + video.commentCount) / video.viewCount) * 100).toFixed(2)}%`;
+}
+
+function ConfidenceIcon({ confidence, label }: { confidence: number; label: string }) {
+  const Icon = confidence >= 80 ? CircleCheck : confidence >= 60 ? CircleAlert : CircleX;
+  const className = confidence >= 80
+    ? 'text-emerald-600'
+    : confidence >= 60
+      ? 'text-amber-600'
+      : 'text-red-600';
+  return (
+    <Tooltip>
+      <TooltipTrigger asChild>
+        <button
+          type="button"
+          className={`inline-flex h-8 w-8 items-center justify-center rounded-md focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring ${className}`}
+          aria-label={`${label} ${confidence}%`}
+        >
+          <Icon className="h-4 w-4" />
+        </button>
+      </TooltipTrigger>
+      <TooltipContent side="top" sideOffset={6}>
+        {label} {confidence}%
+      </TooltipContent>
+    </Tooltip>
+  );
+}
+
+function LanguageCombobox({
+  id,
+  value,
+  disabled,
+  onValueChange,
+}: {
+  id: string;
+  value?: string;
+  disabled?: boolean;
+  onValueChange: (value: string) => void;
+}) {
+  const [open, setOpen] = useState(false);
+  return (
+    <Popover open={open} onOpenChange={setOpen}>
+      <PopoverTrigger asChild>
+        <Button
+          id={id}
+          type="button"
+          variant="outline"
+          role="combobox"
+          aria-expanded={open}
+          disabled={disabled}
+          className="h-10 min-w-0 flex-1 justify-between bg-white px-3 font-normal"
+        >
+          <span className={value ? '' : 'text-muted-foreground'}>
+            {value ? outreachLanguageLabel(value) : '请选择开发信语言'}
+          </span>
+          <ChevronsUpDown className="ml-2 h-4 w-4 shrink-0 opacity-50" />
+        </Button>
+      </PopoverTrigger>
+      <PopoverContent
+        align="start"
+        className="w-[var(--radix-popover-trigger-width)] p-0"
+      >
+        <Command>
+          <CommandInput placeholder="输入中文语言名称搜索" />
+          <CommandList>
+            <CommandEmpty>没有匹配的语言</CommandEmpty>
+            <CommandGroup>
+              {OUTREACH_LANGUAGE_OPTIONS.map((option) => (
+                <CommandItem
+                  key={option.code}
+                  value={`${option.label} ${option.code}`}
+                  onSelect={() => {
+                    onValueChange(option.code);
+                    setOpen(false);
+                  }}
+                >
+                  <Check
+                    className={cn(
+                      'h-4 w-4',
+                      value === option.code ? 'opacity-100' : 'opacity-0',
+                    )}
+                  />
+                  {option.label}
+                  <span className="ml-auto text-xs text-muted-foreground">{option.code}</span>
+                </CommandItem>
+              ))}
+            </CommandGroup>
+          </CommandList>
+        </Command>
+      </PopoverContent>
+    </Popover>
+  );
+}
+
+function OutreachContextPreview({ context }: { context: OutreachAiContext }) {
+  const product = context.products[0];
+  return (
+    <div className="space-y-5 text-sm">
+      <dl className="grid gap-3 sm:grid-cols-2">
+        {[
+          ['频道', context.channel.title || '未获取'],
+          ['联系人姓名', context.channel.contactName || '未填写，将使用频道或团队称呼'],
+          ['开发信语言', outreachLanguageLabel(context.preferredLanguage)],
+          ['目标产品', context.targetProduct || '未选择'],
+          ['合作形式', context.cooperationType || '未选择'],
+          ['优先级', context.priority === 'high' ? '高' : context.priority === 'low' ? '低' : '中'],
+        ].map(([label, value]) => (
+          <div key={label}>
+            <dt className="text-xs font-medium text-muted-foreground">{label}</dt>
+            <dd className="mt-1 font-medium">{value}</dd>
+          </div>
+        ))}
+      </dl>
+
+      <div>
+        <p className="text-xs font-medium text-muted-foreground">频道简介</p>
+        <p className="mt-1 whitespace-pre-wrap rounded-md bg-white p-3 leading-6">
+          {context.channel.description || '暂无简介'}
+        </p>
+      </div>
+
+      <div>
+        <p className="text-xs font-medium text-muted-foreground">最近 8 条长视频</p>
+        <ul className="mt-2 space-y-2">
+          {context.channel.recentVideos.map((video, index) => (
+            <li key={video.videoId || video.url || `${video.title}-${index}`} className="rounded-md bg-white p-3">
+              <p className="font-medium">{index + 1}. {video.translatedTitle || video.title}</p>
+              {video.translatedTitle && (
+                <p className="mt-1 text-xs text-muted-foreground">原标题：{video.title}</p>
+              )}
+              <p className="mt-1 text-xs text-muted-foreground">
+                播放 {formatCompactNumber(video.viewCount)}
+                {' · '}赞 {formatCompactNumber(video.likeCount)}
+                {' · '}评 {formatCompactNumber(video.commentCount)}
+                {' · '}ER {formatVideoEngagementRate(video)}
+              </p>
+            </li>
+          ))}
+          {!context.channel.recentVideos.length && (
+            <li className="rounded-md bg-white p-3 text-muted-foreground">暂无符合条件的长视频。</li>
+          )}
+        </ul>
+      </div>
+
+      <div className="grid gap-3 sm:grid-cols-2">
+        <div>
+          <p className="text-xs font-medium text-muted-foreground">合作想法</p>
+          <p className="mt-1 whitespace-pre-wrap rounded-md bg-white p-3 leading-6">
+            {context.cooperationIdea || '未填写'}
+          </p>
+        </div>
+        <div>
+          <p className="text-xs font-medium text-muted-foreground">本次开发备注</p>
+          <p className="mt-1 whitespace-pre-wrap rounded-md bg-white p-3 leading-6">
+            {context.userPreference || '无'}
+          </p>
+        </div>
+      </div>
+
+      <div>
+        <p className="text-xs font-medium text-muted-foreground">选中产品资料</p>
+        {product ? (
+          <div className="mt-1 space-y-2 rounded-md bg-white p-3 leading-6">
+            <p className="font-medium">{[product.model, product.name].filter(Boolean).join(' · ')}</p>
+            <p className="whitespace-pre-wrap text-muted-foreground">
+              {product.sellingPoints || '产品数据库暂无卖点资料。'}
+            </p>
+          </div>
+        ) : (
+          <p className="mt-1 rounded-md bg-white p-3 text-muted-foreground">
+            当前选项尚未关联产品数据库资料，AI 只会收到产品名称。
+          </p>
+        )}
+      </div>
+    </div>
+  );
+}
+
 export function InvitationConfirmTab({
   prospects,
   productOptions,
+  outreachPrompt,
+  getOutreachContext,
+  translatingVideoTitleIds,
+  inferringContactNameIds,
+  inferringOutreachLanguageIds,
   checkingHistoryId,
   onPatch,
   onSave,
@@ -55,6 +286,8 @@ export function InvitationConfirmTab({
   onBack,
   onSkip,
   onCheckHistory,
+  onInferContactName,
+  onInferOutreachLanguage,
 }: Props) {
   const [query, setQuery] = useState('');
   const [selectedId, setSelectedId] = useState<string>('');
@@ -73,6 +306,23 @@ export function InvitationConfirmTab({
   useEffect(() => {
     if (selectedId && !prospects.some((item) => item.id === selectedId)) setSelectedId('');
   }, [prospects, selectedId]);
+
+  useEffect(() => {
+    if (
+      selected
+      && selected.contactNameSource !== 'manual'
+      && !selected.contactNameInferenceStatus
+    ) {
+      void onInferContactName(selected);
+    }
+    if (
+      selected
+      && selected.outreachLanguageSource !== 'manual'
+      && !selected.outreachLanguageInferenceStatus
+    ) {
+      void onInferOutreachLanguage(selected);
+    }
+  }, [onInferContactName, onInferOutreachLanguage, selected]);
 
   if (!prospects.length) {
     return (
@@ -164,7 +414,15 @@ export function InvitationConfirmTab({
           <div className="grid gap-4 py-4 xl:grid-cols-[minmax(0,1fr)_360px]">
             <div className="space-y-4">
               <div>
-                <p className="text-sm font-semibold">最近视频</p>
+                <div className="flex items-center gap-2">
+                  <p className="text-sm font-semibold">最近视频</p>
+                  {translatingVideoTitleIds.includes(selected.id) && (
+                    <span className="inline-flex items-center gap-1 text-xs text-muted-foreground">
+                      <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                      标题翻译中
+                    </span>
+                  )}
+                </div>
                 <div className="mt-2 grid gap-2 sm:grid-cols-2">
                   {(selected.recentVideos || []).slice(0, 8).map((video) => (
                     <a
@@ -181,8 +439,15 @@ export function InvitationConfirmTab({
                         ) : null}
                       </div>
                       <div className="min-w-0">
-                        <p className="line-clamp-2 text-xs font-medium">{video.title}</p>
-                        <p className="mt-1 text-xs text-muted-foreground">播放 {formatCompactNumber(video.viewCount)}</p>
+                        <p className="line-clamp-2 text-xs font-medium" title={video.title}>
+                          {video.translatedTitle || video.title}
+                        </p>
+                        <p className="mt-1 flex flex-wrap gap-x-2 gap-y-0.5 text-xs text-muted-foreground">
+                          <span>播放 {formatCompactNumber(video.viewCount)}</span>
+                          <span>赞 {formatCompactNumber(video.likeCount)}</span>
+                          <span>评 {formatCompactNumber(video.commentCount)}</span>
+                          <span>ER {formatVideoEngagementRate(video)}</span>
+                        </p>
                       </div>
                     </a>
                   ))}
@@ -238,6 +503,9 @@ export function InvitationConfirmTab({
                   className="mt-1.5 h-10 w-full rounded-md border bg-white px-3 text-sm"
                 >
                   <option value="">请选择目标产品</option>
+                  {selected.targetProduct && !productOptions.includes(selected.targetProduct) && (
+                    <option value={selected.targetProduct}>{selected.targetProduct}</option>
+                  )}
                   {productOptions.map((option) => <option key={option} value={option}>{option}</option>)}
                 </select>
               </div>
@@ -252,6 +520,106 @@ export function InvitationConfirmTab({
                   <option value="">请选择合作形式</option>
                   {COOPERATION_TYPES.map((option) => <option key={option} value={option}>{option}</option>)}
                 </select>
+              </div>
+              <div>
+                <div className="flex items-center justify-between gap-2">
+                  <Label htmlFor={`contact-name-${selected.id}`}>联系人姓名</Label>
+                  {selected.contactNameInferenceStatus === 'error' && (
+                    <Button
+                      type="button"
+                      variant="ghost"
+                      size="sm"
+                      className="h-7 px-2 text-xs"
+                      onClick={() => void onInferContactName(selected, true)}
+                      disabled={inferringContactNameIds.includes(selected.id)}
+                    >
+                      <RefreshCw className="mr-1 h-3.5 w-3.5" />
+                      重新识别
+                    </Button>
+                  )}
+                </div>
+                <div className="mt-1.5 flex items-center gap-1.5">
+                  <Input
+                    id={`contact-name-${selected.id}`}
+                    value={selected.contactName || ''}
+                    onChange={(event) => onPatch(selected.id, {
+                      contactName: event.target.value,
+                      contactNameConfidence: undefined,
+                      contactNameSource: 'manual',
+                      contactNameInferenceStatus: event.target.value.trim() ? 'found' : 'not_found',
+                    })}
+                    placeholder={
+                      inferringContactNameIds.includes(selected.id)
+                        ? 'AI 正在从频道资料中判断...'
+                        : '未发现姓名时请人工填写'
+                    }
+                    className="bg-white"
+                  />
+                  {inferringContactNameIds.includes(selected.id) ? (
+                    <span
+                      className="inline-flex h-8 w-8 shrink-0 items-center justify-center text-muted-foreground"
+                      aria-label="正在识别联系人姓名"
+                    >
+                      <Loader2 className="h-4 w-4 animate-spin" />
+                    </span>
+                  ) : selected.contactNameSource === 'ai'
+                    && typeof selected.contactNameConfidence === 'number' ? (
+                      <ConfidenceIcon
+                        confidence={selected.contactNameConfidence}
+                        label="AI 姓名置信度"
+                      />
+                    ) : null}
+                </div>
+              </div>
+              <div>
+                <div className="flex items-center justify-between gap-2">
+                  <Label htmlFor={`outreach-language-${selected.id}`}>开发信语言 *</Label>
+                  {selected.outreachLanguageInferenceStatus === 'error' && (
+                    <Button
+                      type="button"
+                      variant="ghost"
+                      size="sm"
+                      className="h-7 px-2 text-xs"
+                      onClick={() => void onInferOutreachLanguage(selected, true)}
+                      disabled={inferringOutreachLanguageIds.includes(selected.id)}
+                    >
+                      <RefreshCw className="mr-1 h-3.5 w-3.5" />
+                      重新识别
+                    </Button>
+                  )}
+                </div>
+                <div className="mt-1.5 flex items-center gap-1.5">
+                  <LanguageCombobox
+                    id={`outreach-language-${selected.id}`}
+                    value={selected.outreachLanguage}
+                    disabled={inferringOutreachLanguageIds.includes(selected.id)}
+                    onValueChange={(value) => onPatch(selected.id, {
+                      outreachLanguage: value,
+                      outreachLanguageConfidence: undefined,
+                      outreachLanguageSource: 'manual',
+                      outreachLanguageInferenceStatus: 'found',
+                    })}
+                  />
+                  {inferringOutreachLanguageIds.includes(selected.id) ? (
+                    <span
+                      className="inline-flex h-8 w-8 shrink-0 items-center justify-center text-muted-foreground"
+                      aria-label="正在识别开发信语言"
+                    >
+                      <Loader2 className="h-4 w-4 animate-spin" />
+                    </span>
+                  ) : selected.outreachLanguageSource === 'ai'
+                    && typeof selected.outreachLanguageConfidence === 'number' ? (
+                      <ConfidenceIcon
+                        confidence={selected.outreachLanguageConfidence}
+                        label="AI 语言置信度"
+                      />
+                    ) : null}
+                </div>
+                {selected.outreachLanguageInferenceStatus === 'not_found' && (
+                  <p className="mt-1 text-xs text-amber-700">
+                    AI 未能确认语言，请手动搜索并选择后再生成开发信。
+                  </p>
+                )}
               </div>
               <div>
                 <Label htmlFor={`idea-${selected.id}`}>合作想法 *</Label>
@@ -301,11 +669,52 @@ export function InvitationConfirmTab({
                 </Button>
                 <Button
                   onClick={() => onConfirmOutreach(selected)}
-                  disabled={!selected.targetProduct?.trim() || !selected.cooperationType?.trim() || !selected.cooperationIdea?.trim()}
+                  disabled={
+                    !selected.targetProduct?.trim()
+                    || !selected.cooperationType?.trim()
+                    || !selected.outreachLanguage?.trim()
+                    || !selected.cooperationIdea?.trim()
+                  }
                 >
                   <Sparkles className="mr-1 h-4 w-4" />
                   确认生成开发信
                 </Button>
+                <Dialog>
+                  <DialogTrigger asChild>
+                    <Button variant="outline">
+                      <Eye className="mr-1 h-4 w-4" />
+                      查看邮件提示词
+                    </Button>
+                  </DialogTrigger>
+                  <DialogContent className="max-h-[86vh] sm:max-w-4xl">
+                    <DialogHeader>
+                      <DialogTitle>开发信 AI 输入预览</DialogTitle>
+                      <DialogDescription>
+                        核对邮件生成规则和本次实际提交给 AI 的红人资料。
+                      </DialogDescription>
+                    </DialogHeader>
+                    <Tabs defaultValue="rules" className="min-h-0">
+                      <TabsList className="grid w-full grid-cols-2">
+                        <TabsTrigger value="rules">邮件生成规则</TabsTrigger>
+                        <TabsTrigger value="context">本次红人资料</TabsTrigger>
+                      </TabsList>
+                      <TabsContent
+                        value="rules"
+                        className="max-h-[62vh] overflow-y-auto rounded-md border bg-muted/35 p-4"
+                      >
+                        <pre className="whitespace-pre-wrap break-words font-sans text-sm leading-6 text-foreground">
+                          {outreachPrompt}
+                        </pre>
+                      </TabsContent>
+                      <TabsContent
+                        value="context"
+                        className="max-h-[62vh] overflow-y-auto rounded-md border bg-muted/20 p-4"
+                      >
+                        <OutreachContextPreview context={getOutreachContext(selected)} />
+                      </TabsContent>
+                    </Tabs>
+                  </DialogContent>
+                </Dialog>
                 <Button variant="ghost" onClick={() => onBack(selected)}>
                   <ArrowLeft className="mr-1 h-4 w-4" />
                   返回录入

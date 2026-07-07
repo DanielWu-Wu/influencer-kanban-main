@@ -36,6 +36,7 @@ type OutreachVideo = {
 };
 
 type OutreachChannel = {
+  contactName?: string;
   title?: string;
   description?: string;
   country?: string;
@@ -177,6 +178,108 @@ export async function POST(request: NextRequest) {
       ? body.threadMessages as ThreadMessage[]
       : [];
 
+    if (action === 'inferContactName') {
+      const channel = (body.channel || {}) as Pick<OutreachChannel, 'title' | 'description'>;
+      if (!channel.title && !channel.description) {
+        return NextResponse.json({
+          success: true,
+          data: { contactName: '', confidence: 0, found: false },
+        });
+      }
+
+      const result = parseJson(await invokeOpenAICompatibleApi(
+        [
+          {
+            role: 'system',
+            content: `你是一位谨慎的联系人姓名提取助手。
+只能根据 YouTube 频道名称和频道简介判断是否出现了可用于商务邮件称呼的真实人物姓名。
+不要把频道名、品牌名、公司名、用户名、昵称、团队名称或主题关键词误判为人名。
+如果没有明确人物姓名线索，必须返回 found=false，contactName 为空字符串，不能猜测。
+confidence 使用 0 到 100 的整数，表示该文本明确指向这个人物姓名的可信程度。
+只返回严格 JSON：
+{"contactName":"姓名或空字符串","confidence":0,"found":false}`,
+          },
+          {
+            role: 'user',
+            content: JSON.stringify({
+              channelTitle: channel.title || '',
+              channelDescription: channel.description || '',
+            }, null, 2),
+          },
+        ],
+        getModelOptions(body, 0.1),
+      )) as { contactName?: unknown; confidence?: unknown; found?: unknown };
+      const contactName = String(result.contactName || '').trim();
+      const found = result.found === true && Boolean(contactName);
+      const confidence = found
+        ? Math.min(100, Math.max(0, Math.round(Number(result.confidence) || 0)))
+        : 0;
+      return NextResponse.json({
+        success: true,
+        data: {
+          contactName: found ? contactName : '',
+          confidence,
+          found,
+        },
+      });
+    }
+
+    if (action === 'inferOutreachLanguage') {
+      const channel = (body.channel || {}) as Pick<
+        OutreachChannel,
+        'title' | 'description' | 'recentVideos'
+      >;
+      const recentTitles = (channel.recentVideos || [])
+        .slice(0, 8)
+        .map((video) => video.title || '')
+        .filter(Boolean);
+      if (!channel.description && !recentTitles.length) {
+        return NextResponse.json({
+          success: true,
+          data: { languageCode: '', confidence: 0, found: false },
+        });
+      }
+
+      const result = parseJson(await invokeOpenAICompatibleApi(
+        [
+          {
+            role: 'system',
+            content: `你是一位谨慎的语言识别助手。
+请判断品牌首次联系 YouTube 创作者时最适合使用的语言。
+优先根据频道简介的主要语言判断；仅当简介为空、过短或多语言混杂而无法判断时，才参考最近视频的原标题。
+不要根据国家猜测语言。
+languageCode 必须是小写 ISO 639-1 两字母代码，例如 pl、en、es、nl、pt。
+如果证据不足，必须返回 found=false，languageCode 为空字符串。
+confidence 使用 0 到 100 的整数。
+只返回严格 JSON：
+{"languageCode":"语言代码或空字符串","confidence":0,"found":false}`,
+          },
+          {
+            role: 'user',
+            content: JSON.stringify({
+              channelTitle: channel.title || '',
+              channelDescription: channel.description || '',
+              recentVideoTitles: recentTitles,
+            }, null, 2),
+          },
+        ],
+        getModelOptions(body, 0.1),
+      )) as { languageCode?: unknown; confidence?: unknown; found?: unknown };
+      const languageCode = String(result.languageCode || '').trim().toLowerCase().slice(0, 2);
+      const found = result.found === true && /^[a-z]{2}$/.test(languageCode);
+      const confidence = found
+        ? Math.min(100, Math.max(0, Math.round(Number(result.confidence) || 0)))
+        : 0;
+      return NextResponse.json({
+        success: true,
+        data: {
+          languageCode: found ? languageCode : '',
+          confidence,
+          found,
+        },
+      });
+    }
+
     if (action === 'outreach') {
       const channel = (body.channel || {}) as OutreachChannel;
       if (!channel.title && !channel.url) {
@@ -185,6 +288,10 @@ export async function POST(request: NextRequest) {
 
       const systemPrompt = withCustomInstructions(
         `${DEFAULT_OUTREACH_PROMPT}
+
+称呼规则：
+1. channel.contactName 有值时，只使用这个已确认姓名作为联系人称呼。
+2. channel.contactName 为空时，不得猜测人名；使用频道名或自然的团队称呼。
 
 只返回以下 JSON，不要添加其他文字：
 {

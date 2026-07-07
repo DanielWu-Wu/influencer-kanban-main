@@ -6,7 +6,9 @@ import {
   useContext,
   useEffect,
   useMemo,
+  useRef,
   useState,
+  type PointerEvent,
   type ReactNode,
 } from 'react';
 import { usePathname } from 'next/navigation';
@@ -84,11 +86,23 @@ type AgentChatMessage = {
   actions?: AgentAction[];
 };
 
+type FloatingPosition = {
+  x: number;
+  y: number;
+};
+
+type FloatingHiddenSide = 'left' | 'right' | 'top' | 'bottom' | null;
+
 const RecordAssistantContext = createContext<RecordAssistantContextValue | null>(null);
 
 const PENDING_STORAGE_KEY = 'record-assistant-pending-syncs';
 const LOG_STORAGE_KEY = 'record-assistant-logs';
+const FLOAT_STORAGE_KEY = 'record-assistant-floating-position';
 const AGENT_RECORD_LIMIT = 140;
+const FLOAT_BUTTON_SIZE = 56;
+const FLOAT_EDGE_GAP = 12;
+const FLOAT_EDGE_TRIGGER = 28;
+const FLOAT_HIDDEN_OFFSET = 34;
 
 const AGENT_EXAMPLES = [
   '看看目前西班牙合作中的红人进度，给我一个简短汇报',
@@ -110,6 +124,101 @@ function readStoredList<T>(key: string) {
 function writeStoredList<T>(key: string, value: T[]) {
   if (typeof window === 'undefined') return;
   window.localStorage.setItem(key, JSON.stringify(value));
+}
+
+function clampFloatingPosition(position: FloatingPosition, viewportWidth: number, viewportHeight: number) {
+  return {
+    x: Math.min(
+      Math.max(FLOAT_EDGE_GAP, position.x),
+      Math.max(FLOAT_EDGE_GAP, viewportWidth - FLOAT_BUTTON_SIZE - FLOAT_EDGE_GAP),
+    ),
+    y: Math.min(
+      Math.max(FLOAT_EDGE_GAP, position.y),
+      Math.max(FLOAT_EDGE_GAP, viewportHeight - FLOAT_BUTTON_SIZE - FLOAT_EDGE_GAP),
+    ),
+  };
+}
+
+function defaultFloatingPosition() {
+  if (typeof window === 'undefined') return { x: 0, y: 0 };
+  return {
+    x: window.innerWidth - FLOAT_BUTTON_SIZE - 20,
+    y: window.innerHeight - FLOAT_BUTTON_SIZE - 96,
+  };
+}
+
+function readFloatingPosition() {
+  if (typeof window === 'undefined') return defaultFloatingPosition();
+  try {
+    const raw = window.localStorage.getItem(FLOAT_STORAGE_KEY);
+    if (!raw) return defaultFloatingPosition();
+    const parsed = JSON.parse(raw) as Partial<FloatingPosition>;
+    if (typeof parsed.x !== 'number' || typeof parsed.y !== 'number') {
+      return defaultFloatingPosition();
+    }
+    return clampFloatingPosition(parsed as FloatingPosition, window.innerWidth, window.innerHeight);
+  } catch {
+    return defaultFloatingPosition();
+  }
+}
+
+function writeFloatingPosition(position: FloatingPosition) {
+  if (typeof window === 'undefined') return;
+  window.localStorage.setItem(FLOAT_STORAGE_KEY, JSON.stringify(position));
+}
+
+function snapFloatingPosition(position: FloatingPosition) {
+  if (typeof window === 'undefined') return position;
+  const maxX = window.innerWidth - FLOAT_BUTTON_SIZE - FLOAT_EDGE_GAP;
+  const maxY = window.innerHeight - FLOAT_BUTTON_SIZE - FLOAT_EDGE_GAP;
+  const clamped = clampFloatingPosition(position, window.innerWidth, window.innerHeight);
+
+  if (clamped.x <= FLOAT_EDGE_GAP + FLOAT_EDGE_TRIGGER) {
+    return { ...clamped, x: FLOAT_EDGE_GAP };
+  }
+  if (clamped.x >= maxX - FLOAT_EDGE_TRIGGER) {
+    return { ...clamped, x: maxX };
+  }
+  if (clamped.y <= FLOAT_EDGE_GAP + FLOAT_EDGE_TRIGGER) {
+    return { ...clamped, y: FLOAT_EDGE_GAP };
+  }
+  if (clamped.y >= maxY - FLOAT_EDGE_TRIGGER) {
+    return { ...clamped, y: maxY };
+  }
+
+  return clamped;
+}
+
+function getFloatingHiddenSide(position: FloatingPosition): FloatingHiddenSide {
+  if (typeof window === 'undefined') return null;
+  const distanceToLeft = position.x - FLOAT_EDGE_GAP;
+  const distanceToRight = window.innerWidth - FLOAT_EDGE_GAP - (position.x + FLOAT_BUTTON_SIZE);
+  const distanceToTop = position.y - FLOAT_EDGE_GAP;
+  const distanceToBottom = window.innerHeight - FLOAT_EDGE_GAP - (position.y + FLOAT_BUTTON_SIZE);
+
+  const distances: Array<[FloatingHiddenSide, number]> = [
+    ['left', distanceToLeft],
+    ['right', distanceToRight],
+    ['top', distanceToTop],
+    ['bottom', distanceToBottom],
+  ];
+  const [side, distance] = distances.sort((left, right) => left[1] - right[1])[0];
+  return distance <= 2 ? side : null;
+}
+
+function hiddenSideTransform(side: FloatingHiddenSide) {
+  switch (side) {
+    case 'left':
+      return `translateX(-${FLOAT_HIDDEN_OFFSET}px)`;
+    case 'right':
+      return `translateX(${FLOAT_HIDDEN_OFFSET}px)`;
+    case 'top':
+      return `translateY(-${FLOAT_HIDDEN_OFFSET}px)`;
+    case 'bottom':
+      return `translateY(${FLOAT_HIDDEN_OFFSET}px)`;
+    default:
+      return 'translate(0, 0)';
+  }
 }
 
 function stringifyFeishuValue(value: unknown): string {
@@ -435,6 +544,20 @@ export function RecordAssistantProvider({ children }: { children: ReactNode }) {
   const [agentLoading, setAgentLoading] = useState(false);
   const [agentError, setAgentError] = useState('');
   const [agentActionStatus, setAgentActionStatus] = useState<Record<string, 'running' | 'done' | 'failed'>>({});
+  const [floatingReady, setFloatingReady] = useState(false);
+  const [floatingPosition, setFloatingPosition] = useState<FloatingPosition>({ x: 0, y: 0 });
+  const [floatingHovered, setFloatingHovered] = useState(false);
+  const [floatingDragging, setFloatingDragging] = useState(false);
+  const floatingDragRef = useRef({
+    pointerId: 0,
+    offsetX: 0,
+    offsetY: 0,
+    moved: false,
+    startX: 0,
+    startY: 0,
+    currentX: 0,
+    currentY: 0,
+  });
 
   useEffect(() => {
     setDraftSettings(assistantSettings);
@@ -444,6 +567,23 @@ export function RecordAssistantProvider({ children }: { children: ReactNode }) {
     setPending(readStoredList<PendingRecordSync>(PENDING_STORAGE_KEY));
     setLogs(readStoredList<RecordAssistantLog>(LOG_STORAGE_KEY));
     setStorageReady(true);
+  }, []);
+
+  useEffect(() => {
+    const initialPosition = readFloatingPosition();
+    setFloatingPosition(initialPosition);
+    setFloatingReady(true);
+
+    const handleResize = () => {
+      setFloatingPosition((current) => {
+        const next = clampFloatingPosition(current, window.innerWidth, window.innerHeight);
+        writeFloatingPosition(next);
+        return next;
+      });
+    };
+
+    window.addEventListener('resize', handleResize);
+    return () => window.removeEventListener('resize', handleResize);
   }, []);
 
   useEffect(() => {
@@ -829,6 +969,76 @@ export function RecordAssistantProvider({ children }: { children: ReactNode }) {
   const contextValue = useMemo(() => ({ captureEvent, appendLog }), [appendLog, captureEvent]);
   const pendingCount = pending.length;
   const shouldRenderAssistant = pathname !== '/login';
+  const floatingHiddenSide = !open && !floatingHovered && !floatingDragging
+    ? getFloatingHiddenSide(floatingPosition)
+    : null;
+  const floatingTransform = hiddenSideTransform(floatingHiddenSide);
+
+  const handleFloatingPointerDown = (event: PointerEvent<HTMLButtonElement>) => {
+    if (!floatingReady) return;
+    const target = event.currentTarget;
+    target.setPointerCapture(event.pointerId);
+    floatingDragRef.current = {
+      pointerId: event.pointerId,
+      offsetX: event.clientX - floatingPosition.x,
+      offsetY: event.clientY - floatingPosition.y,
+      moved: false,
+      startX: event.clientX,
+      startY: event.clientY,
+      currentX: floatingPosition.x,
+      currentY: floatingPosition.y,
+    };
+    setFloatingDragging(true);
+  };
+
+  const handleFloatingPointerMove = (event: PointerEvent<HTMLButtonElement>) => {
+    if (!floatingDragging || floatingDragRef.current.pointerId !== event.pointerId) return;
+    const distance = Math.hypot(
+      event.clientX - floatingDragRef.current.startX,
+      event.clientY - floatingDragRef.current.startY,
+    );
+    if (distance > 4) {
+      floatingDragRef.current.moved = true;
+    }
+
+    const next = clampFloatingPosition(
+      {
+        x: event.clientX - floatingDragRef.current.offsetX,
+        y: event.clientY - floatingDragRef.current.offsetY,
+      },
+      window.innerWidth,
+      window.innerHeight,
+    );
+    floatingDragRef.current.currentX = next.x;
+    floatingDragRef.current.currentY = next.y;
+    setFloatingPosition(next);
+  };
+
+  const handleFloatingPointerUp = (event: PointerEvent<HTMLButtonElement>) => {
+    if (!floatingDragging || floatingDragRef.current.pointerId !== event.pointerId) return;
+    if (event.currentTarget.hasPointerCapture(event.pointerId)) {
+      event.currentTarget.releasePointerCapture(event.pointerId);
+    }
+    setFloatingDragging(false);
+
+    if (floatingDragRef.current.moved) {
+      const snapped = snapFloatingPosition({
+        x: floatingDragRef.current.currentX,
+        y: floatingDragRef.current.currentY,
+      });
+      setFloatingPosition(snapped);
+      writeFloatingPosition(snapped);
+      return;
+    }
+
+    setOpen(true);
+  };
+
+  const handleFloatingPointerCancel = (event: PointerEvent<HTMLButtonElement>) => {
+    if (floatingDragRef.current.pointerId === event.pointerId) {
+      setFloatingDragging(false);
+    }
+  };
 
   return (
     <RecordAssistantContext.Provider value={contextValue}>
@@ -837,13 +1047,32 @@ export function RecordAssistantProvider({ children }: { children: ReactNode }) {
         <>
           {!open && (
             <Button
-              className="fixed bottom-24 right-5 z-[90] h-12 rounded-lg px-4 shadow-apple-hover"
-              onClick={() => setOpen(true)}
+              type="button"
+              aria-label="打开 AI 助手"
+              title={floatingDragging ? '拖动 AI 助手' : 'AI 助手'}
+              className="fixed z-[90] grid h-14 w-14 touch-none place-items-center overflow-hidden rounded-full p-0 text-[0px] shadow-apple-hover transition-[transform,box-shadow,opacity] duration-200 hover:shadow-2xl active:cursor-grabbing [&_svg]:m-0"
+              style={{
+                left: floatingReady ? floatingPosition.x : undefined,
+                top: floatingReady ? floatingPosition.y : undefined,
+                right: floatingReady ? undefined : 20,
+                bottom: floatingReady ? undefined : 96,
+                transform: floatingTransform,
+                opacity: floatingReady ? 1 : 0,
+              }}
+              onMouseEnter={() => setFloatingHovered(true)}
+              onMouseLeave={() => setFloatingHovered(false)}
+              onPointerDown={handleFloatingPointerDown}
+              onPointerMove={handleFloatingPointerMove}
+              onPointerUp={handleFloatingPointerUp}
+              onPointerCancel={handleFloatingPointerCancel}
             >
-              <Sparkles className="mr-2 h-4 w-4" />
+              <Bot className="absolute left-1/2 top-1/2 h-6 w-6 -translate-x-1/2 -translate-y-1/2" />
               AI 助手
               {pendingCount > 0 && (
-                <Badge variant="secondary" className="ml-2 rounded-md bg-white text-primary">
+                <Badge
+                  variant="secondary"
+                  className="absolute -right-1 -top-1 h-5 min-w-5 rounded-full bg-white px-1 text-[11px] font-semibold text-primary shadow-sm"
+                >
                   {pendingCount}
                 </Badge>
               )}

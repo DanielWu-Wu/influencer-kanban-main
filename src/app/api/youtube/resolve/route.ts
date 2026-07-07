@@ -39,6 +39,11 @@ type YouTubeVideoItem = {
   };
   statistics?: {
     viewCount?: string;
+    likeCount?: string;
+    commentCount?: string;
+  };
+  contentDetails?: {
+    duration?: string;
   };
 };
 
@@ -98,6 +103,20 @@ function buildYouTubeUrl(path: string, params: Record<string, string>) {
 
 function bestThumbnail(thumbnails?: YouTubeThumbnails) {
   return thumbnails?.high?.url || thumbnails?.medium?.url || thumbnails?.default?.url || '';
+}
+
+function parseIsoDurationSeconds(value?: string) {
+  const match = String(value || '').match(
+    /^P(?:(\d+)D)?(?:T(?:(\d+)H)?(?:(\d+)M)?(?:(\d+(?:\.\d+)?)S)?)?$/,
+  );
+  if (!match) return null;
+  const [, days = '0', hours = '0', minutes = '0', seconds = '0'] = match;
+  return (
+    Number(days) * 86_400
+    + Number(hours) * 3_600
+    + Number(minutes) * 60
+    + Number(seconds)
+  );
 }
 
 function normalizeMaybeUrl(input: string) {
@@ -347,7 +366,7 @@ async function fetchRecentVideos(apiKey: string, channelId: string, maxVideos: n
     channelId,
     type: 'video',
     order: 'date',
-    maxResults: String(maxVideos),
+    maxResults: '50',
     key: apiKey,
   });
 
@@ -371,23 +390,43 @@ async function fetchRecentVideos(apiKey: string, channelId: string, maxVideos: n
   if (!videoIds.length) return videos;
 
   const statisticsUrl = buildYouTubeUrl('videos', {
-    part: 'statistics',
+    part: 'statistics,contentDetails',
     id: videoIds.join(','),
     key: apiKey,
   });
   const statisticsResponse = await fetch(statisticsUrl, { cache: 'no-store' });
   const statisticsData = await statisticsResponse.json() as YouTubeVideosResponse;
-  if (!statisticsResponse.ok || statisticsData.error) return videos;
-  const viewsById = new Map(
+  if (!statisticsResponse.ok || statisticsData.error) {
+    throw new Error(
+      statisticsData.error?.message
+      || `YouTube 视频时长和互动数据读取失败 (${statisticsResponse.status})`,
+    );
+  }
+  const statisticsById = new Map(
     (statisticsData.items || []).map((item) => [
       item.id || '',
-      Number(item.statistics?.viewCount || 0),
+      {
+        viewCount: Number(item.statistics?.viewCount || 0),
+        likeCount: item.statistics?.likeCount === undefined
+          ? null
+          : Number(item.statistics.likeCount || 0),
+        commentCount: item.statistics?.commentCount === undefined
+          ? null
+          : Number(item.statistics.commentCount || 0),
+        durationSeconds: parseIsoDurationSeconds(item.contentDetails?.duration),
+      },
     ]),
   );
-  return videos.map((item) => ({
-    ...item,
-    viewCount: viewsById.get(item.videoId) ?? null,
-  }));
+  return videos
+    .map((item) => ({
+      ...item,
+      viewCount: statisticsById.get(item.videoId)?.viewCount ?? null,
+      likeCount: statisticsById.get(item.videoId)?.likeCount ?? null,
+      commentCount: statisticsById.get(item.videoId)?.commentCount ?? null,
+      durationSeconds: statisticsById.get(item.videoId)?.durationSeconds ?? null,
+    }))
+    .filter((item) => typeof item.durationSeconds === 'number' && item.durationSeconds > 180)
+    .slice(0, maxVideos);
 }
 
 export async function POST(request: NextRequest) {

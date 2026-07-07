@@ -1,6 +1,6 @@
 'use client';
 
-import { useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   CheckCircle2,
   ClipboardCheck,
@@ -24,12 +24,14 @@ import {
   DialogHeader,
   DialogTitle,
 } from '@/components/ui/dialog';
-import { generateId, useGmailAuth, useProducts, useSettings } from '@/lib/data';
+import { generateId, useGmailAuth, useProducts, useSettings, type AppSettings } from '@/lib/data';
+import { DEFAULT_OUTREACH_PROMPT } from '@/lib/ai-prompts';
 import type { FeishuFieldKey, FeishuFieldMapping } from '@/lib/feishu-mapping';
 import { getSupabaseBrowserClient } from '@/lib/supabase/client';
 import {
   calculateRecentAverageViews,
   canCreateFeishuRecord,
+  countryLabel,
   CREATOR_PROSPECTS_SCHEMA_VERSION,
   CREATOR_PROSPECTS_STORAGE_KEY,
   extractYouTubeInputs,
@@ -43,7 +45,10 @@ import {
   type RecentVideo,
   WORKFLOW_META,
 } from '@/lib/creator-prospecting';
-import type { Product } from '@/lib/types';
+import {
+  buildOutreachAiContext,
+  type OutreachAiContext,
+} from '@/lib/outreach-context';
 
 type YouTubeResolveChannel = {
   inputUrl?: string;
@@ -120,6 +125,15 @@ function summarizeVideos(videos?: RecentVideo[]) {
     .join('\n');
 }
 
+function buildFeishuUrlValue(prospect: Prospect) {
+  const link = firstValue(prospect.url, prospect.sourceUrl, prospect.inputUrl);
+  if (!link) return undefined;
+  return {
+    text: prospect.title || link,
+    link,
+  };
+}
+
 function buildResourceFields(prospect: Prospect, mapping: FeishuFieldMapping) {
   const fields: Record<string, unknown> = {};
   const notes = [
@@ -130,9 +144,9 @@ function buildResourceFields(prospect: Prospect, mapping: FeishuFieldMapping) {
 
   putMappedField(fields, mapping, 'channelName', prospect.title);
   putMappedField(fields, mapping, 'platform', 'YouTube');
-  putMappedField(fields, mapping, 'region', prospect.country || '');
+  putMappedField(fields, mapping, 'region', prospect.country ? countryLabel(prospect.country) : '');
   putMappedField(fields, mapping, 'followers', prospect.subscriberCount);
-  putMappedField(fields, mapping, 'channelUrl', firstValue(prospect.url, prospect.sourceUrl, prospect.inputUrl));
+  putMappedField(fields, mapping, 'channelUrl', buildFeishuUrlValue(prospect));
   putMappedField(fields, mapping, 'channelId', prospect.channelId);
   putMappedField(fields, mapping, 'language', prospect.language);
   putMappedField(fields, mapping, 'recentAverageViews', prospect.recentAverageViews);
@@ -154,8 +168,8 @@ function buildDevelopmentFields(prospect: Prospect, mapping: FeishuFieldMapping)
   ].filter(Boolean).join('\n');
 
   putMappedField(fields, mapping, 'channelName', prospect.title);
-  putMappedField(fields, mapping, 'region', prospect.country || '');
-  putMappedField(fields, mapping, 'channelUrl', firstValue(prospect.url, prospect.sourceUrl, prospect.inputUrl));
+  putMappedField(fields, mapping, 'region', prospect.country ? countryLabel(prospect.country) : '');
+  putMappedField(fields, mapping, 'channelUrl', buildFeishuUrlValue(prospect));
   putMappedField(fields, mapping, 'email', prospect.publicEmail);
   const developmentDate = new Date(prospect.createdAt);
   developmentDate.setHours(0, 0, 0, 0);
@@ -182,22 +196,6 @@ function buildDevelopmentSyncFields(prospect: Prospect, mapping: FeishuFieldMapp
   return fields;
 }
 
-function productsForAi(products: Product[], targetProduct?: string) {
-  return products
-    .filter((product) => product.status === 'active')
-    .sort((a, b) => Number(b.name === targetProduct || b.model === targetProduct) - Number(a.name === targetProduct || a.model === targetProduct))
-    .slice(0, 6)
-    .map((product) => ({
-      name: product.name,
-      model: product.model,
-      productUrl: product.productUrl,
-      sellingPoints: product.sellingPoints,
-      technicalSpecifications: product.technicalSpecifications,
-      imageAndResourceLinks: product.imageAndResourceLinks,
-      marketProfiles: product.marketProfiles,
-    }));
-}
-
 function flattenFeishuValue(value: unknown): string {
   if (value === null || value === undefined) return '';
   if (typeof value === 'string' || typeof value === 'number') return String(value);
@@ -219,9 +217,93 @@ function extractRecordId(result: unknown) {
   return data?.record?.record_id || data?.record?.id || '';
 }
 
+function parseTranslatedTitles(value: string, expectedLength: number) {
+  const cleaned = value.trim().replace(/^```(?:json)?\s*/i, '').replace(/\s*```$/i, '');
+  const start = cleaned.indexOf('[');
+  const end = cleaned.lastIndexOf(']');
+  if (start < 0 || end <= start) return [];
+  try {
+    const parsed = JSON.parse(cleaned.slice(start, end + 1));
+    if (!Array.isArray(parsed) || parsed.length !== expectedLength) return [];
+    return parsed.map((item) => String(item || '').trim());
+  } catch {
+    return [];
+  }
+}
+
+async function translateRecentVideoTitles(
+  videos: RecentVideo[],
+  language: string | undefined,
+  settings: Pick<
+    AppSettings,
+    'translatePrompt' | 'modelProvider' | 'customApiUrl' | 'customModelName'
+  >,
+) {
+  const titles = videos.map((video) => video.title.trim());
+  if (!titles.length) return videos;
+  const response = await fetch('/api/translate', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      text: JSON.stringify(titles),
+      sourceLang: language || 'auto',
+      customPrompt: [
+        '你是 YouTube 视频标题翻译助手。',
+        '请把输入 JSON 数组中的每个标题翻译成自然、准确、简洁的中文。',
+        '保留品牌名、产品型号、人名、数字和专有名词。',
+        '只返回严格 JSON 字符串数组，顺序和数量必须与输入完全一致，不要 Markdown，不要解释。',
+        settings.translatePrompt ? `翻译风格补充要求：${settings.translatePrompt}` : '',
+      ].filter(Boolean).join('\n'),
+      modelProvider: settings.modelProvider || 'builtin',
+      customApiUrl: settings.customApiUrl || '',
+      customModelName: settings.customModelName || '',
+    }),
+  });
+  const result = await response.json();
+  if (!response.ok || !result.success) {
+    throw new Error(getErrorMessage(result, '最近视频标题翻译失败。'));
+  }
+  const translatedTitles = parseTranslatedTitles(
+    String(result.data?.translatedText || ''),
+    titles.length,
+  );
+  if (!translatedTitles.length) throw new Error('最近视频标题翻译格式不正确。');
+  return videos.map((video, index) => ({
+    ...video,
+    translatedTitle: translatedTitles[index] || video.title,
+  }));
+}
+
+async function refreshRecentVideos(
+  prospect: Prospect,
+  settings: Pick<AppSettings, 'youtubeDefaultRegion' | 'youtubeDefaultLanguage'>,
+) {
+  const response = await fetch('/api/youtube/resolve', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      links: [firstValue(prospect.url, prospect.sourceUrl, prospect.inputUrl)],
+      regionCode: settings.youtubeDefaultRegion || '',
+      relevanceLanguage: settings.youtubeDefaultLanguage || '',
+      maxVideos: 8,
+    }),
+  });
+  const result = await response.json() as YouTubeResolveResponse;
+  if (!response.ok || !result.success || !result.channels?.[0]) {
+    throw new Error(result.error || '最近视频数据刷新失败。');
+  }
+  return result.channels[0].recentVideos || prospect.recentVideos || [];
+}
+
 function formatPreviewValue(value: unknown) {
   if (typeof value === 'number' && value > 1_000_000_000_000) {
     return new Date(value).toLocaleDateString('zh-CN');
+  }
+  if (value && typeof value === 'object' && !Array.isArray(value)) {
+    const objectValue = value as Record<string, unknown>;
+    if (typeof objectValue.link === 'string') {
+      return [objectValue.text, objectValue.link].filter(Boolean).join('\n');
+    }
   }
   return String(value);
 }
@@ -277,6 +359,10 @@ export function CreatorProspectingPage() {
   const [loaded, setLoaded] = useState(false);
   const [cloudReady, setCloudReady] = useState(false);
   const [cloudAvailable, setCloudAvailable] = useState(true);
+  const videoTranslationAttemptsRef = useRef(new Set<string>());
+  const [translatingVideoTitleIds, setTranslatingVideoTitleIds] = useState<string[]>([]);
+  const [inferringContactNameIds, setInferringContactNameIds] = useState<string[]>([]);
+  const [inferringOutreachLanguageIds, setInferringOutreachLanguageIds] = useState<string[]>([]);
   const [resolving, setResolving] = useState(false);
   const [checkingDedupe, setCheckingDedupe] = useState(false);
   const [writingFeishu, setWritingFeishu] = useState(false);
@@ -378,6 +464,139 @@ export function CreatorProspectingPage() {
     )));
   };
 
+  const handleInferContactName = async (prospect: Prospect, force = false) => {
+    if (
+      !force
+      && (
+        prospect.contactNameSource === 'manual'
+        || ['loading', 'found', 'not_found'].includes(prospect.contactNameInferenceStatus || '')
+      )
+    ) {
+      return;
+    }
+    setInferringContactNameIds((current) => Array.from(new Set([...current, prospect.id])));
+    updateProspect(prospect.id, { contactNameInferenceStatus: 'loading' });
+    try {
+      const response = await fetch('/api/ai', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          action: 'inferContactName',
+          channel: {
+            title: prospect.title || '',
+            description: prospect.description || '',
+          },
+          modelProvider: settings.modelProvider,
+          customApiUrl: settings.customApiUrl,
+          customApiKey: settings.customApiKey,
+          customModelName: settings.customModelName,
+        }),
+      });
+      const result = await response.json();
+      if (!response.ok || !result.success) {
+        throw new Error(getErrorMessage(result, '联系人姓名识别失败。'));
+      }
+      const contactName = String(result.data?.contactName || '').trim();
+      const found = result.data?.found === true && Boolean(contactName);
+      const confidence = Math.min(
+        100,
+        Math.max(0, Math.round(Number(result.data?.confidence) || 0)),
+      );
+      setProspects((current) => current.map((item) => {
+        if (item.id !== prospect.id || item.contactNameSource === 'manual') return item;
+        return {
+          ...item,
+          contactName: found ? contactName : '',
+          contactNameConfidence: found ? confidence : undefined,
+          contactNameSource: found ? 'ai' : undefined,
+          contactNameInferenceStatus: found ? 'found' : 'not_found',
+          updatedAt: new Date().toISOString(),
+        };
+      }));
+    } catch (error) {
+      setProspects((current) => current.map((item) => (
+        item.id === prospect.id && item.contactNameSource !== 'manual'
+          ? {
+              ...item,
+              contactNameInferenceStatus: 'error',
+              updatedAt: new Date().toISOString(),
+            }
+          : item
+      )));
+      toast.error(error instanceof Error ? error.message : '联系人姓名识别失败。');
+    } finally {
+      setInferringContactNameIds((current) => current.filter((id) => id !== prospect.id));
+    }
+  };
+
+  const handleInferOutreachLanguage = async (prospect: Prospect, force = false) => {
+    if (
+      !force
+      && (
+        prospect.outreachLanguageSource === 'manual'
+        || ['loading', 'found', 'not_found'].includes(prospect.outreachLanguageInferenceStatus || '')
+      )
+    ) {
+      return;
+    }
+    setInferringOutreachLanguageIds((current) => Array.from(new Set([...current, prospect.id])));
+    updateProspect(prospect.id, { outreachLanguageInferenceStatus: 'loading' });
+    try {
+      const response = await fetch('/api/ai', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          action: 'inferOutreachLanguage',
+          channel: {
+            title: prospect.title || '',
+            description: prospect.description || '',
+            recentVideos: (prospect.recentVideos || []).slice(0, 8).map((video) => ({
+              title: video.title,
+            })),
+          },
+          modelProvider: settings.modelProvider,
+          customApiUrl: settings.customApiUrl,
+          customApiKey: settings.customApiKey,
+          customModelName: settings.customModelName,
+        }),
+      });
+      const result = await response.json();
+      if (!response.ok || !result.success) {
+        throw new Error(getErrorMessage(result, '开发信语言识别失败。'));
+      }
+      const languageCode = String(result.data?.languageCode || '').trim().toLowerCase().slice(0, 2);
+      const found = result.data?.found === true && /^[a-z]{2}$/.test(languageCode);
+      const confidence = Math.min(
+        100,
+        Math.max(0, Math.round(Number(result.data?.confidence) || 0)),
+      );
+      setProspects((current) => current.map((item) => {
+        if (item.id !== prospect.id || item.outreachLanguageSource === 'manual') return item;
+        return {
+          ...item,
+          outreachLanguage: found ? languageCode : '',
+          outreachLanguageConfidence: found ? confidence : undefined,
+          outreachLanguageSource: found ? 'ai' : undefined,
+          outreachLanguageInferenceStatus: found ? 'found' : 'not_found',
+          updatedAt: new Date().toISOString(),
+        };
+      }));
+    } catch (error) {
+      setProspects((current) => current.map((item) => (
+        item.id === prospect.id && item.outreachLanguageSource !== 'manual'
+          ? {
+              ...item,
+              outreachLanguageInferenceStatus: 'error',
+              updatedAt: new Date().toISOString(),
+            }
+          : item
+      )));
+      toast.error(error instanceof Error ? error.message : '开发信语言识别失败。');
+    } finally {
+      setInferringOutreachLanguageIds((current) => current.filter((id) => id !== prospect.id));
+    }
+  };
+
   const invitationProspects = useMemo(
     () => prospects.filter((item) => item.workflowStatus === 'invitation_pending'),
     [prospects],
@@ -392,12 +611,101 @@ export function CreatorProspectingPage() {
     outreach: outreachProspects.length,
   }), [invitationProspects.length, outreachProspects.length, prospects]);
   const productOptions = useMemo(
-    () => Array.from(new Set([
-      ...products.filter((item) => item.status === 'active').flatMap((item) => [item.model, item.name]).filter(Boolean),
-      ...FALLBACK_PRODUCT_OPTIONS,
-    ])),
+    () => {
+      const activeProducts = Array.from(new Set(
+        products
+          .filter((item) => item.status === 'active')
+          .map((item) => firstValue(item.model, item.name))
+          .filter(Boolean),
+      )).slice(0, 20);
+      return activeProducts.length ? activeProducts : FALLBACK_PRODUCT_OPTIONS.slice(0, 20);
+    },
     [products],
   );
+  const getOutreachContext = useCallback(
+    (prospect: Prospect): OutreachAiContext => buildOutreachAiContext(
+      prospect,
+      products,
+      settings,
+      userPreference,
+    ),
+    [products, settings, userPreference],
+  );
+
+  useEffect(() => {
+    if (!loaded || activeTab !== 'invitation') return;
+    const targets = invitationProspects.filter((prospect) => (
+      Boolean(prospect.recentVideos?.length)
+      && prospect.recentVideos!.some((video) => (
+        !video.translatedTitle
+        || !Object.prototype.hasOwnProperty.call(video, 'likeCount')
+        || !Object.prototype.hasOwnProperty.call(video, 'commentCount')
+      ))
+      && !videoTranslationAttemptsRef.current.has(prospect.id)
+    ));
+    if (!targets.length) return;
+
+    targets.forEach((prospect) => videoTranslationAttemptsRef.current.add(prospect.id));
+    const targetIds = targets.map((prospect) => prospect.id);
+    setTranslatingVideoTitleIds((current) => Array.from(new Set([...current, ...targetIds])));
+
+    void Promise.all(targets.map(async (prospect) => {
+      try {
+        const cachedVideos = prospect.recentVideos || [];
+        const needsStatisticsRefresh = cachedVideos.some((video) => (
+          !Object.prototype.hasOwnProperty.call(video, 'likeCount')
+          || !Object.prototype.hasOwnProperty.call(video, 'commentCount')
+          || !Object.prototype.hasOwnProperty.call(video, 'durationSeconds')
+        ));
+        const videosWithStatistics = needsStatisticsRefresh
+          ? await refreshRecentVideos(prospect, {
+              youtubeDefaultRegion: settings.youtubeDefaultRegion,
+              youtubeDefaultLanguage: settings.youtubeDefaultLanguage,
+            })
+          : cachedVideos;
+        let recentVideos = videosWithStatistics;
+        try {
+          recentVideos = await translateRecentVideoTitles(
+            videosWithStatistics,
+            prospect.language,
+            {
+              translatePrompt: settings.translatePrompt,
+              modelProvider: settings.modelProvider,
+              customApiUrl: settings.customApiUrl,
+              customModelName: settings.customModelName,
+            },
+          );
+        } catch (error) {
+          console.warn(
+            `${prospect.title || prospect.inputUrl} 的视频标题翻译失败，将显示原标题:`,
+            error instanceof Error ? error.message : error,
+          );
+        }
+        setProspects((current) => current.map((item) => (
+          item.id === prospect.id
+            ? { ...item, recentVideos, updatedAt: new Date().toISOString() }
+            : item
+        )));
+      } catch (error) {
+        console.warn(
+          `${prospect.title || prospect.inputUrl} 的最近视频数据刷新失败:`,
+          error instanceof Error ? error.message : error,
+        );
+      } finally {
+        setTranslatingVideoTitleIds((current) => current.filter((id) => id !== prospect.id));
+      }
+    }));
+  }, [
+    activeTab,
+    invitationProspects,
+    loaded,
+    settings.customApiUrl,
+    settings.customModelName,
+    settings.modelProvider,
+    settings.translatePrompt,
+    settings.youtubeDefaultLanguage,
+    settings.youtubeDefaultRegion,
+  ]);
 
   const syncFeishuProspect = async (prospect: Prospect, patch: Partial<Prospect> = {}) => {
     if (!settings.feishuProspectingUrl || !prospect.feishuRecordId) return true;
@@ -753,8 +1061,13 @@ export function CreatorProspectingPage() {
   };
 
   const handleConfirmOutreach = async (prospect: Prospect) => {
-    if (!prospect.targetProduct?.trim() || !prospect.cooperationType?.trim() || !prospect.cooperationIdea?.trim()) {
-      toast.error('请先确认目标产品、合作形式和合作想法。');
+    if (
+      !prospect.targetProduct?.trim()
+      || !prospect.cooperationType?.trim()
+      || !prospect.cooperationIdea?.trim()
+      || !prospect.outreachLanguage?.trim()
+    ) {
+      toast.error('请先确认目标产品、合作形式、开发信语言和合作想法。');
       return;
     }
     updateProspect(prospect.id, { workflowStatus: 'outreach_pending' });
@@ -793,39 +1106,24 @@ export function CreatorProspectingPage() {
   };
 
   const handleGenerateOutreach = async (prospect: Prospect) => {
-    if (!prospect.targetProduct || !prospect.cooperationType || !prospect.cooperationIdea) {
-      toast.error('请先返回邀约确认，补齐产品、合作形式和合作想法。');
+    if (
+      !prospect.targetProduct
+      || !prospect.cooperationType
+      || !prospect.cooperationIdea
+      || !prospect.outreachLanguage
+    ) {
+      toast.error('请先返回邀约确认，补齐产品、合作形式、开发信语言和合作想法。');
       return;
     }
     setGeneratingId(prospect.id);
     try {
+      const outreachContext = getOutreachContext(prospect);
       const response = await fetch('/api/ai', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           action: 'outreach',
-          channel: {
-            title: prospect.title,
-            url: firstValue(prospect.url, prospect.sourceUrl, prospect.inputUrl),
-            description: prospect.description,
-            country: prospect.country,
-            language: prospect.language,
-            subscriberCount: prospect.subscriberCount,
-            videoCount: prospect.videoCount,
-            viewCount: prospect.viewCount,
-            recentAverageViews: prospect.recentAverageViews,
-            recentVideos: prospect.recentVideos || [],
-          },
-          products: productsForAi(products, prospect.targetProduct),
-          targetProduct: prospect.targetProduct,
-          cooperationType: prospect.cooperationType,
-          cooperationIdea: prospect.cooperationIdea,
-          priority: prospect.priority,
-          brandName: settings.brandName,
-          senderName: settings.senderName,
-          emailSignature: settings.emailSignature,
-          preferredLanguage: prospect.language || settings.youtubeDefaultLanguage || 'en',
-          userPreference,
+          ...outreachContext,
           outreachPrompt: settings.aiOutreachPrompt,
           modelProvider: settings.modelProvider,
           customApiUrl: settings.customApiUrl,
@@ -1034,6 +1332,11 @@ export function CreatorProspectingPage() {
           <InvitationConfirmTab
             prospects={invitationProspects}
             productOptions={productOptions}
+            outreachPrompt={settings.aiOutreachPrompt || DEFAULT_OUTREACH_PROMPT}
+            getOutreachContext={getOutreachContext}
+            translatingVideoTitleIds={translatingVideoTitleIds}
+            inferringContactNameIds={inferringContactNameIds}
+            inferringOutreachLanguageIds={inferringOutreachLanguageIds}
             checkingHistoryId={checkingHistoryId}
             onPatch={updateProspect}
             onSave={handleSaveInvitation}
@@ -1041,6 +1344,8 @@ export function CreatorProspectingPage() {
             onBack={handleBackToImport}
             onSkip={handleSkip}
             onCheckHistory={handleCheckHistory}
+            onInferContactName={handleInferContactName}
+            onInferOutreachLanguage={handleInferOutreachLanguage}
           />
         )}
         {activeTab === 'outreach' && (

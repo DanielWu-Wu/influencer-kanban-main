@@ -176,9 +176,9 @@ export function OutreachEmailTab({
                   <div>
                     <p className="text-xs font-semibold text-muted-foreground">最近视频</p>
                     <ul className="mt-1 space-y-1 text-xs text-muted-foreground">
-                      {(prospect.recentVideos || []).slice(0, 5).map((video) => (
+                      {(prospect.recentVideos || []).slice(0, 8).map((video) => (
                         <li key={video.videoId || video.url || video.title} className="line-clamp-1">
-                          · {video.title}（{formatCompactNumber(video.viewCount)} 播放）
+                          · {video.translatedTitle || video.title}（{formatCompactNumber(video.viewCount)} 播放）
                         </li>
                       ))}
                     </ul>

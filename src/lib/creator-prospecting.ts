@@ -1,5 +1,5 @@
 export const CREATOR_PROSPECTS_STORAGE_KEY = 'influencer-board-creator-prospects';
-export const CREATOR_PROSPECTS_SCHEMA_VERSION = 3;
+export const CREATOR_PROSPECTS_SCHEMA_VERSION = 5;
 
 export type ProspectingTab = 'import' | 'invitation' | 'outreach';
 
@@ -42,11 +42,15 @@ export type ProspectPriority = 'high' | 'medium' | 'low';
 export type RecentVideo = {
   videoId?: string;
   title: string;
+  translatedTitle?: string;
   description?: string;
   publishedAt?: string;
   thumbnail?: string;
   url?: string;
   viewCount?: number | null;
+  likeCount?: number | null;
+  commentCount?: number | null;
+  durationSeconds?: number | null;
 };
 
 export type OutreachDraft = {
@@ -94,6 +98,14 @@ export type Prospect = {
   targetProduct?: string;
   cooperationType?: string;
   cooperationIdea?: string;
+  contactName?: string;
+  contactNameConfidence?: number;
+  contactNameSource?: 'ai' | 'manual';
+  contactNameInferenceStatus?: 'loading' | 'found' | 'not_found' | 'error';
+  outreachLanguage?: string;
+  outreachLanguageConfidence?: number;
+  outreachLanguageSource?: 'ai' | 'manual';
+  outreachLanguageInferenceStatus?: 'loading' | 'found' | 'not_found' | 'error';
   priority?: ProspectPriority;
   contactedBefore?: boolean;
   collaboratedBefore?: boolean;
@@ -297,6 +309,12 @@ export function migrateProspects(value: unknown): Prospect[] {
       resourceRecordId: item.resourceRecordId || (legacySingleTableRecord ? item.feishuRecordId : undefined),
       feishuRecordId: legacySingleTableRecord ? undefined : item.feishuRecordId,
       publicEmail,
+      contactNameInferenceStatus: item.contactNameInferenceStatus === 'loading'
+        ? undefined
+        : item.contactNameInferenceStatus,
+      outreachLanguageInferenceStatus: item.outreachLanguageInferenceStatus === 'loading'
+        ? undefined
+        : item.outreachLanguageInferenceStatus,
       competitorCollaboration: item.competitorCollaboration || 'unknown',
       recentAverageViews: item.recentAverageViews ?? calculateRecentAverageViews(item.recentVideos),
       createdAt: item.createdAt || now,
@@ -325,5 +343,6 @@ export function canGenerateOutreach(prospect: Prospect) {
   return prospect.workflowStatus === 'outreach_pending'
     && Boolean(prospect.targetProduct?.trim())
     && Boolean(prospect.cooperationType?.trim())
-    && Boolean(prospect.cooperationIdea?.trim());
+    && Boolean(prospect.cooperationIdea?.trim())
+    && Boolean(prospect.outreachLanguage?.trim());
 }
