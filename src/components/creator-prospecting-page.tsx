@@ -26,6 +26,12 @@ import {
 } from '@/components/ui/dialog';
 import { generateId, useGmailAuth, useProducts, useSettings, type AppSettings } from '@/lib/data';
 import { DEFAULT_OUTREACH_PROMPT } from '@/lib/ai-prompts';
+import { appendEmailSignature } from '@/lib/email-content';
+import {
+  buildOutreachEmailHtml,
+  getProductInlineImage,
+  selectedProductEmailAsset,
+} from '@/lib/outreach-email-rendering';
 import type { FeishuFieldKey, FeishuFieldMapping } from '@/lib/feishu-mapping';
 import { getSupabaseBrowserClient } from '@/lib/supabase/client';
 import {
@@ -47,6 +53,7 @@ import {
 } from '@/lib/creator-prospecting';
 import {
   buildOutreachAiContext,
+  stripOutreachPreviewData,
   type OutreachAiContext,
 } from '@/lib/outreach-context';
 
@@ -105,6 +112,13 @@ function getErrorMessage(value: unknown, fallback: string) {
     if (typeof error === 'string') return error;
   }
   return fallback;
+}
+
+function appendPlainTextSignature(body: string, signature?: string) {
+  const content = body.trimEnd();
+  const signatureText = signature?.trim();
+  if (!signatureText || content.endsWith(signatureText)) return content;
+  return `${content}\n\n${signatureText}`;
 }
 
 function putMappedField(
@@ -367,6 +381,7 @@ export function CreatorProspectingPage() {
   const [checkingDedupe, setCheckingDedupe] = useState(false);
   const [writingFeishu, setWritingFeishu] = useState(false);
   const [generatingId, setGeneratingId] = useState<string | null>(null);
+  const [regeneratingDraftPart, setRegeneratingDraftPart] = useState<{ id: string; part: 'subject' | 'body' } | null>(null);
   const [savingDraftId, setSavingDraftId] = useState<string | null>(null);
   const [checkingHistoryId, setCheckingHistoryId] = useState<string | null>(null);
   const [previewItems, setPreviewItems] = useState<FeishuWritePreview[]>([]);
@@ -1117,7 +1132,7 @@ export function CreatorProspectingPage() {
     }
     setGeneratingId(prospect.id);
     try {
-      const outreachContext = getOutreachContext(prospect);
+      const outreachContext = stripOutreachPreviewData(getOutreachContext(prospect));
       const response = await fetch('/api/ai', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -1145,6 +1160,75 @@ export function CreatorProspectingPage() {
     }
   };
 
+  const handleRegenerateOutreachPart = async (prospect: Prospect, part: 'subject' | 'body') => {
+    if (!prospect.aiDraft) {
+      toast.error('请先生成开发信，再单独重新生成标题或正文。');
+      return;
+    }
+    if (
+      !prospect.targetProduct
+      || !prospect.cooperationType
+      || !prospect.cooperationIdea
+      || !prospect.outreachLanguage
+    ) {
+      toast.error('请先返回邀约确认，补齐产品、合作形式、开发信语言和合作想法。');
+      return;
+    }
+    setRegeneratingDraftPart({ id: prospect.id, part });
+    try {
+      const outreachContext = stripOutreachPreviewData(getOutreachContext(prospect));
+      const response = await fetch('/api/ai', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          action: 'outreach',
+          ...outreachContext,
+          outreachPrompt: settings.aiOutreachPrompt,
+          modelProvider: settings.modelProvider,
+          customApiUrl: settings.customApiUrl,
+          customApiKey: settings.customApiKey,
+          customModelName: settings.customModelName,
+        }),
+      });
+      const result = await response.json();
+      if (!response.ok || !result.success) {
+        throw new Error(getErrorMessage(result, part === 'subject' ? '邮件标题重新生成失败。' : '邮件正文重新生成失败。'));
+      }
+      const nextDraft = result.data as OutreachDraft;
+      const currentDraft = prospect.aiDraft;
+      const mergedDraft: OutreachDraft = part === 'subject'
+        ? {
+            ...currentDraft,
+            subject: nextDraft.subject || currentDraft.subject,
+            subjectOptions: nextDraft.subjectOptions?.length ? nextDraft.subjectOptions : currentDraft.subjectOptions,
+          }
+        : {
+            ...currentDraft,
+            body: nextDraft.body || currentDraft.body,
+            translatedBody: nextDraft.translatedBody || nextDraft.translatedSummary || currentDraft.translatedBody,
+            translatedSummary: nextDraft.translatedSummary || currentDraft.translatedSummary,
+            personalizationNotes: nextDraft.personalizationNotes || currentDraft.personalizationNotes,
+            riskNotes: nextDraft.riskNotes || currentDraft.riskNotes,
+            missingInfo: nextDraft.missingInfo || currentDraft.missingInfo,
+            language: nextDraft.language || currentDraft.language,
+            tone: nextDraft.tone || currentDraft.tone,
+          };
+      const patch: Partial<Prospect> = {
+        aiDraft: mergedDraft,
+        workflowStatus: 'outreach_generated',
+        error: undefined,
+      };
+      updateProspect(prospect.id, patch);
+      await syncFeishuProspect(prospect, patch);
+      toast.success(part === 'subject' ? '邮件标题已重新生成，正文未变动。' : '邮件正文已重新生成，标题未变动。');
+    } catch (error) {
+      updateProspect(prospect.id, { error: error instanceof Error ? error.message : '开发信局部重新生成失败。' });
+      toast.error(error instanceof Error ? error.message : '开发信局部重新生成失败。');
+    } finally {
+      setRegeneratingDraftPart(null);
+    }
+  };
+
   const handleSaveGmailDraft = async (prospect: Prospect) => {
     if (!auth?.accessToken) {
       toast.error('请先连接 Gmail，再保存草稿。');
@@ -1160,6 +1244,17 @@ export function CreatorProspectingPage() {
     }
     setSavingDraftId(prospect.id);
     try {
+      const productAsset = selectedProductEmailAsset(products, prospect.targetProduct);
+      const inlineProductImage = prospect.aiDraft.productImageIncluded === false
+        ? undefined
+        : getProductInlineImage(productAsset);
+      const renderedBodyHtml = buildOutreachEmailHtml({
+        body: prospect.aiDraft.body,
+        product: productAsset,
+        imageSrc: inlineProductImage ? `cid:${inlineProductImage.contentId}` : undefined,
+        imagePlacement: prospect.aiDraft.productImagePlacement,
+        includeImage: Boolean(inlineProductImage),
+      });
       const response = await fetch('/api/gmail', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -1168,7 +1263,9 @@ export function CreatorProspectingPage() {
           accessToken: auth.accessToken,
           to: prospect.publicEmail,
           subject: prospect.aiDraft.subject,
-          body: prospect.aiDraft.body,
+          body: appendPlainTextSignature(prospect.aiDraft.body, settings.emailSignature),
+          bodyHtml: appendEmailSignature(renderedBodyHtml, settings.emailSignature),
+          inlineImages: inlineProductImage ? [inlineProductImage] : [],
         }),
       });
       const result = await response.json();
@@ -1351,10 +1448,14 @@ export function CreatorProspectingPage() {
         {activeTab === 'outreach' && (
           <OutreachEmailTab
             prospects={outreachProspects}
+            products={products}
+            emailSignature={settings.emailSignature}
             generatingId={generatingId}
+            regeneratingPart={regeneratingDraftPart}
             savingDraftId={savingDraftId}
             onPatch={updateProspect}
             onGenerate={handleGenerateOutreach}
+            onRegeneratePart={handleRegenerateOutreachPart}
             onSaveDraft={handleSaveGmailDraft}
             onBack={handleBackToInvitation}
             onSkip={handleSkip}

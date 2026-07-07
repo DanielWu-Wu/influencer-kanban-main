@@ -2,6 +2,48 @@ import { NextRequest, NextResponse } from 'next/server';
 import { repairTextEncoding } from '@/lib/email-text';
 
 type GmailHeader = { name: string; value: string };
+type InlineImagePayload = {
+  contentId?: string;
+  fileName?: string;
+  mimeType?: string;
+  dataUrl?: string;
+};
+
+function encodeBase64(value: string) {
+  return Buffer.from(value, 'utf8').toString('base64');
+}
+
+function wrapBase64(value: string) {
+  return value.match(/.{1,76}/g)?.join('\r\n') || '';
+}
+
+function htmlToText(value: string) {
+  return value
+    .replace(/<br\s*\/?>/gi, '\n')
+    .replace(/<\/(div|p|li|blockquote|h[1-6])>/gi, '\n')
+    .replace(/<li[^>]*>/gi, '- ')
+    .replace(/<[^>]+>/g, '')
+    .replace(/&nbsp;/gi, ' ')
+    .replace(/&amp;/gi, '&')
+    .replace(/&lt;/gi, '<')
+    .replace(/&gt;/gi, '>')
+    .replace(/&quot;/gi, '"')
+    .replace(/\n{3,}/g, '\n\n')
+    .trim();
+}
+
+function sanitizeHeaderValue(value: string) {
+  return value.replace(/[\r\n]/g, ' ').trim();
+}
+
+function dataUrlToBase64(dataUrl: string) {
+  const match = dataUrl.match(/^data:([^;,]+);base64,(.+)$/);
+  if (!match) return null;
+  return {
+    mimeType: match[1],
+    base64: match[2],
+  };
+}
 
 function getHeader(headers: GmailHeader[] = [], name: string) {
   return headers.find((header) => header.name.toLowerCase() === name.toLowerCase())?.value || '';
@@ -208,6 +250,8 @@ export async function POST(request: NextRequest) {
       to,
       subject,
       body: emailBody,
+      bodyHtml,
+      inlineImages,
       threadId,
       inReplyTo,
       references,
@@ -263,16 +307,82 @@ export async function POST(request: NextRequest) {
 
     if (action === 'draft') {
       // 创建草稿
-      const rawEmail = [
-        `To: ${to}`,
+      const commonHeaders = [
+        `To: ${sanitizeHeaderValue(String(to || ''))}`,
         `Subject: =?utf-8?B?${Buffer.from(subject).toString('base64')}?=`,
-        ...(inReplyTo ? [`In-Reply-To: ${inReplyTo}`] : []),
-        ...(references ? [`References: ${references}`] : []),
-        'Content-Type: text/plain; charset=utf-8',
+        ...(inReplyTo ? [`In-Reply-To: ${sanitizeHeaderValue(inReplyTo)}`] : []),
+        ...(references ? [`References: ${sanitizeHeaderValue(references)}`] : []),
         'MIME-Version: 1.0',
+      ];
+      const htmlBody = typeof bodyHtml === 'string' ? bodyHtml.trim() : '';
+      const validInlineImages = Array.isArray(inlineImages)
+        ? (inlineImages as InlineImagePayload[]).map((image) => {
+            const parsed = dataUrlToBase64(String(image.dataUrl || ''));
+            if (!parsed) return null;
+            return {
+              contentId: sanitizeHeaderValue(String(image.contentId || 'inline-image')),
+              fileName: sanitizeHeaderValue(String(image.fileName || 'inline-image.jpg')),
+              mimeType: sanitizeHeaderValue(String(image.mimeType || parsed.mimeType || 'image/jpeg')),
+              base64: parsed.base64,
+            };
+          }).filter(Boolean)
+        : [];
+      const alternativeBoundary = `alternative-${crypto.randomUUID()}`;
+      const relatedBoundary = `related-${crypto.randomUUID()}`;
+      const htmlPart = [
+        `--${alternativeBoundary}`,
+        'Content-Type: text/html; charset=utf-8',
+        'Content-Transfer-Encoding: base64',
         '',
-        emailBody,
-      ].join('\r\n');
+        wrapBase64(encodeBase64(`<div style="font-family:Arial,sans-serif;font-size:14px;line-height:1.5;word-break:break-word">${htmlBody}</div>`)),
+      ];
+      const textPart = [
+        `--${alternativeBoundary}`,
+        'Content-Type: text/plain; charset=utf-8',
+        'Content-Transfer-Encoding: base64',
+        '',
+        wrapBase64(encodeBase64(String(emailBody || htmlToText(htmlBody)))),
+      ];
+      const alternativePart = [
+        `Content-Type: multipart/alternative; boundary="${alternativeBoundary}"`,
+        '',
+        ...textPart,
+        ...htmlPart,
+        `--${alternativeBoundary}--`,
+      ];
+      const rawEmail = htmlBody
+        ? (
+            validInlineImages.length
+              ? [
+                  ...commonHeaders,
+                  `Content-Type: multipart/related; boundary="${relatedBoundary}"`,
+                  '',
+                  `--${relatedBoundary}`,
+                  ...alternativePart,
+                  ...validInlineImages.flatMap((image) => [
+                    `--${relatedBoundary}`,
+                    `Content-Type: ${image!.mimeType}; name="=?utf-8?B?${encodeBase64(image!.fileName)}?="`,
+                    `Content-ID: <${image!.contentId}>`,
+                    `Content-Disposition: inline; filename="=?utf-8?B?${encodeBase64(image!.fileName)}?="`,
+                    'Content-Transfer-Encoding: base64',
+                    '',
+                    wrapBase64(image!.base64),
+                  ]),
+                  `--${relatedBoundary}--`,
+                  '',
+                ].join('\r\n')
+              : [
+                  ...commonHeaders,
+                  ...alternativePart,
+                  '',
+                ].join('\r\n')
+          )
+        : [
+            ...commonHeaders,
+            'Content-Type: text/plain; charset=utf-8',
+            '',
+            emailBody,
+          ].join('\r\n');
 
       const encodedEmail = Buffer.from(rawEmail)
         .toString('base64')

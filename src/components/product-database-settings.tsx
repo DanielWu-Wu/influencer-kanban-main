@@ -1,6 +1,6 @@
 'use client';
 
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import {
   Archive,
   Box,
@@ -19,8 +19,10 @@ import {
   Search,
   Store,
   Trash2,
+  Upload,
   Users,
   WalletCards,
+  X,
 } from 'lucide-react';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
@@ -42,9 +44,19 @@ import {
   AlertDialogTitle,
 } from '@/components/ui/alert-dialog';
 import { generateId, useProducts } from '@/lib/data';
+import {
+  compressProductImage,
+  parseProductResources,
+  serializeProductResources,
+  type ProductMainImage,
+} from '@/lib/product-assets';
 import type { Product, ProductMarketProfile, ProductStatus } from '@/lib/types';
 
 type ProductFormData = Omit<Product, 'id' | 'createdAt' | 'updatedAt'>;
+type ProductFormAssets = {
+  mainImage?: ProductMainImage;
+  resourceNotes: string;
+};
 
 const emptyMarketProfile = (): ProductMarketProfile => ({
   id: generateId(),
@@ -98,9 +110,14 @@ export function ProductDatabaseSettings({ expanded, onToggle }: ProductDatabaseS
   const { products, loading, addProduct, updateProduct, deleteProduct } = useProducts();
   const [searchQuery, setSearchQuery] = useState('');
   const [dialogOpen, setDialogOpen] = useState(false);
+  const [advancedOpen, setAdvancedOpen] = useState(false);
   const [editingProduct, setEditingProduct] = useState<Product | null>(null);
   const [deletingProduct, setDeletingProduct] = useState<Product | null>(null);
   const [formData, setFormData] = useState<ProductFormData>(emptyProduct);
+  const [formAssets, setFormAssets] = useState<ProductFormAssets>({ resourceNotes: '' });
+  const [imageError, setImageError] = useState('');
+  const [imageProcessing, setImageProcessing] = useState(false);
+  const fileInputRef = useRef<HTMLInputElement | null>(null);
 
   const filteredProducts = useMemo(() => {
     const query = searchQuery.trim().toLowerCase();
@@ -110,7 +127,8 @@ export function ProductDatabaseSettings({ expanded, onToggle }: ProductDatabaseS
       const marketText = product.marketProfiles
         .map((market) => `${market.targetMarket} ${market.siteName} ${market.targetInfluencerType}`)
         .join(' ');
-      return `${product.name} ${product.model} ${product.sellingPoints} ${marketText}`
+      const resources = parseProductResources(product.imageAndResourceLinks).resourceNotes;
+      return `${product.name} ${product.model} ${product.sellingPoints} ${resources} ${marketText}`
         .toLowerCase()
         .includes(query);
     });
@@ -123,16 +141,24 @@ export function ProductDatabaseSettings({ expanded, onToggle }: ProductDatabaseS
     if (!dialogOpen) {
       setEditingProduct(null);
       setFormData(emptyProduct());
+      setFormAssets({ resourceNotes: '' });
+      setAdvancedOpen(false);
+      setImageError('');
+      setImageProcessing(false);
+      if (fileInputRef.current) fileInputRef.current.value = '';
     }
   }, [dialogOpen]);
 
   const openCreateDialog = () => {
     setEditingProduct(null);
     setFormData(emptyProduct());
+    setFormAssets({ resourceNotes: '' });
+    setAdvancedOpen(false);
     setDialogOpen(true);
   };
 
   const openEditDialog = (product: Product) => {
+    const resources = parseProductResources(product.imageAndResourceLinks);
     setEditingProduct(product);
     setFormData({
       name: product.name,
@@ -147,6 +173,15 @@ export function ProductDatabaseSettings({ expanded, onToggle }: ProductDatabaseS
         ? product.marketProfiles.map((market) => ({ ...market }))
         : [emptyMarketProfile()],
     });
+    setFormAssets({
+      mainImage: resources.mainImage,
+      resourceNotes: resources.resourceNotes,
+    });
+    setAdvancedOpen(Boolean(
+      product.technicalSpecifications
+      || product.notes
+      || product.marketProfiles.length,
+    ));
     setDialogOpen(true);
   };
 
@@ -180,6 +215,22 @@ export function ProductDatabaseSettings({ expanded, onToggle }: ProductDatabaseS
     }));
   };
 
+  const handleImageSelect = async (event: React.ChangeEvent<HTMLInputElement>) => {
+    const file = event.target.files?.[0];
+    if (!file) return;
+    setImageError('');
+    setImageProcessing(true);
+    try {
+      const mainImage = await compressProductImage(file);
+      setFormAssets((current) => ({ ...current, mainImage }));
+    } catch (error) {
+      setImageError(error instanceof Error ? error.message : '图片上传失败，请换一张图片重试。');
+    } finally {
+      setImageProcessing(false);
+      if (fileInputRef.current) fileInputRef.current.value = '';
+    }
+  };
+
   const handleSubmit = (event: React.FormEvent) => {
     event.preventDefault();
     const normalizedData = {
@@ -187,6 +238,13 @@ export function ProductDatabaseSettings({ expanded, onToggle }: ProductDatabaseS
       name: formData.name.trim(),
       model: formData.model.trim(),
       productUrl: formData.productUrl.trim(),
+      sellingPoints: formData.sellingPoints.trim(),
+      technicalSpecifications: formData.technicalSpecifications.trim(),
+      notes: formData.notes.trim(),
+      imageAndResourceLinks: serializeProductResources({
+        mainImage: formAssets.mainImage,
+        resourceNotes: formAssets.resourceNotes.trim(),
+      }),
       marketProfiles: formData.marketProfiles.filter((market) =>
         Object.entries(market).some(([key, value]) => key !== 'id' && value.trim()),
       ),
@@ -213,7 +271,7 @@ export function ProductDatabaseSettings({ expanded, onToggle }: ProductDatabaseS
                 <div className="min-w-0">
                   <CardTitle className="text-base">产品数据库</CardTitle>
                   <CardDescription className="mt-0.5 text-xs">
-                    管理产品资料，以及不同国家和站点的推广要求
+                    维护红人开发信会用到的产品链接、卖点和主图。
                   </CardDescription>
                 </div>
               </div>
@@ -239,11 +297,11 @@ export function ProductDatabaseSettings({ expanded, onToggle }: ProductDatabaseS
               <div className="flex flex-wrap items-center gap-2">
                 <Badge variant="outline" className="gap-1 rounded-md border-white/70 bg-white/55 text-xs">
                   <Info className="h-3 w-3" />
-                  当前保存在本机浏览器，后续可同步到飞书
+                  当前保存到本地和云端产品表，不会改数据库结构
                 </Badge>
                 {products.length > 0 && (
                   <span className="text-xs text-muted-foreground">
-                    {activeProducts} 个推广中 · {totalMarkets} 个市场配置
+                    {activeProducts} 个推广中 / {totalMarkets} 个高级市场配置
                   </span>
                 )}
               </div>
@@ -259,7 +317,7 @@ export function ProductDatabaseSettings({ expanded, onToggle }: ProductDatabaseS
                 <Input
                   value={searchQuery}
                   onChange={(event) => setSearchQuery(event.target.value)}
-                  placeholder="搜索产品、型号、市场或目标红人..."
+                  placeholder="搜索产品、型号、卖点或市场资料..."
                   className="h-10 rounded-lg border-white/65 bg-white/75 pl-9"
                 />
               </div>
@@ -274,7 +332,7 @@ export function ProductDatabaseSettings({ expanded, onToggle }: ProductDatabaseS
                 </div>
                 <p className="text-sm font-medium">还没有产品资料</p>
                 <p className="mt-1 max-w-md text-xs leading-5 text-muted-foreground">
-                  先录入产品卖点、参数和推广规则。之后 AI 起草开发信或谈判回复时，就能调用这些资料。
+                  先添加一个产品页面链接、卖点描述和主图。之后生成开发信时，AI 会优先使用当前选中的产品资料。
                 </p>
                 <Button type="button" variant="outline" size="sm" className="mt-4 h-9 gap-1.5 rounded-lg border-white/70 bg-white/70" onClick={openCreateDialog}>
                   <Plus className="h-4 w-4" />
@@ -290,35 +348,48 @@ export function ProductDatabaseSettings({ expanded, onToggle }: ProductDatabaseS
                 {filteredProducts.map((product) => {
                   const meta = statusMeta[product.status];
                   const StatusIcon = meta.icon;
+                  const resources = parseProductResources(product.imageAndResourceLinks);
                   return (
                     <div key={product.id} className="flex flex-col gap-3 rounded-lg border border-white/65 bg-white/55 p-4 transition-colors hover:bg-white/75 lg:flex-row lg:items-start">
-                      <div className="min-w-0 flex-1">
-                        <div className="flex flex-wrap items-center gap-2">
-                          <h4 className="font-medium">{product.name}</h4>
-                          {product.model && (
-                            <span className="text-sm text-muted-foreground">{product.model}</span>
-                          )}
-                          <Badge variant="outline" className={meta.className}>
-                            <StatusIcon className="mr-1 h-3 w-3" />
-                            {meta.label}
-                          </Badge>
-                        </div>
-                        {product.sellingPoints && (
-                          <p className="mt-1 line-clamp-2 text-sm leading-5 text-muted-foreground">
-                            {product.sellingPoints}
-                          </p>
-                        )}
-                        <div className="mt-2 flex flex-wrap gap-1.5">
-                          {product.marketProfiles.length > 0 ? (
-                            product.marketProfiles.map((market) => (
-                              <Badge key={market.id} variant="secondary" className="rounded-md bg-white/75 font-normal">
-                                {market.targetMarket || market.siteName || '未命名市场'}
-                                {market.targetMarket && market.siteName ? ` · ${market.siteName}` : ''}
-                              </Badge>
-                            ))
+                      <div className="flex min-w-0 flex-1 gap-3">
+                        <div className="flex h-20 w-28 shrink-0 items-center justify-center overflow-hidden rounded-lg border border-white/70 bg-white/75">
+                          {resources.mainImage ? (
+                            // eslint-disable-next-line @next/next/no-img-element
+                            <img src={resources.mainImage.dataUrl} alt={`${product.name} 产品主图`} className="h-full w-full object-cover" />
                           ) : (
-                            <span className="text-xs text-muted-foreground">尚未设置目标市场</span>
+                            <ImageIcon className="h-6 w-6 text-muted-foreground" />
                           )}
+                        </div>
+                        <div className="min-w-0 flex-1">
+                          <div className="flex flex-wrap items-center gap-2">
+                            <h4 className="font-medium">{product.name}</h4>
+                            {product.model && (
+                              <span className="text-sm text-muted-foreground">{product.model}</span>
+                            )}
+                            <Badge variant="outline" className={meta.className}>
+                              <StatusIcon className="mr-1 h-3 w-3" />
+                              {meta.label}
+                            </Badge>
+                          </div>
+                          {product.sellingPoints ? (
+                            <p className="mt-1 line-clamp-2 text-sm leading-5 text-muted-foreground">
+                              {product.sellingPoints}
+                            </p>
+                          ) : (
+                            <p className="mt-1 text-sm text-amber-700">建议补充产品卖点，开发信会更个性化。</p>
+                          )}
+                          <div className="mt-2 flex flex-wrap gap-1.5">
+                            {resources.resourceNotes && (
+                              <Badge variant="secondary" className="rounded-md bg-white/75 font-normal">
+                                有素材说明
+                              </Badge>
+                            )}
+                            {product.marketProfiles.length > 0 && (
+                              <Badge variant="secondary" className="rounded-md bg-white/75 font-normal">
+                                {product.marketProfiles.length} 个高级市场配置
+                              </Badge>
+                            )}
+                          </div>
                         </div>
                       </div>
 
@@ -366,11 +437,11 @@ export function ProductDatabaseSettings({ expanded, onToggle }: ProductDatabaseS
       </Card>
 
       <Dialog open={dialogOpen} onOpenChange={setDialogOpen}>
-        <DialogContent className="glass-panel-strong flex max-h-[92vh] max-w-5xl flex-col gap-0 overflow-hidden rounded-lg border-white/65 p-0">
+        <DialogContent className="glass-panel-strong flex max-h-[92vh] max-w-4xl flex-col gap-0 overflow-hidden rounded-lg border-white/65 p-0">
           <DialogHeader className="shrink-0 border-b border-white/60 bg-white/55 px-6 py-5">
             <DialogTitle>{editingProduct ? '编辑产品资料' : '添加产品资料'}</DialogTitle>
             <DialogDescription>
-              可直接使用自然语言填写。市场推广资料支持为同一产品添加多个国家或站点。
+              日常只需要填写产品链接、卖点和主图；更细的市场资料可在高级资料里补充。
             </DialogDescription>
           </DialogHeader>
 
@@ -378,9 +449,9 @@ export function ProductDatabaseSettings({ expanded, onToggle }: ProductDatabaseS
             <div className="min-h-0 flex-1 space-y-6 overflow-y-auto px-6 py-5">
               <section className="space-y-4">
                 <div>
-                  <h3 className="text-sm font-semibold">产品基础资料</h3>
+                  <h3 className="text-sm font-semibold">产品资料卡</h3>
                   <p className="mt-1 text-xs text-muted-foreground">
-                    这里填写不同市场都会共用的产品信息。
+                    这些内容会和红人频道资料一起进入开发信生成流程。
                   </p>
                 </div>
 
@@ -389,7 +460,7 @@ export function ProductDatabaseSettings({ expanded, onToggle }: ProductDatabaseS
                     <Input
                       value={formData.name}
                       onChange={(event) => setFormData({ ...formData, name: event.target.value })}
-                      placeholder="例如：Aferiy 便携式储能电源"
+                      placeholder="例如：Aferiy P280"
                       required
                       className="rounded-lg border-white/65 bg-white/75"
                     />
@@ -398,18 +469,18 @@ export function ProductDatabaseSettings({ expanded, onToggle }: ProductDatabaseS
                     <Input
                       value={formData.model}
                       onChange={(event) => setFormData({ ...formData, model: event.target.value })}
-                      placeholder="例如：P280 / Nomad 1800 Pro"
+                      placeholder="例如：P280 / AF-P280"
                       className="rounded-lg border-white/65 bg-white/75"
                     />
                   </Field>
                 </div>
 
-                <div className="grid gap-4 md:grid-cols-[1fr_220px]">
-                  <Field label="通用产品链接" icon={Link2}>
+                <div className="grid gap-4 md:grid-cols-[1fr_180px]">
+                  <Field label="产品页面链接" icon={Link2}>
                     <Input
                       value={formData.productUrl}
                       onChange={(event) => setFormData({ ...formData, productUrl: event.target.value })}
-                      placeholder="https://..."
+                      placeholder="https://es.aferiy.com/products/..."
                       className="rounded-lg border-white/65 bg-white/75"
                     />
                   </Field>
@@ -430,47 +501,77 @@ export function ProductDatabaseSettings({ expanded, onToggle }: ProductDatabaseS
                   </Field>
                 </div>
 
-                <div className="grid gap-4 lg:grid-cols-2">
-                  <Field label="产品卖点" icon={FileText}>
-                    <Textarea
-                      value={formData.sellingPoints}
-                      onChange={(event) => setFormData({ ...formData, sellingPoints: event.target.value })}
-                      placeholder="用自然语言描述核心优势、适用场景、与竞品的差异..."
-                      rows={5}
-                      className="rounded-lg border-white/65 bg-white/75"
-                    />
-                  </Field>
-                  <Field label="技术参数" icon={FileText}>
-                    <Textarea
-                      value={formData.technicalSpecifications}
-                      onChange={(event) =>
-                        setFormData({ ...formData, technicalSpecifications: event.target.value })
-                      }
-                      placeholder="容量、功率、接口、尺寸、重量、充电时间等，可直接粘贴完整参数..."
-                      rows={5}
-                      className="rounded-lg border-white/65 bg-white/75"
-                    />
-                  </Field>
-                </div>
+                <Field label="产品描述卖点" icon={FileText}>
+                  <Textarea
+                    value={formData.sellingPoints}
+                    onChange={(event) => setFormData({ ...formData, sellingPoints: event.target.value })}
+                    placeholder="可以直接粘贴给红人看的卖点，例如服务、容量、性能、太阳能输入、APP、UPS、电池安全等..."
+                    rows={8}
+                    className="rounded-lg border-white/65 bg-white/75"
+                  />
+                </Field>
 
-                <div className="grid gap-4 lg:grid-cols-2">
-                  <Field label="图片和资料链接" icon={ImageIcon}>
+                <div className="grid gap-4 lg:grid-cols-[240px_minmax(0,1fr)]">
+                  <div className="space-y-2">
+                    <Label className="flex items-center gap-1.5 text-xs">
+                      <ImageIcon className="h-3.5 w-3.5 text-muted-foreground" />
+                      产品主图
+                    </Label>
+                    <div className="flex aspect-[4/3] items-center justify-center overflow-hidden rounded-lg border border-dashed border-white/75 bg-white/55">
+                      {formAssets.mainImage ? (
+                        // eslint-disable-next-line @next/next/no-img-element
+                        <img src={formAssets.mainImage.dataUrl} alt="产品主图预览" className="h-full w-full object-cover" />
+                      ) : (
+                        <div className="text-center text-xs text-muted-foreground">
+                          <ImageIcon className="mx-auto mb-2 h-6 w-6" />
+                          上传 1 张主图
+                        </div>
+                      )}
+                    </div>
+                    <div className="flex gap-2">
+                      <input
+                        ref={fileInputRef}
+                        type="file"
+                        accept="image/png,image/jpeg,image/webp"
+                        className="hidden"
+                        onChange={handleImageSelect}
+                      />
+                      <Button
+                        type="button"
+                        variant="outline"
+                        size="sm"
+                        className="h-9 flex-1 gap-1.5 rounded-lg border-white/70 bg-white/70"
+                        disabled={imageProcessing}
+                        onClick={() => fileInputRef.current?.click()}
+                      >
+                        <Upload className="h-4 w-4" />
+                        {imageProcessing ? '处理中...' : formAssets.mainImage ? '更换图片' : '上传图片'}
+                      </Button>
+                      {formAssets.mainImage && (
+                        <Button
+                          type="button"
+                          variant="outline"
+                          size="icon"
+                          className="h-9 w-9 rounded-lg border-white/70 bg-white/70"
+                          title="移除主图"
+                          onClick={() => setFormAssets((current) => ({ ...current, mainImage: undefined }))}
+                        >
+                          <X className="h-4 w-4" />
+                        </Button>
+                      )}
+                    </div>
+                    <p className="text-xs leading-5 text-muted-foreground">
+                      图片会压缩后保存到现有产品资料字段，适合 1 张主图预览。
+                    </p>
+                    {imageError && <p className="text-xs text-destructive">{imageError}</p>}
+                  </div>
+
+                  <Field label="图片/素材说明" icon={ImageIcon}>
                     <Textarea
-                      value={formData.imageAndResourceLinks}
-                      onChange={(event) =>
-                        setFormData({ ...formData, imageAndResourceLinks: event.target.value })
-                      }
-                      placeholder="产品图片、说明书、媒体包、网盘资料等，每行一个链接或附上说明..."
-                      rows={4}
-                      className="rounded-lg border-white/65 bg-white/75"
-                    />
-                  </Field>
-                  <Field label="内部备注" icon={FileText}>
-                    <Textarea
-                      value={formData.notes}
-                      onChange={(event) => setFormData({ ...formData, notes: event.target.value })}
-                      placeholder="记录库存、生命周期、内部负责人或其他仅供团队参考的信息..."
-                      rows={4}
+                      value={formAssets.resourceNotes}
+                      onChange={(event) => setFormAssets({ ...formAssets, resourceNotes: event.target.value })}
+                      placeholder="可填写素材包链接、网盘链接、说明书链接，或提醒自己这张图适合哪个市场..."
+                      rows={10}
                       className="rounded-lg border-white/65 bg-white/75"
                     />
                   </Field>
@@ -480,143 +581,190 @@ export function ProductDatabaseSettings({ expanded, onToggle }: ProductDatabaseS
               <Separator />
 
               <section className="space-y-4">
-                <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+                <button
+                  type="button"
+                  className="flex w-full items-center justify-between rounded-lg border border-white/65 bg-white/45 px-4 py-3 text-left"
+                  onClick={() => setAdvancedOpen((current) => !current)}
+                >
                   <div>
-                    <h3 className="text-sm font-semibold">市场与站点推广资料</h3>
+                    <h3 className="text-sm font-semibold">高级资料</h3>
                     <p className="mt-1 text-xs text-muted-foreground">
-                      同一产品可分别设置西班牙、荷兰等市场的链接、预算和合作要求。
+                      技术参数、内部备注、不同国家/站点的推广要求，平时可以不填。
                     </p>
                   </div>
-                  <Button type="button" variant="outline" size="sm" className="h-9 gap-1.5 rounded-lg border-white/70 bg-white/65" onClick={addMarket}>
-                    <Plus className="h-4 w-4" />
-                    添加市场
-                  </Button>
-                </div>
+                  {advancedOpen ? (
+                    <ChevronUp className="h-4 w-4 text-muted-foreground" />
+                  ) : (
+                    <ChevronDown className="h-4 w-4 text-muted-foreground" />
+                  )}
+                </button>
 
-                <div className="space-y-4">
-                  {formData.marketProfiles.map((market, index) => (
-                    <div key={market.id} className="overflow-hidden rounded-lg border border-white/65 bg-white/55">
-                      <div className="flex items-center justify-between border-b border-white/60 bg-white/55 px-4 py-3">
-                        <div className="flex items-center gap-2">
-                          <Globe2 className="h-4 w-4 text-muted-foreground" />
-                          <span className="text-sm font-medium">
-                            {market.targetMarket || market.siteName || `市场配置 ${index + 1}`}
-                          </span>
+                {advancedOpen && (
+                  <div className="space-y-6">
+                    <div className="grid gap-4 lg:grid-cols-2">
+                      <Field label="技术参数" icon={FileText}>
+                        <Textarea
+                          value={formData.technicalSpecifications}
+                          onChange={(event) =>
+                            setFormData({ ...formData, technicalSpecifications: event.target.value })
+                          }
+                          placeholder="容量、功率、接口、尺寸、重量、充电时间等，可直接粘贴完整参数..."
+                          rows={5}
+                          className="rounded-lg border-white/65 bg-white/75"
+                        />
+                      </Field>
+                      <Field label="内部备注" icon={FileText}>
+                        <Textarea
+                          value={formData.notes}
+                          onChange={(event) => setFormData({ ...formData, notes: event.target.value })}
+                          placeholder="库存、生命周期、内部负责人、价格底线等仅供团队参考的信息..."
+                          rows={5}
+                          className="rounded-lg border-white/65 bg-white/75"
+                        />
+                      </Field>
+                    </div>
+
+                    <div className="space-y-4">
+                      <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+                        <div>
+                          <h4 className="text-sm font-semibold">市场与站点推广资料</h4>
+                          <p className="mt-1 text-xs text-muted-foreground">
+                            同一产品可以分别设置西班牙、荷兰等市场的链接、预算和合作要求。
+                          </p>
                         </div>
-                        <Button
-                          type="button"
-                          variant="ghost"
-                          size="icon"
-                          className="h-8 w-8 rounded-lg text-muted-foreground hover:bg-white/80 hover:text-destructive"
-                          title="删除这个市场配置"
-                          onClick={() => removeMarket(market.id)}
-                        >
-                          <Trash2 className="h-4 w-4" />
+                        <Button type="button" variant="outline" size="sm" className="h-9 gap-1.5 rounded-lg border-white/70 bg-white/65" onClick={addMarket}>
+                          <Plus className="h-4 w-4" />
+                          添加市场
                         </Button>
                       </div>
 
-                      <div className="space-y-4 p-4">
-                        <div className="grid gap-4 md:grid-cols-2">
-                          <Field label="目标市场" icon={Globe2}>
-                            <Input
-                              value={market.targetMarket}
-                              onChange={(event) => updateMarket(market.id, 'targetMarket', event.target.value)}
-                              placeholder="例如：西班牙、荷兰、德国"
-                              className="rounded-lg border-white/65 bg-white/75"
-                            />
-                          </Field>
-                          <Field label="站点或项目名称" icon={Store}>
-                            <Input
-                              value={market.siteName}
-                              onChange={(event) => updateMarket(market.id, 'siteName', event.target.value)}
-                              placeholder="例如：Aferiy ES / 2026 夏季推广"
-                              className="rounded-lg border-white/65 bg-white/75"
-                            />
-                          </Field>
-                        </div>
+                      <div className="space-y-4">
+                        {formData.marketProfiles.map((market, index) => (
+                          <div key={market.id} className="overflow-hidden rounded-lg border border-white/65 bg-white/55">
+                            <div className="flex items-center justify-between border-b border-white/60 bg-white/55 px-4 py-3">
+                              <div className="flex items-center gap-2">
+                                <Globe2 className="h-4 w-4 text-muted-foreground" />
+                                <span className="text-sm font-medium">
+                                  {market.targetMarket || market.siteName || `市场配置 ${index + 1}`}
+                                </span>
+                              </div>
+                              <Button
+                                type="button"
+                                variant="ghost"
+                                size="icon"
+                                className="h-8 w-8 rounded-lg text-muted-foreground hover:bg-white/80 hover:text-destructive"
+                                title="删除这个市场配置"
+                                onClick={() => removeMarket(market.id)}
+                              >
+                                <Trash2 className="h-4 w-4" />
+                              </Button>
+                            </div>
 
-                        <Field label="当地产品链接" icon={Link2}>
-                          <Input
-                            value={market.localProductUrl}
-                            onChange={(event) => updateMarket(market.id, 'localProductUrl', event.target.value)}
-                            placeholder="该国家或站点对应的产品页面链接"
-                            className="rounded-lg border-white/65 bg-white/75"
-                          />
-                        </Field>
+                            <div className="space-y-4 p-4">
+                              <div className="grid gap-4 md:grid-cols-2">
+                                <Field label="目标市场" icon={Globe2}>
+                                  <Input
+                                    value={market.targetMarket}
+                                    onChange={(event) => updateMarket(market.id, 'targetMarket', event.target.value)}
+                                    placeholder="例如：西班牙、荷兰、德国"
+                                    className="rounded-lg border-white/65 bg-white/75"
+                                  />
+                                </Field>
+                                <Field label="站点或项目名称" icon={Store}>
+                                  <Input
+                                    value={market.siteName}
+                                    onChange={(event) => updateMarket(market.id, 'siteName', event.target.value)}
+                                    placeholder="例如：Aferiy ES / 2026 夏季推广"
+                                    className="rounded-lg border-white/65 bg-white/75"
+                                  />
+                                </Field>
+                              </div>
 
-                        <div className="grid gap-4 lg:grid-cols-2">
-                          <Field label="目标红人类型" icon={Users}>
-                            <Textarea
-                              value={market.targetInfluencerType}
-                              onChange={(event) =>
-                                updateMarket(market.id, 'targetInfluencerType', event.target.value)
-                              }
-                              placeholder="描述频道领域、粉丝量级、内容风格、受众和排除条件..."
-                              rows={4}
-                              className="rounded-lg border-white/65 bg-white/75"
-                            />
-                          </Field>
-                          <Field label="推广预算" icon={WalletCards}>
-                            <Textarea
-                              value={market.promotionBudget}
-                              onChange={(event) =>
-                                updateMarket(market.id, 'promotionBudget', event.target.value)
-                              }
-                              placeholder="例如：单条视频 500-1000 欧元，可接受产品置换；总预算约 8000 欧元..."
-                              rows={4}
-                              className="rounded-lg border-white/65 bg-white/75"
-                            />
-                          </Field>
-                        </div>
+                              <Field label="当地产品链接" icon={Link2}>
+                                <Input
+                                  value={market.localProductUrl}
+                                  onChange={(event) => updateMarket(market.id, 'localProductUrl', event.target.value)}
+                                  placeholder="该国家或站点对应的产品页面链接"
+                                  className="rounded-lg border-white/65 bg-white/75"
+                                />
+                              </Field>
 
-                        <Field label="合作要求" icon={FileText}>
-                          <Textarea
-                            value={market.cooperationRequirements}
-                            onChange={(event) =>
-                              updateMarket(market.id, 'cooperationRequirements', event.target.value)
-                            }
-                            placeholder="视频形式、时长、交付物、发布时间、链接、折扣码、素材授权等..."
-                            rows={4}
-                            className="rounded-lg border-white/65 bg-white/75"
-                          />
-                        </Field>
+                              <div className="grid gap-4 lg:grid-cols-2">
+                                <Field label="目标红人类型" icon={Users}>
+                                  <Textarea
+                                    value={market.targetInfluencerType}
+                                    onChange={(event) =>
+                                      updateMarket(market.id, 'targetInfluencerType', event.target.value)
+                                    }
+                                    placeholder="频道领域、粉丝量级、内容风格、受众和排除条件..."
+                                    rows={4}
+                                    className="rounded-lg border-white/65 bg-white/75"
+                                  />
+                                </Field>
+                                <Field label="推广预算" icon={WalletCards}>
+                                  <Textarea
+                                    value={market.promotionBudget}
+                                    onChange={(event) =>
+                                      updateMarket(market.id, 'promotionBudget', event.target.value)
+                                    }
+                                    placeholder="例如：单条视频 500-1000 欧元，可接受产品置换..."
+                                    rows={4}
+                                    className="rounded-lg border-white/65 bg-white/75"
+                                  />
+                                </Field>
+                              </div>
 
-                        <div className="grid gap-4 lg:grid-cols-2">
-                          <Field label="必须提及的内容" icon={FileText}>
-                            <Textarea
-                              value={market.mustMention}
-                              onChange={(event) => updateMarket(market.id, 'mustMention', event.target.value)}
-                              placeholder="必须出现的卖点、演示场景、品牌名称、活动信息或免责声明..."
-                              rows={4}
-                              className="rounded-lg border-white/65 bg-white/75"
-                            />
-                          </Field>
-                          <Field label="禁止宣传的内容" icon={FileText}>
-                            <Textarea
-                              value={market.prohibitedContent}
-                              onChange={(event) =>
-                                updateMarket(market.id, 'prohibitedContent', event.target.value)
-                              }
-                              placeholder="不可使用的绝对化说法、竞品攻击、错误参数、安全风险表述等..."
-                              rows={4}
-                              className="rounded-lg border-white/65 bg-white/75"
-                            />
-                          </Field>
-                        </div>
+                              <Field label="合作要求" icon={FileText}>
+                                <Textarea
+                                  value={market.cooperationRequirements}
+                                  onChange={(event) =>
+                                    updateMarket(market.id, 'cooperationRequirements', event.target.value)
+                                  }
+                                  placeholder="视频形式、时长、交付物、发布时间、链接、折扣码、素材授权等..."
+                                  rows={4}
+                                  className="rounded-lg border-white/65 bg-white/75"
+                                />
+                              </Field>
 
-                        <Field label="当地图片和资料链接" icon={ImageIcon}>
-                          <Textarea
-                            value={market.localAssetLinks}
-                            onChange={(event) => updateMarket(market.id, 'localAssetLinks', event.target.value)}
-                            placeholder="当地语言素材、站点图片、价格表、活动页面等..."
-                            rows={3}
-                            className="rounded-lg border-white/65 bg-white/75"
-                          />
-                        </Field>
+                              <div className="grid gap-4 lg:grid-cols-2">
+                                <Field label="必须提及的内容" icon={FileText}>
+                                  <Textarea
+                                    value={market.mustMention}
+                                    onChange={(event) => updateMarket(market.id, 'mustMention', event.target.value)}
+                                    placeholder="必须出现的卖点、演示场景、品牌名称、活动信息或免责声明..."
+                                    rows={4}
+                                    className="rounded-lg border-white/65 bg-white/75"
+                                  />
+                                </Field>
+                                <Field label="禁止宣传的内容" icon={FileText}>
+                                  <Textarea
+                                    value={market.prohibitedContent}
+                                    onChange={(event) =>
+                                      updateMarket(market.id, 'prohibitedContent', event.target.value)
+                                    }
+                                    placeholder="不可使用的绝对化说法、竞品攻击、错误参数、安全风险表述等..."
+                                    rows={4}
+                                    className="rounded-lg border-white/65 bg-white/75"
+                                  />
+                                </Field>
+                              </div>
+
+                              <Field label="当地图片和资料链接" icon={ImageIcon}>
+                                <Textarea
+                                  value={market.localAssetLinks}
+                                  onChange={(event) => updateMarket(market.id, 'localAssetLinks', event.target.value)}
+                                  placeholder="当地语言素材、站点图片、价格表、活动页面等..."
+                                  rows={3}
+                                  className="rounded-lg border-white/65 bg-white/75"
+                                />
+                              </Field>
+                            </div>
+                          </div>
+                        ))}
                       </div>
                     </div>
-                  ))}
-                </div>
+                  </div>
+                )}
               </section>
             </div>
 
@@ -640,7 +788,7 @@ export function ProductDatabaseSettings({ expanded, onToggle }: ProductDatabaseS
           <AlertDialogHeader>
             <AlertDialogTitle>删除这条产品资料？</AlertDialogTitle>
             <AlertDialogDescription>
-              将删除“{deletingProduct?.name}”及其全部市场推广配置。此操作无法撤销。
+              将删除“{deletingProduct?.name}”以及它的高级市场配置。此操作无法撤销。
             </AlertDialogDescription>
           </AlertDialogHeader>
           <AlertDialogFooter>

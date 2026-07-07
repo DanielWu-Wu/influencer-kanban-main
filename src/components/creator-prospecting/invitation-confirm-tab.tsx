@@ -255,15 +255,59 @@ function OutreachContextPreview({ context }: { context: OutreachAiContext }) {
       <div>
         <p className="text-xs font-medium text-muted-foreground">选中产品资料</p>
         {product ? (
-          <div className="mt-1 space-y-2 rounded-md bg-white p-3 leading-6">
-            <p className="font-medium">{[product.model, product.name].filter(Boolean).join(' · ')}</p>
-            <p className="whitespace-pre-wrap text-muted-foreground">
-              {product.sellingPoints || '产品数据库暂无卖点资料。'}
-            </p>
+          <div className="mt-1 grid gap-3 rounded-md bg-white p-3 leading-6 sm:grid-cols-[160px_minmax(0,1fr)]">
+            <div className="flex aspect-[4/3] items-center justify-center overflow-hidden rounded-md border bg-slate-50">
+              {product.productImage.previewDataUrl ? (
+                // eslint-disable-next-line @next/next/no-img-element
+                <img
+                  src={product.productImage.previewDataUrl}
+                  alt={`${product.name} 产品主图`}
+                  className="h-full w-full object-cover"
+                />
+              ) : (
+                <span className="px-3 text-center text-xs text-muted-foreground">暂无产品主图</span>
+              )}
+            </div>
+            <div className="min-w-0 space-y-2">
+              <p className="font-medium">{[product.model, product.name].filter(Boolean).join(' · ')}</p>
+              {product.productUrl && (
+                <a
+                  href={product.productUrl}
+                  target="_blank"
+                  rel="noreferrer"
+                  className="inline-flex max-w-full items-center gap-1 truncate text-xs text-primary hover:underline"
+                >
+                  <ExternalLink className="h-3.5 w-3.5 shrink-0" />
+                  {product.productUrl}
+                </a>
+              )}
+              <div>
+                <p className="text-xs font-medium text-muted-foreground">产品描述卖点</p>
+                <p className="mt-1 whitespace-pre-wrap text-muted-foreground">
+                  {product.sellingPoints || '产品数据库暂无卖点资料。AI 只能收到产品名称，请先补充产品卖点。'}
+                </p>
+              </div>
+              {product.technicalSpecifications && (
+                <div>
+                  <p className="text-xs font-medium text-muted-foreground">技术参数</p>
+                  <p className="mt-1 whitespace-pre-wrap text-muted-foreground">
+                    {product.technicalSpecifications}
+                  </p>
+                </div>
+              )}
+              {product.imageAndResourceLinks && (
+                <div>
+                  <p className="text-xs font-medium text-muted-foreground">图片/素材说明</p>
+                  <p className="mt-1 whitespace-pre-wrap text-muted-foreground">
+                    {product.imageAndResourceLinks}
+                  </p>
+                </div>
+              )}
+            </div>
           </div>
         ) : (
           <p className="mt-1 rounded-md bg-white p-3 text-muted-foreground">
-            当前选项尚未关联产品数据库资料，AI 只会收到产品名称。
+            当前选项尚未关联产品数据库资料，AI 只能收到产品名称。请先到设置里的产品数据库补充产品链接和卖点。
           </p>
         )}
       </div>

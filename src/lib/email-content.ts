@@ -30,9 +30,24 @@ function escapeHtml(value: string) {
     .replace(/"/g, '&quot;');
 }
 
+function linkifyEmailText(value: string) {
+  const withMarkdownLinks = value.replace(
+    /\[([^\]\n]+)\]\((https?:\/\/[^\s)]+)\)/g,
+    '<a href="$2">$1</a>',
+  );
+  return withMarkdownLinks.replace(
+    /(^|[\s>])((https?:\/\/|www\.)[^\s<]+)/g,
+    (match, prefix: string, url: string) => {
+      if (match.includes('href=')) return match;
+      const href = url.startsWith('www.') ? `https://${url}` : url;
+      return `${prefix}<a href="${href}">${url}</a>`;
+    },
+  );
+}
+
 export function textToEmailHtml(value: string) {
   if (/<[a-z][\s\S]*>/i.test(value)) return value;
-  return escapeHtml(value).replace(/\r?\n/g, '<br>');
+  return linkifyEmailText(escapeHtml(value)).replace(/\r?\n/g, '<br>');
 }
 
 export function sanitizeEmailHtml(value: string) {

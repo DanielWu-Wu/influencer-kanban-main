@@ -289,6 +289,12 @@ confidence 使用 0 到 100 的整数。
       const systemPrompt = withCustomInstructions(
         `${DEFAULT_OUTREACH_PROMPT}
 
+产品资料使用规则：
+1. 只使用 products 中当前选中产品的产品名、链接、卖点、技术参数和素材说明。
+2. 根据频道简介和最近长视频，从产品卖点中挑选 2-3 个最相关的点进行个性化表达，不要把所有参数机械堆砌进邮件。
+3. 不要编造未提供的功率、容量、价格、折扣、质保、认证、库存、发货时效或安全结论。
+4. productImage.hasMainImage 只表示用户上传了主图，AI 不能读取图片内容，也不能基于图片做事实判断。
+
 称呼规则：
 1. channel.contactName 有值时，只使用这个已确认姓名作为联系人称呼。
 2. channel.contactName 为空时，不得猜测人名；使用频道名或自然的团队称呼。
@@ -296,6 +302,11 @@ confidence 使用 0 到 100 的整数。
 只返回以下 JSON，不要添加其他文字：
 {
   "subject": "邮件主题",
+  "subjectOptions": [
+    {"subject": "备选邮件主题 1，使用目标语言", "translatedSubject": "备选邮件主题 1 的中文翻译"},
+    {"subject": "备选邮件主题 2，使用目标语言", "translatedSubject": "备选邮件主题 2 的中文翻译"},
+    {"subject": "备选邮件主题 3，使用目标语言", "translatedSubject": "备选邮件主题 3 的中文翻译"}
+  ],
   "body": "用目标语言撰写的完整开发信正文",
   "translatedBody": "外语邮件正文的完整中文翻译",
   "translatedSummary": "中文解释，包括邮件意图和主要内容",
@@ -346,7 +357,22 @@ ${String(body.userPreference || '').trim() || '无'}
           { role: 'user', content: userPrompt },
         ],
         getModelOptions(body, 0.55),
-      ));
+      )) as Record<string, unknown>;
+      const subject = String(result.subject || '').trim();
+      const subjectOptions = safeArray(result.subjectOptions)
+        .map((item) => {
+          const option = item as Record<string, unknown>;
+          return {
+            subject: String(option.subject || '').trim(),
+            translatedSubject: String(option.translatedSubject || '').trim(),
+          };
+        })
+        .filter((item) => item.subject)
+        .slice(0, 3);
+      if (subject && !subjectOptions.some((item) => item.subject === subject)) {
+        subjectOptions.unshift({ subject, translatedSubject: '' });
+      }
+      result.subjectOptions = subjectOptions.slice(0, 3);
       return NextResponse.json({ success: true, data: result });
     }
 

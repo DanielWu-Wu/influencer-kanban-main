@@ -1,4 +1,5 @@
 import type { Prospect } from '@/lib/creator-prospecting';
+import { parseProductResources, productResourcesForAi } from '@/lib/product-assets';
 import type { Product } from '@/lib/types';
 
 export type OutreachContextSettings = {
@@ -29,6 +30,11 @@ export type OutreachAiContext = {
     sellingPoints: string;
     technicalSpecifications: string;
     imageAndResourceLinks: string;
+    productImage: {
+      hasMainImage: boolean;
+      fileName: string;
+      previewDataUrl?: string;
+    };
     marketProfiles: Product['marketProfiles'];
   }>;
   targetProduct: string;
@@ -54,15 +60,34 @@ function selectedProductForAi(products: Product[], targetProduct?: string) {
     && [item.name, item.model].some((value) => value.trim().toLowerCase() === normalizedTarget)
   ));
   if (!product) return [];
+  const resources = parseProductResources(product.imageAndResourceLinks);
   return [{
     name: product.name,
     model: product.model,
     productUrl: product.productUrl,
     sellingPoints: product.sellingPoints,
     technicalSpecifications: product.technicalSpecifications,
-    imageAndResourceLinks: product.imageAndResourceLinks,
+    imageAndResourceLinks: productResourcesForAi(product.imageAndResourceLinks),
+    productImage: {
+      hasMainImage: Boolean(resources.mainImage),
+      fileName: resources.mainImage?.fileName || '',
+      previewDataUrl: resources.mainImage?.dataUrl,
+    },
     marketProfiles: product.marketProfiles,
   }];
+}
+
+export function stripOutreachPreviewData(context: OutreachAiContext): OutreachAiContext {
+  return {
+    ...context,
+    products: context.products.map((product) => ({
+      ...product,
+      productImage: {
+        hasMainImage: product.productImage.hasMainImage,
+        fileName: product.productImage.fileName,
+      },
+    })),
+  };
 }
 
 export function buildOutreachAiContext(

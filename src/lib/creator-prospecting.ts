@@ -55,7 +55,13 @@ export type RecentVideo = {
 
 export type OutreachDraft = {
   subject: string;
+  subjectOptions?: Array<{
+    subject: string;
+    translatedSubject: string;
+  }>;
   body: string;
+  productImagePlacement?: number;
+  productImageIncluded?: boolean;
   translatedBody?: string;
   translatedSummary?: string;
   personalizationNotes?: string[];
