@@ -210,6 +210,14 @@ function buildDevelopmentSyncFields(prospect: Prospect, mapping: FeishuFieldMapp
   return fields;
 }
 
+function buildFirstOutreachSentFields(prospect: Prospect, mapping: FeishuFieldMapping) {
+  const fields: Record<string, unknown> = {};
+  putMappedField(fields, mapping, 'firstOutreach', '已发');
+  putMappedField(fields, mapping, 'prospectingStatus', WORKFLOW_META[prospect.workflowStatus].label);
+  putMappedField(fields, mapping, 'gmailDraftId', prospect.gmailDraftId);
+  return fields;
+}
+
 function flattenFeishuValue(value: unknown): string {
   if (value === null || value === undefined) return '';
   if (typeof value === 'string' || typeof value === 'number') return String(value);
@@ -617,7 +625,7 @@ export function CreatorProspectingPage() {
     [prospects],
   );
   const outreachProspects = useMemo(
-    () => prospects.filter((item) => ['outreach_pending', 'outreach_generated', 'gmail_draft_saved'].includes(item.workflowStatus)),
+    () => prospects.filter((item) => ['outreach_pending', 'outreach_generated'].includes(item.workflowStatus)),
     [prospects],
   );
   const tabCounts = useMemo(() => ({
@@ -745,6 +753,48 @@ export function CreatorProspectingPage() {
     } catch (error) {
       updateProspect(prospect.id, { syncError: error instanceof Error ? error.message : '飞书状态同步失败。' });
       return false;
+    }
+  };
+
+  const handleWriteFirstOutreachSent = async (prospect: Prospect, patch: Partial<Prospect> = {}) => {
+    if (!settings.feishuProspectingUrl) {
+      toast.error('请先在设置中连接“红人开发情况表”。');
+      return;
+    }
+    const next = { ...prospect, ...patch } as Prospect;
+    if (!next.feishuRecordId) {
+      toast.error('这条线索还没有关联飞书开发记录，暂时不能写回“初次开发信”。');
+      return;
+    }
+    const mapping = settings.feishuProspectingFieldMapping || {};
+    if (!mapping.firstOutreach) {
+      toast.error('请先在飞书开发记录表字段映射中配置“初次开发信”字段。');
+      return;
+    }
+    const fields = buildFirstOutreachSentFields(next, mapping);
+    if (!Object.keys(fields).length) {
+      toast.error('没有可写入的飞书字段，请检查字段映射。');
+      return;
+    }
+    try {
+      const response = await fetch('/api/feishu/records', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          action: 'update',
+          url: settings.feishuProspectingUrl,
+          recordId: next.feishuRecordId,
+          fields,
+        }),
+      });
+      const result = await response.json();
+      if (!response.ok || !result.success) throw new Error(getErrorMessage(result, '飞书写回失败。'));
+      updateProspect(next.id, { syncError: undefined });
+      toast.success('已写回飞书：初次开发信 = 已发。');
+    } catch (error) {
+      const message = error instanceof Error ? error.message : '飞书写回失败。';
+      updateProspect(next.id, { syncError: message });
+      toast.error(message);
     }
   };
 
@@ -1280,8 +1330,19 @@ export function CreatorProspectingPage() {
       const synced = await syncFeishuProspect(prospect, patch);
       toast[ synced ? 'success' : 'warning' ](
         synced
-          ? 'Gmail 草稿已保存，飞书状态已更新。请前往 Gmail 手动检查和发送。'
-          : 'Gmail 草稿已保存，但飞书状态同步失败。邮件没有被自动发送。',
+          ? 'Gmail 草稿已保存，这条线索已从开发信队列移出。请前往 Gmail 手动检查和发送。'
+          : 'Gmail 草稿已保存，这条线索已从开发信队列移出，但飞书状态同步失败。邮件没有被自动发送。',
+        {
+          action: {
+            label: (
+              <span title="写回：初次开发信=已发、Gmail 草稿 ID 和开发状态">
+                写回飞书
+              </span>
+            ),
+            onClick: () => void handleWriteFirstOutreachSent(prospect, patch),
+          },
+          duration: 12000,
+        },
       );
     } catch (error) {
       toast.error(error instanceof Error ? error.message : '保存 Gmail 草稿失败。');
