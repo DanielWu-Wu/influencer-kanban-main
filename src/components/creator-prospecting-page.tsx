@@ -1436,6 +1436,7 @@ export function CreatorProspectingPage() {
             onAddResources={openResourcePreview}
             onCreateRecords={openDevelopmentPreview}
             onConfirmInvitation={handleConfirmInvitation}
+            onPatch={updateProspect}
             onToggleSelected={(id, checked) => setSelectedIds((current) => (
               checked ? Array.from(new Set([...current, id])) : current.filter((item) => item !== id)
             ))}

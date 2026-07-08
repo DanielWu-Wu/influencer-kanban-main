@@ -53,6 +53,7 @@ type Props = {
   onAddResources: (items: Prospect[]) => void;
   onCreateRecords: (items: Prospect[]) => void;
   onConfirmInvitation: (items: Prospect[]) => void;
+  onPatch: (id: string, patch: Partial<Prospect>) => void;
   onToggleSelected: (id: string, checked: boolean) => void;
   onToggleAll: (ids: string[], checked: boolean) => void;
   onConfirmSuspected: (id: string) => void;
@@ -77,6 +78,7 @@ export function InfluencerImportTab({
   onAddResources,
   onCreateRecords,
   onConfirmInvitation,
+  onPatch,
   onToggleSelected,
   onToggleAll,
   onConfirmSuspected,
@@ -241,15 +243,32 @@ export function InfluencerImportTab({
                   </TableCell>
                   <TableCell className="text-right tabular-nums">{formatCompactNumber(prospect.subscriberCount)}</TableCell>
                   <TableCell className="text-right tabular-nums">{formatCompactNumber(prospect.recentAverageViews)}</TableCell>
-                  <TableCell>
-                    {prospect.publicEmail ? (
-                      <span className="text-emerald-700">已获取</span>
-                    ) : (
-                      <span className="inline-flex items-center gap-1 text-amber-700">
-                        <AlertTriangle className="h-3.5 w-3.5" />
-                        待补充
-                      </span>
-                    )}
+                  <TableCell className="min-w-52">
+                    <Input
+                      type="email"
+                      value={prospect.publicEmail || ''}
+                      onChange={(event) => onPatch(prospect.id, {
+                        publicEmail: event.target.value,
+                        emailStatus: event.target.value.trim()
+                          ? (prospect.emailStatus === 'available' ? 'available' : 'manual')
+                          : 'missing',
+                      })}
+                      placeholder="填写邮箱"
+                      className="h-8 bg-white"
+                    />
+                    <p className={`mt-1 flex items-center gap-1 text-xs ${
+                      prospect.publicEmail ? 'text-emerald-700' : 'text-amber-700'
+                    }`}
+                    >
+                      {prospect.publicEmail ? (
+                        '会写入资源库和开发记录表'
+                      ) : (
+                        <>
+                          <AlertTriangle className="h-3.5 w-3.5" />
+                          未填邮箱时双表邮箱为空
+                        </>
+                      )}
+                    </p>
                   </TableCell>
                   <TableCell>
                     <p className={resourceStatus.className}>{resourceStatus.label}</p>
