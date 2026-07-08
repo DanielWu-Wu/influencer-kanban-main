@@ -89,6 +89,7 @@ const LANGUAGE_OPTIONS = [
 ] as const;
 
 const MAX_ATTACHMENT_BYTES = 18 * 1024 * 1024;
+const GMAIL_AI_HISTORY_LIMIT = 15;
 
 function extractEmail(value: string) {
   return value.match(/<([^>]+)>/)?.[1] || value.split(',')[0]?.trim() || value;
@@ -182,7 +183,7 @@ export function EmailComposer({
         action: 'contactHistory',
         accessToken,
         contactEmail,
-        maxResults: 50,
+        maxResults: GMAIL_AI_HISTORY_LIMIT,
       }),
     });
     const result = await response.json();
@@ -198,7 +199,7 @@ export function EmailComposer({
     });
     return [...byId.values()]
       .sort((a, b) => new Date(a.date || 0).getTime() - new Date(b.date || 0).getTime())
-      .slice(-50);
+      .slice(-GMAIL_AI_HISTORY_LIMIT);
   };
 
   const analyzeThread = async () => {
@@ -461,9 +462,9 @@ export function EmailComposer({
         <div className="flex items-center gap-3 rounded-lg border p-4">
           <Loader2 className="h-5 w-5 animate-spin text-primary" />
           <div>
-            <p className="text-sm font-medium">正在读取联系人历史并分析合作情况</p>
+            <p className="text-sm font-medium">正在快速分析最近往来</p>
             <p className="text-xs text-muted-foreground">
-              将读取与该邮箱最近最多 50 封邮件，不限于当前线程。
+              默认读取与该邮箱最近最多 {GMAIL_AI_HISTORY_LIMIT} 封邮件，不限于当前线程。
             </p>
           </div>
         </div>
@@ -534,7 +535,7 @@ export function EmailComposer({
       {mode === 'ai' && analysis && !suggestion && (
         <>
           <div className="flex items-center justify-between rounded-md bg-muted/40 px-3 py-2 text-xs text-muted-foreground">
-            <span>本次分析已合并当前线程和联系人历史邮件</span>
+            <span>本次快速分析已合并当前线程和最近联系人历史</span>
             <Badge variant="outline">{historyMessages.length} 封</Badge>
           </div>
           <div className="grid gap-3 sm:grid-cols-2">

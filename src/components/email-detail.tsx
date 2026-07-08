@@ -334,6 +334,7 @@ export function EmailDetail({ thread, onBack, onThreadUpdated }: EmailDetailProp
   };
 
   const [translatingIds, setTranslatingIds] = useState<Set<string>>(new Set());
+  const [translatingQuotedIds, setTranslatingQuotedIds] = useState<Set<string>>(new Set());
   const [showingTranslationIds, setShowingTranslationIds] = useState<Set<string>>(new Set());
   const [translateErrors, setTranslateErrors] = useState<Record<string, string>>({});
   const [translationProgress, setTranslationProgress] = useState<Record<string, string>>({});
@@ -692,45 +693,11 @@ export function EmailDetail({ thread, onBack, onThreadUpdated }: EmailDetailProp
       addTranslation({
         messageId: message.id,
         originalText,
-        translatedText: hasQuotedHistory
-          ? `${currentTranslation}\n\n---\n【引用历史翻译】\n正在继续翻译邮件引用历史...`
-          : currentTranslation,
+        translatedText: currentTranslation,
         sourceLang: currentResult.sourceLang,
         targetLang: 'zh',
       });
       setShowingTranslationIds((current) => new Set(current).add(message.id));
-
-      if (hasQuotedHistory) {
-        setTranslationProgress((current) => ({
-          ...current,
-          [message.id]: '当前邮件已翻译，正在继续翻译引用历史...',
-        }));
-
-        try {
-          const quotedResult = await requestTranslation(quotedText);
-          addTranslation({
-            messageId: message.id,
-            originalText,
-            translatedText: `${currentTranslation}\n\n---\n【引用历史翻译】\n${quotedResult.translatedText}`,
-            sourceLang: currentResult.sourceLang,
-            targetLang: 'zh',
-          });
-        } catch (quotedError) {
-          setTranslateErrors((current) => ({
-            ...current,
-            [message.id]: `当前邮件已翻译，引用历史翻译失败：${
-              quotedError instanceof Error ? quotedError.message : '请稍后重试'
-            }`,
-          }));
-          addTranslation({
-            messageId: message.id,
-            originalText,
-            translatedText: `${currentTranslation}\n\n---\n【引用历史翻译】\n引用历史暂时翻译失败，可以稍后再试。`,
-            sourceLang: currentResult.sourceLang,
-            targetLang: 'zh',
-          });
-        }
-      }
     } catch (error) {
       setTranslateErrors((current) => ({
         ...current,
@@ -738,6 +705,68 @@ export function EmailDetail({ thread, onBack, onThreadUpdated }: EmailDetailProp
       }));
     } finally {
       setTranslatingIds((current) => {
+        const next = new Set(current);
+        next.delete(message.id);
+        return next;
+      });
+      setTranslationProgress((current) => {
+        const next = { ...current };
+        delete next[message.id];
+        return next;
+      });
+    }
+  };
+
+  const hasQuotedHistory = (message: GmailMessage) => {
+    const originalText = repairTextEncoding(message.body);
+    return Boolean(splitEmailForTranslation(originalText).quotedText.trim());
+  };
+
+  const hasCompletedQuotedTranslation = (translatedText: string) =>
+    translatedText.includes('【引用历史翻译】')
+    && !translatedText.includes('正在继续翻译邮件引用历史')
+    && !translatedText.includes('引用历史暂时翻译失败');
+
+  const handleTranslateQuotedHistory = async (message: GmailMessage) => {
+    const existingTranslation = getTranslation(message.id);
+    if (!existingTranslation || hasCompletedQuotedTranslation(existingTranslation.translatedText)) return;
+
+    const originalText = repairTextEncoding(message.body);
+    const { quotedText } = splitEmailForTranslation(originalText);
+    if (!quotedText.trim()) return;
+
+    setTranslatingQuotedIds((current) => new Set(current).add(message.id));
+    setTranslateErrors((current) => {
+      const next = { ...current };
+      delete next[message.id];
+      return next;
+    });
+    setTranslationProgress((current) => ({
+      ...current,
+      [message.id]: '正在翻译引用历史...',
+    }));
+
+    try {
+      const quotedResult = await requestTranslation(quotedText);
+      const baseTranslation = existingTranslation.translatedText
+        .replace(/\n\n---\n【引用历史翻译】\n正在继续翻译邮件引用历史\.\.\.$/, '')
+        .replace(/\n\n---\n【引用历史翻译】\n引用历史暂时翻译失败，可以稍后再试。$/, '');
+
+      addTranslation({
+        messageId: message.id,
+        originalText,
+        translatedText: `${baseTranslation}\n\n---\n【引用历史翻译】\n${quotedResult.translatedText}`,
+        sourceLang: existingTranslation.sourceLang || quotedResult.sourceLang,
+        targetLang: 'zh',
+      });
+      setShowingTranslationIds((current) => new Set(current).add(message.id));
+    } catch (error) {
+      setTranslateErrors((current) => ({
+        ...current,
+        [message.id]: `引用历史翻译失败：${error instanceof Error ? error.message : '请稍后重试'}`,
+      }));
+    } finally {
+      setTranslatingQuotedIds((current) => {
         const next = new Set(current);
         next.delete(message.id);
         return next;
@@ -1154,6 +1183,30 @@ export function EmailDetail({ thread, onBack, onThreadUpdated }: EmailDetailProp
                               <Loader2 className="h-3 w-3 animate-spin" />
                               {translationProgress[message.id]}
                             </p>
+                          )}
+                          {hasQuotedHistory(message) && !hasCompletedQuotedTranslation(translation.translatedText) && (
+                            <div className="mt-3 flex items-center justify-between gap-3 rounded-lg border border-blue-100 bg-white/70 px-3 py-2">
+                              <p className="text-xs text-muted-foreground">
+                                检测到这封邮件包含引用历史，默认先翻译当前邮件。
+                              </p>
+                              <Button
+                                type="button"
+                                size="sm"
+                                variant="outline"
+                                className="h-8 shrink-0 rounded-lg bg-white"
+                                disabled={translatingQuotedIds.has(message.id)}
+                                onClick={() => handleTranslateQuotedHistory(message)}
+                              >
+                                {translatingQuotedIds.has(message.id) ? (
+                                  <>
+                                    <Loader2 className="mr-1 h-3 w-3 animate-spin" />
+                                    翻译中
+                                  </>
+                                ) : (
+                                  '继续翻译引用历史'
+                                )}
+                              </Button>
+                            </div>
                           )}
                         </div>
                       ) : displayHtmlBody ? (
