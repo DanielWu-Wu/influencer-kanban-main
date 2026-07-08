@@ -37,6 +37,7 @@ import {
   type Prospect,
   WORKFLOW_META,
 } from '@/lib/creator-prospecting';
+import { outreachLanguageLabel } from '@/lib/outreach-languages';
 
 type Props = {
   prospects: Prospect[];
@@ -238,7 +239,7 @@ export function InfluencerImportTab({
                   <TableCell>
                     <p>{countryLabel(prospect.country)}</p>
                     <p className="text-xs text-muted-foreground">
-                      {prospect.language ? `${prospect.language}${prospect.languageSource === 'inferred' ? '（推断）' : ''}` : '语言未知'}
+                      {prospect.language ? `${outreachLanguageLabel(prospect.language)}${prospect.languageSource === 'inferred' ? '（推断）' : ''}` : '语言未知'}
                     </p>
                   </TableCell>
                   <TableCell className="text-right tabular-nums">{formatCompactNumber(prospect.subscriberCount)}</TableCell>

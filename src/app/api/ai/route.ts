@@ -167,6 +167,40 @@ function safeArray(value: unknown) {
   return Array.isArray(value) ? value : [];
 }
 
+function removeOutreachSignaturePlaceholders(value: unknown) {
+  return String(value || '')
+    .split(/\r?\n/)
+    .filter((line) => {
+      const normalized = line
+        .trim()
+        .replace(/^[\s[*（(【「『]+|[\s\]*）)】」』]+$/g, '')
+        .toLowerCase();
+      if (!normalized) return true;
+      const mentionsGmail = normalized.includes('gmail');
+      const mentionsSignature = [
+        'signature',
+        'signatur',
+        '签名',
+        '署名',
+      ].some((keyword) => normalized.includes(keyword));
+      const mentionsSystemInstruction = [
+        'system',
+        'systemet',
+        '系统',
+        'automatically',
+        'automatic',
+        'automatiskt',
+        '自动',
+        'placeholder',
+        '占位',
+      ].some((keyword) => normalized.includes(keyword));
+      return !(mentionsSignature && (mentionsGmail || mentionsSystemInstruction));
+    })
+    .join('\n')
+    .replace(/\n{3,}/g, '\n\n')
+    .trim();
+}
+
 export async function POST(request: NextRequest) {
   try {
     const body = await request.json() as Record<string, unknown>;
@@ -300,9 +334,10 @@ confidence 使用 0 到 100 的整数。
 2. channel.contactName 为空时，不得猜测人名；使用频道名或自然的团队称呼。
 
 签名规则：
-1. body 正文末尾不要写完整签名块。
-2. 不要添加 Best regards、Kind regards、发件人姓名、职位、品牌名、官网链接等签名内容。
-3. 系统会在保存 Gmail 草稿时自动追加 Gmail 默认邮件签名。
+1. body 只写正文内容，不写完整签名块。
+2. 不要添加发件人姓名、职位、品牌名、官网链接等签名内容。
+3. 不要输出任何关于“签名会由系统/Gmail 自动添加”的说明、占位符或括号提示。
+4. 正文可以用一句自然礼貌的收尾，但收尾后必须直接结束。
 
 只返回以下 JSON，不要添加其他文字：
 {
@@ -352,7 +387,7 @@ ${JSON.stringify({
 }, null, 2)}
 
 邮件签名策略：
-系统会自动追加 Gmail 默认邮件签名。请在正文中使用品牌名和发件人姓名做自然自我介绍，但不要输出完整签名块。
+签名不属于 AI 正文输出范围。请在正文中使用品牌名和发件人姓名做自然自我介绍，但不要输出完整签名块，也不要输出任何签名占位提示。
 
 用户补充偏好：
 ${String(body.userPreference || '').trim() || '无'}
@@ -384,6 +419,8 @@ ${String(body.userPreference || '').trim() || '无'}
         subjectOptions.push({ subject, translatedSubject: '' });
       }
       result.subjectOptions = subjectOptions.slice(0, 3);
+      result.body = removeOutreachSignaturePlaceholders(result.body);
+      result.translatedBody = removeOutreachSignaturePlaceholders(result.translatedBody);
       return NextResponse.json({ success: true, data: result });
     }
 

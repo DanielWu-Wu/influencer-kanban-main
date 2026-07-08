@@ -206,6 +206,12 @@ function buildFirstOutreachSentFields(prospect: Prospect, mapping: FeishuFieldMa
   return fields;
 }
 
+function buildFirstOutreachResourceFields(mapping: FeishuFieldMapping) {
+  const fields: Record<string, unknown> = {};
+  putMappedField(fields, mapping, 'firstOutreach', '已发');
+  return fields;
+}
+
 function flattenFeishuValue(value: unknown): string {
   if (value === null || value === undefined) return '';
   if (typeof value === 'string' || typeof value === 'number') return String(value);
@@ -751,40 +757,62 @@ export function CreatorProspectingPage() {
   };
 
   const handleWriteFirstOutreachSent = async (prospect: Prospect, patch: Partial<Prospect> = {}) => {
-    if (!settings.feishuProspectingUrl) {
-      toast.error('请先在设置中连接“红人开发情况表”。');
+    if (!settings.feishuProspectingUrl || !settings.feishuUrl) {
+      toast.error('请先在设置中连接“红人信息数据库”和“红人开发情况表”。');
       return;
     }
     const next = { ...prospect, ...patch } as Prospect;
-    if (!next.feishuRecordId) {
-      toast.error('这条线索还没有关联飞书开发记录，暂时不能写回“初次开发信”。');
+    if (!next.feishuRecordId || !next.resourceRecordId) {
+      toast.error('这条线索还没有同时关联资源库记录和开发记录，暂时不能双表写回“初次开发信”。');
       return;
     }
-    const mapping = settings.feishuProspectingFieldMapping || {};
-    if (!mapping.firstOutreach) {
-      toast.error('请先在飞书开发记录表字段映射中配置“初次开发信”字段。');
+    const developmentMapping = settings.feishuProspectingFieldMapping || {};
+    const resourceMapping = settings.feishuFieldMapping || {};
+    if (!developmentMapping.firstOutreach || !resourceMapping.firstOutreach) {
+      toast.error('请先在两个飞书表的字段映射中都配置“初次开发信”字段。');
       return;
     }
-    const fields = buildFirstOutreachSentFields(next, mapping);
-    if (!Object.keys(fields).length) {
+    const developmentFields = buildFirstOutreachSentFields(next, developmentMapping);
+    const resourceFields = buildFirstOutreachResourceFields(resourceMapping);
+    if (!Object.keys(developmentFields).length || !Object.keys(resourceFields).length) {
       toast.error('没有可写入的飞书字段，请检查字段映射。');
       return;
     }
     try {
-      const response = await fetch('/api/feishu/records', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          action: 'update',
+      const writes = [
+        {
+          label: '红人信息数据库',
+          url: settings.feishuUrl,
+          recordId: next.resourceRecordId,
+          fields: resourceFields,
+        },
+        {
+          label: '红人开发情况表',
           url: settings.feishuProspectingUrl,
           recordId: next.feishuRecordId,
-          fields,
-        }),
-      });
-      const result = await response.json();
-      if (!response.ok || !result.success) throw new Error(getErrorMessage(result, '飞书写回失败。'));
+          fields: developmentFields,
+        },
+      ];
+      const results = await Promise.all(writes.map(async (write) => {
+        const response = await fetch('/api/feishu/records', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            action: 'update',
+            url: write.url,
+            recordId: write.recordId,
+            fields: write.fields,
+          }),
+        });
+        const result = await response.json();
+        if (!response.ok || !result.success) {
+          throw new Error(`${write.label}：${getErrorMessage(result, '飞书写回失败。')}`);
+        }
+        return result;
+      }));
+      if (results.length !== writes.length) throw new Error('飞书写回结果不完整。');
       updateProspect(next.id, { syncError: undefined });
-      toast.success('已写回飞书：初次开发信 = 已发。');
+      toast.success('已写回飞书双表：初次开发信 = 已发。');
     } catch (error) {
       const message = error instanceof Error ? error.message : '飞书写回失败。';
       updateProspect(next.id, { syncError: message });
@@ -792,7 +820,7 @@ export function CreatorProspectingPage() {
     }
   };
 
-  const handleResolve = async () => {
+  async function handleResolve() {
     const links = extractYouTubeInputs(input);
     if (!links.length) {
       toast.error('请先粘贴至少一个 YouTube 频道链接、@handle 或频道 ID。');
@@ -837,31 +865,37 @@ export function CreatorProspectingPage() {
       const result = await response.json() as YouTubeResolveResponse;
       if (!response.ok || !result.success) throw new Error(result.error || 'YouTube 频道识别失败。');
 
-      setProspects((current) => current.map((item) => {
+      const resolvedProspects = additions.flatMap((item) => {
         const inputKey = normalizeYouTubeKey(item.inputUrl);
         const channel = result.channels?.find((candidate) => (
           normalizeYouTubeKey(candidate.inputUrl || '') === inputKey
           || normalizeYouTubeKey(candidate.sourceUrl || '') === inputKey
           || normalizeYouTubeKey(candidate.url || '') === inputKey
         ));
+        if (!channel) return [];
+        const recentVideos = channel.recentVideos || [];
+        const language = inferLanguage({ ...channel, recentVideos });
+        return [{
+          ...item,
+          ...channel,
+          recentVideos,
+          language,
+          languageSource: language ? 'inferred' as const : undefined,
+          recentAverageViews: calculateRecentAverageViews(recentVideos),
+          workflowStatus: 'resolved' as const,
+          emailStatus: channel.publicEmail ? 'available' as const : 'missing' as const,
+          dedupeStatus: 'unchecked' as const,
+          error: channel.publicEmail ? undefined : '未在公开简介中发现邮箱，可继续确认邀约，但保存 Gmail 草稿前必须补充。',
+          updatedAt: new Date().toISOString(),
+        }];
+      });
+      const resolvedById = new Map(resolvedProspects.map((item) => [item.id, item]));
+
+      setProspects((current) => current.map((item) => {
+        const resolved = resolvedById.get(item.id);
+        if (resolved) return resolved;
+        const inputKey = normalizeYouTubeKey(item.inputUrl);
         const matchedError = result.errors?.find((error) => normalizeYouTubeKey(error.sourceUrl) === inputKey);
-        if (channel) {
-          const recentVideos = channel.recentVideos || [];
-          const language = inferLanguage({ ...channel, recentVideos });
-          return {
-            ...item,
-            ...channel,
-            recentVideos,
-            language,
-            languageSource: language ? 'inferred' : undefined,
-            recentAverageViews: calculateRecentAverageViews(recentVideos),
-            workflowStatus: 'resolved',
-            emailStatus: channel.publicEmail ? 'available' : 'missing',
-            dedupeStatus: 'unchecked',
-            error: channel.publicEmail ? undefined : '未在公开简介中发现邮箱，可继续确认邀约，但保存 Gmail 草稿前必须补充。',
-            updatedAt: new Date().toISOString(),
-          };
-        }
         if (matchedError) {
           return { ...item, workflowStatus: 'error', error: matchedError.error, updatedAt: new Date().toISOString() };
         }
@@ -870,6 +904,10 @@ export function CreatorProspectingPage() {
       setInput('');
       const failures = result.errors?.length || 0;
       toast.success(`识别完成：成功 ${result.channels?.length || 0} 个${failures ? `，失败 ${failures} 个` : ''}。`);
+      if (resolvedProspects.length) {
+        setResolving(false);
+        await handleCheckDedupe(resolvedProspects);
+      }
     } catch (error) {
       const message = error instanceof Error ? error.message : 'YouTube 频道识别失败。';
       setProspects((current) => current.map((item) => (
@@ -881,7 +919,7 @@ export function CreatorProspectingPage() {
     } finally {
       setResolving(false);
     }
-  };
+  }
 
   const loadFeishuRecords = async (url: string, label: string) => {
     if (!url) throw new Error(`请先在设置中连接${label}。`);
@@ -1129,10 +1167,12 @@ export function CreatorProspectingPage() {
       toast.error('请先确认目标产品、合作形式、开发信语言和合作想法。');
       return;
     }
+    const nextProspect: Prospect = { ...prospect, workflowStatus: 'outreach_pending' };
     updateProspect(prospect.id, { workflowStatus: 'outreach_pending' });
     await syncFeishuProspect(prospect, { workflowStatus: 'outreach_pending' });
     setActiveTab('outreach');
-    toast.success('邀约方向已确认，可以生成开发信。');
+    toast.success('邀约方向已确认，正在生成开发信。');
+    await handleGenerateOutreach(nextProspect);
   };
 
   const handleCheckHistory = async (prospect: Prospect) => {
@@ -1329,7 +1369,7 @@ export function CreatorProspectingPage() {
         {
           action: {
             label: (
-              <span title="写回：初次开发信=已发、Gmail 草稿 ID 和开发状态">
+              <span title="写回双表：资源库和开发记录表的初次开发信=已发；开发记录表同步草稿 ID 和开发状态">
                 写回飞书
               </span>
             ),

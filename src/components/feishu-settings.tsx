@@ -68,6 +68,7 @@ const ROLE_CONFIG: Record<TableRole, {
       'region',
       'followers',
       'recentAverageViews',
+      'firstOutreach',
       'notes',
     ],
   },
