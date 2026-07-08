@@ -132,13 +132,6 @@ function putMappedField(
   fields[fieldName] = value;
 }
 
-function summarizeVideos(videos?: RecentVideo[]) {
-  return (videos || [])
-    .slice(0, 8)
-    .map((video, index) => `${index + 1}. ${video.title}${video.url ? `\n${video.url}` : ''}`)
-    .join('\n');
-}
-
 function buildFeishuUrlValue(prospect: Prospect) {
   const link = firstValue(prospect.url, prospect.sourceUrl, prospect.inputUrl);
   if (!link) return undefined;
@@ -150,11 +143,7 @@ function buildFeishuUrlValue(prospect: Prospect) {
 
 function buildResourceFields(prospect: Prospect, mapping: FeishuFieldMapping) {
   const fields: Record<string, unknown> = {};
-  const notes = [
-    '来源：红人开发台',
-    prospect.avatarUrl ? `频道头像：${prospect.avatarUrl}` : '',
-    summarizeVideos(prospect.recentVideos),
-  ].filter(Boolean).join('\n');
+  const notes = '来源：红人开发台';
 
   putMappedField(fields, mapping, 'channelName', prospect.title);
   putMappedField(fields, mapping, 'platform', 'YouTube');
