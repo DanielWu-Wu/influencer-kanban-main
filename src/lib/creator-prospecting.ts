@@ -191,16 +191,34 @@ export const FALLBACK_PRODUCT_OPTIONS = [
 ];
 
 export const COUNTRY_LABELS: Record<string, string> = {
+  AT: '奥地利',
+  AU: '澳大利亚',
+  CA: '加拿大',
+  CH: '瑞士',
+  CZ: '捷克',
+  DK: '丹麦',
   ES: '西班牙',
-  NL: '荷兰',
-  PT: '葡萄牙',
-  PL: '波兰',
   BE: '比利时',
   DE: '德国',
   FR: '法国',
+  FI: '芬兰',
+  GR: '希腊',
+  HR: '克罗地亚',
+  HU: '匈牙利',
+  IE: '爱尔兰',
   IT: '意大利',
-  US: '美国',
+  JP: '日本',
+  KR: '韩国',
+  LU: '卢森堡',
+  NL: '荷兰',
+  NO: '挪威',
+  PL: '波兰',
+  PT: '葡萄牙',
+  RO: '罗马尼亚',
+  SE: '瑞典',
   GB: '英国',
+  UK: '英国',
+  US: '美国',
 };
 
 export function normalizeYouTubeKey(value: string) {
@@ -255,7 +273,25 @@ export function inferLanguage(prospect: Pick<Prospect, 'title' | 'description' |
   };
   const winner = Object.entries(scores).sort((a, b) => b[1] - a[1])[0];
   if (winner?.[1] > 0) return winner[0];
-  const countryFallback: Record<string, string> = { ES: 'es', PT: 'pt', NL: 'nl', DE: 'de', FR: 'fr', IT: 'it', GB: 'en', US: 'en' };
+  const countryFallback: Record<string, string> = {
+    BE: 'nl',
+    CA: 'en',
+    CH: 'de',
+    DK: 'da',
+    ES: 'es',
+    FI: 'fi',
+    FR: 'fr',
+    GB: 'en',
+    IE: 'en',
+    IT: 'it',
+    NL: 'nl',
+    NO: 'no',
+    PL: 'pl',
+    PT: 'pt',
+    SE: 'sv',
+    UK: 'en',
+    US: 'en',
+  };
   return countryFallback[String(prospect.country || '').toUpperCase()] || '';
 }
 
