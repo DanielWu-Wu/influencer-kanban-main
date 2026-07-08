@@ -450,6 +450,7 @@ export async function POST(request: NextRequest) {
   }
 
   const maxVideos = Math.min(8, Math.max(1, Number(body.maxVideos) || 5));
+  const includeRecentVideos = (body as { includeRecentVideos?: unknown }).includeRecentVideos !== false;
   const regionCode = typeof body.regionCode === 'string' ? body.regionCode.trim().toUpperCase().slice(0, 2) : '';
   const relevanceLanguage = typeof body.relevanceLanguage === 'string' ? body.relevanceLanguage.trim().toLowerCase() : '';
   const parsedInputs = links.map((link: string) => ({ input: link, parsed: parseYouTubeInput(link) }));
@@ -492,13 +493,15 @@ export async function POST(request: NextRequest) {
       channels.map(async (channel) => {
         const source = inputByChannelId.get(channel.id);
         let recentVideos: Awaited<ReturnType<typeof fetchRecentVideos>> = [];
-        try {
-          recentVideos = await fetchRecentVideos(apiKey, channel.id, maxVideos);
-        } catch (error) {
-          errors.push({
-            sourceUrl: source?.sourceUrl || `https://www.youtube.com/channel/${channel.id}`,
-            error: error instanceof Error ? error.message : '最近视频读取失败。',
-          });
+        if (includeRecentVideos) {
+          try {
+            recentVideos = await fetchRecentVideos(apiKey, channel.id, maxVideos);
+          } catch (error) {
+            errors.push({
+              sourceUrl: source?.sourceUrl || `https://www.youtube.com/channel/${channel.id}`,
+              error: error instanceof Error ? error.message : '最近视频读取失败。',
+            });
+          }
         }
 
         const description = channel.snippet?.description || '';

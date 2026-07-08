@@ -24,6 +24,7 @@ import { Input } from '@/components/ui/input';
 import { ScrollArea } from '@/components/ui/scroll-area';
 import { useGmailAuth, useSettings } from '@/lib/data';
 import { repairTextEncoding } from '@/lib/email-text';
+import type { FeishuFieldMapping } from '@/lib/feishu-mapping';
 import {
   GmailAttachment,
   GmailCategory,
@@ -31,11 +32,19 @@ import {
   GmailMessage,
   GmailThread,
 } from '@/lib/types';
+import {
+  buildChannelAvatarLookup,
+  readChannelAvatarCache,
+  resolveChannelAvatar,
+  type ChannelAvatarState,
+} from '@/lib/youtube-channel-avatar';
+import { YouTubeChannelAvatar } from './youtube-channel-avatar';
 
 const GMAIL_PAGE_SIZE = 50;
 const GMAIL_DETAIL_BATCH_SIZE = 16;
 const GMAIL_AUTO_REFRESH_MS = 60_000;
 const SUBJECT_TRANSLATION_BATCH_SIZE = 12;
+const CHANNEL_AVATAR_PREFETCH_CONCURRENCY = 3;
 
 interface GmailInboxProps {
   onSelectThread: (thread: GmailThread) => void;
@@ -176,6 +185,55 @@ function normalizeEmailAddress(value?: string): string {
   return email.trim().replace(/^mailto:/i, '').toLowerCase();
 }
 
+function stringifyFeishuValue(value: unknown): string {
+  if (value === null || value === undefined) return '';
+  if (typeof value === 'string' || typeof value === 'number' || typeof value === 'boolean') {
+    return String(value);
+  }
+  if (Array.isArray(value)) {
+    return value.map(stringifyFeishuValue).filter(Boolean).join(' ');
+  }
+  if (typeof value === 'object') {
+    const record = value as Record<string, unknown>;
+    const preferred = ['text', 'name', 'email', 'link', 'url', 'value']
+      .map((key) => stringifyFeishuValue(record[key]))
+      .filter(Boolean);
+    if (preferred.length) return preferred.join(' ');
+    return Object.values(record).map(stringifyFeishuValue).filter(Boolean).join(' ');
+  }
+  return '';
+}
+
+function getMappedFeishuValue(
+  record: FeishuRecord,
+  mapping: FeishuFieldMapping,
+  key: keyof FeishuFieldMapping,
+) {
+  const fieldName = mapping[key];
+  if (!fieldName) return '';
+  return stringifyFeishuValue(record.fields[fieldName]).trim();
+}
+
+function extractEmails(value?: string) {
+  const raw = value || '';
+  const emailMatches = raw.match(/[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}/gi);
+  if (emailMatches?.length) {
+    return emailMatches.map((item) => normalizeEmailAddress(item)).filter(Boolean);
+  }
+  return raw
+    .split(',')
+    .map((item) => normalizeEmailAddress(item))
+    .filter(Boolean);
+}
+
+function getThreadExternalSenderEmail(thread: GmailThread, ownEmail?: string) {
+  const latestMessage = thread.messages[thread.messages.length - 1];
+  if (!latestMessage?.from) return '';
+  const senderEmail = normalizeEmailAddress(latestMessage.from);
+  if (!senderEmail || senderEmail === normalizeEmailAddress(ownEmail)) return '';
+  return senderEmail;
+}
+
 function isLatestMessageFromEmail(thread: GmailThread, email?: string): boolean {
   const latestMessage = thread.messages[thread.messages.length - 1];
   if (!latestMessage || !email) return false;
@@ -217,6 +275,17 @@ type GmailThreadListResult = {
   threads?: { id: string }[];
   nextPageToken?: string;
   resultSizeEstimate?: number;
+};
+
+type FeishuRecord = {
+  record_id: string;
+  fields: Record<string, unknown>;
+};
+
+type CreatorAvatarProfile = {
+  channelName: string;
+  channelUrl: string;
+  channelId: string;
 };
 
 function parseMimeParts(payload: Record<string, unknown>, result: ParsedMimeContent) {
@@ -371,6 +440,43 @@ async function fetchWithTimeout(
   }
 }
 
+async function fetchFeishuRecords(url: string) {
+  const records: FeishuRecord[] = [];
+  let pageToken: string | undefined;
+
+  for (let page = 0; page < 10; page += 1) {
+    const response = await fetch('/api/feishu/records', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        action: 'list',
+        url,
+        pageSize: 500,
+        pageToken,
+      }),
+    });
+    const result = await response.json();
+    if (!response.ok || !result.success) {
+      throw new Error(result.error || '读取飞书红人资料失败。');
+    }
+    records.push(...(result.data?.items || []));
+    if (!result.data?.has_more || !result.data?.page_token) break;
+    pageToken = result.data.page_token;
+  }
+
+  return records;
+}
+
+async function runWithConcurrency<T>(
+  items: T[],
+  limit: number,
+  worker: (item: T) => Promise<void>,
+) {
+  for (let index = 0; index < items.length; index += limit) {
+    await Promise.all(items.slice(index, index + limit).map(worker));
+  }
+}
+
 export function GmailInbox({
   onSelectThread,
   onThreadUpdated,
@@ -386,6 +492,7 @@ export function GmailInbox({
   const { settings } = useSettings();
   const latestFetchIdRef = useRef(0);
   const subjectTranslationRunRef = useRef(0);
+  const avatarPrefetchRunRef = useRef(0);
   const manuallyPreservedUnreadThreadIdsRef = useRef<Set<string>>(new Set());
   const [threads, setThreads] = useState<GmailThread[]>([]);
   const [loading, setLoading] = useState(false);
@@ -398,6 +505,7 @@ export function GmailInbox({
   const [showUnreadOnly, setShowUnreadOnly] = useState(false);
   const [showTranslatedSubjects, setShowTranslatedSubjects] = useState(false);
   const [subjectTranslations, setSubjectTranslations] = useState<Record<string, string>>({});
+  const [threadAvatars, setThreadAvatars] = useState<Record<string, ChannelAvatarState>>({});
   const [authProcessing, setAuthProcessing] = useState(false);
   const paginationKey = `${mailbox}:${category}:${refreshKey}`;
   const [activePaginationKey, setActivePaginationKey] = useState(paginationKey);
@@ -431,7 +539,7 @@ export function GmailInbox({
         current.map((thread) => thread.id === updatedThread.id ? updatedThread : thread),
       );
     });
-  }, [mailbox, updatedThread]);
+  }, [auth?.email, mailbox, updatedThread]);
 
   useEffect(() => {
     const params = new URLSearchParams(window.location.search);
@@ -615,6 +723,124 @@ export function GmailInbox({
 
     return () => window.clearInterval(timer);
   }, [actionThreadId, auth?.accessToken, auth?.isConnected, fetchThreads, loading, openingThreadId]);
+
+  useEffect(() => {
+    const runId = avatarPrefetchRunRef.current + 1;
+    avatarPrefetchRunRef.current = runId;
+    const timer = window.setTimeout(() => {
+      async function prefetchCurrentPageAvatars() {
+        const mapping = settings.feishuFieldMapping || {};
+        const emailField = mapping.email;
+        if (!settings.feishuUrl || !emailField || !threads.length) {
+          setThreadAvatars({});
+          return;
+        }
+
+        const threadEmails = threads
+          .map((thread) => ({
+            threadId: thread.id,
+            email: getThreadExternalSenderEmail(thread, auth?.email),
+          }))
+          .filter((item) => item.email);
+        if (!threadEmails.length) {
+          setThreadAvatars({});
+          return;
+        }
+
+        const targetEmails = new Set(threadEmails.map((item) => item.email));
+
+        try {
+          const records = await fetchFeishuRecords(settings.feishuUrl);
+          if (runId !== avatarPrefetchRunRef.current) return;
+
+          const profileByEmail = new Map<string, CreatorAvatarProfile>();
+          records.forEach((record) => {
+            const emails = extractEmails(stringifyFeishuValue(record.fields[emailField]));
+            const matchedEmail = emails.find((email) => targetEmails.has(email));
+            if (!matchedEmail) return;
+            profileByEmail.set(matchedEmail, {
+              channelName: getMappedFeishuValue(record, mapping, 'channelName'),
+              channelUrl: getMappedFeishuValue(record, mapping, 'channelUrl'),
+              channelId: getMappedFeishuValue(record, mapping, 'channelId'),
+            });
+          });
+
+          const nextAvatars: Record<string, ChannelAvatarState> = {};
+          const pendingByLookup = new Map<string, {
+            lookup: NonNullable<ReturnType<typeof buildChannelAvatarLookup>>;
+            threadIds: string[];
+            title: string;
+          }>();
+
+          threadEmails.forEach(({ threadId, email }) => {
+            const profile = profileByEmail.get(email);
+            if (!profile) return;
+            const lookup = buildChannelAvatarLookup(profile);
+            if (!lookup) return;
+            const cached = readChannelAvatarCache(lookup.key);
+            if (cached) {
+              nextAvatars[threadId] = {
+                ...cached,
+                title: cached.title || profile.channelName,
+              };
+              return;
+            }
+
+            nextAvatars[threadId] = { status: 'loading' };
+            const pending = pendingByLookup.get(lookup.key);
+            if (pending) {
+              pending.threadIds.push(threadId);
+            } else {
+              pendingByLookup.set(lookup.key, {
+                lookup,
+                threadIds: [threadId],
+                title: profile.channelName,
+              });
+            }
+          });
+
+          setThreadAvatars((current) => ({ ...current, ...nextAvatars }));
+
+          await runWithConcurrency(
+            Array.from(pendingByLookup.values()),
+            CHANNEL_AVATAR_PREFETCH_CONCURRENCY,
+            async (item) => {
+              const avatar = await resolveChannelAvatar(item.lookup, {
+                regionCode: settings.youtubeDefaultRegion || '',
+                relevanceLanguage: settings.youtubeDefaultLanguage || '',
+              });
+              if (runId !== avatarPrefetchRunRef.current) return;
+              setThreadAvatars((current) => {
+                const next = { ...current };
+                item.threadIds.forEach((threadId) => {
+                  next[threadId] = {
+                    ...avatar,
+                    title: avatar.title || item.title,
+                  };
+                });
+                return next;
+              });
+            },
+          );
+        } catch {
+          // Avatar prefetch is an optional UI enhancement; Gmail list should stay usable.
+        }
+      }
+
+      void prefetchCurrentPageAvatars();
+    }, 300);
+
+    return () => {
+      window.clearTimeout(timer);
+    };
+  }, [
+    auth?.email,
+    settings.feishuFieldMapping,
+    settings.feishuUrl,
+    settings.youtubeDefaultLanguage,
+    settings.youtubeDefaultRegion,
+    threads,
+  ]);
 
   useEffect(() => {
     if (!auth?.isConnected || !auth.accessToken) return undefined;
@@ -1045,6 +1271,7 @@ export function GmailInbox({
               ? subjectTranslations[thread.id]
               : thread.subject;
             const actionLoading = actionThreadId === thread.id;
+            const avatar = threadAvatars[thread.id] || { status: 'idle' as const };
 
             return (
               <div
@@ -1077,6 +1304,12 @@ export function GmailInbox({
                   >
                     <Star className={`h-4 w-4 ${thread.isStarred ? 'fill-amber-400 text-amber-400' : 'text-muted-foreground'}`} />
                   </Button>
+                  <YouTubeChannelAvatar
+                    avatar={avatar}
+                    fallback={sender}
+                    label={avatar.title || sender}
+                    size="xs"
+                  />
 
                   {compact ? (
                     <div className="min-w-0 flex-1">

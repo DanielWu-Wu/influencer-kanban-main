@@ -31,14 +31,14 @@ export async function POST(request: NextRequest) {
 
   const regionCode = typeof body.regionCode === 'string' && body.regionCode.trim()
     ? body.regionCode.trim().toUpperCase().slice(0, 2)
-    : 'ES';
+    : '';
 
   const url = new URL('https://www.googleapis.com/youtube/v3/search');
   url.searchParams.set('part', 'snippet');
   url.searchParams.set('type', 'channel');
   url.searchParams.set('q', 'vanlife');
   url.searchParams.set('maxResults', '1');
-  url.searchParams.set('regionCode', regionCode);
+  if (regionCode) url.searchParams.set('regionCode', regionCode);
   url.searchParams.set('key', apiKey);
 
   try {

@@ -62,6 +62,7 @@ The UI direction is a clean, dense, light Glassmorphism workbench.
 - Feishu permissions and user re-authorization are fragile: missing scopes can make table inspection/writeback fail even when the account appears connected.
 - Gmail freshness, unread filters, and thread ordering have been improved repeatedly; regressions are likely if query logic is changed without comparing against official Gmail behavior.
 - YouTube API quota is limited. Avoid excessive batch enrichment and keep recent video fetches modest.
+- Gmail creator channel avatars currently use browser `localStorage` caching only; the Gmail list prefetches current-page matched creator avatars with limited concurrency and reuses the same cache in thread detail. Future upgrade can add a Supabase server cache such as `youtube_channel_cache` with `channel_key`, `channel_id`, `channel_url`, `title`, `avatar_url`, `fetched_at`, `expires_at`, and `last_error`; this requires explicit user confirmation because it changes database structure.
 - Creator prospecting custom URL/handle resolution can fail for unusual YouTube URLs; keep error messages actionable.
 - Do not auto-send outreach or auto-write Feishu records without explicit user confirmation.
 
@@ -71,7 +72,8 @@ The UI direction is a clean, dense, light Glassmorphism workbench.
 2. Finish creator prospecting v1 polish: robust YouTube URL parsing, clearer failed-resolution reasons, recent-video cards, batch preview, and duplicate detection against Feishu.
 3. Expand Feishu multi-table support for four bases: main creator library, outreach log, collaboration records, and video publishing/performance records.
 4. Improve AI Agent action model: richer read-only reports first, then confirmed writes with durable success/failure logs.
-5. Audit UI text and interaction quality after functional stabilization: remove mojibake, align copy, and keep dense glass workbench consistency.
+5. Consider upgrading Gmail creator avatars from browser-only cache to a shared Supabase server cache to further reduce YouTube API quota usage across devices.
+6. Audit UI text and interaction quality after functional stabilization: remove mojibake, align copy, and keep dense glass workbench consistency.
 
 ## Do Not Repeat These Mistakes
 

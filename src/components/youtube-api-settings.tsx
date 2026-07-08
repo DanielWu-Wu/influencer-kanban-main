@@ -44,8 +44,8 @@ export function YouTubeApiSettings({ expanded, onToggle }: YouTubeApiSettingsPro
   useEffect(() => {
     if (loading) return;
     setApiKey(settings.youtubeApiKey || (settings.youtubeApiKeyConfigured ? STORED_YOUTUBE_KEY : ''));
-    setDefaultRegion(settings.youtubeDefaultRegion || 'ES');
-    setDefaultLanguage(settings.youtubeDefaultLanguage || 'es');
+    setDefaultRegion(settings.youtubeDefaultRegion || '');
+    setDefaultLanguage(settings.youtubeDefaultLanguage || '');
     setMaxSearchResults(settings.youtubeMaxSearchResults || 25);
     setMinSubscribers(settings.youtubeMinSubscribers || '');
     setSearchKeywords(settings.youtubeSearchKeywords || '');
@@ -69,8 +69,8 @@ export function YouTubeApiSettings({ expanded, onToggle }: YouTubeApiSettingsPro
     updateSettings({
       youtubeApiKey: undefined,
       youtubeApiKeyConfigured: hasApiKey,
-      youtubeDefaultRegion: (defaultRegion.trim().toUpperCase() || 'ES').slice(0, 2),
-      youtubeDefaultLanguage: defaultLanguage.trim().toLowerCase() || 'es',
+      youtubeDefaultRegion: defaultRegion.trim().toUpperCase().slice(0, 2),
+      youtubeDefaultLanguage: defaultLanguage.trim().toLowerCase(),
       youtubeSearchKeywords: searchKeywords,
       youtubeMaxSearchResults: Math.min(50, Math.max(1, Number(maxSearchResults) || 25)),
       youtubeMinSubscribers: minSubscribers,
@@ -119,12 +119,17 @@ export function YouTubeApiSettings({ expanded, onToggle }: YouTubeApiSettingsPro
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           apiKey: apiKey === STORED_YOUTUBE_KEY ? undefined : apiKey,
-          regionCode: defaultRegion,
+          regionCode: defaultRegion.trim().toUpperCase().slice(0, 2),
         }),
       });
       const result = await response.json();
       if (!response.ok) throw new Error(result.error || 'YouTube API 测试失败');
-      setStatus({ success: true, message: `连接成功，已能读取 ${result.regionCode || defaultRegion} 区域的 YouTube 数据。` });
+      setStatus({
+        success: true,
+        message: result.regionCode
+          ? `连接成功，已能读取 ${result.regionCode} 区域的 YouTube 数据。`
+          : '连接成功，已能读取不限定区域的 YouTube 数据。',
+      });
     } catch (error) {
       setStatus({ success: false, message: error instanceof Error ? error.message : 'YouTube API 测试失败。' });
     } finally {
@@ -184,10 +189,11 @@ export function YouTubeApiSettings({ expanded, onToggle }: YouTubeApiSettingsPro
                   id="youtube-region"
                 value={defaultRegion}
                 onChange={(event) => setDefaultRegion(event.target.value)}
-                placeholder="ES"
+                placeholder="留空=不限，例如 ES"
                 maxLength={2}
                 className="rounded-lg border-white/65 bg-white/75"
               />
+              <p className="text-xs text-muted-foreground">留空表示不限制国家/地区。</p>
               </div>
               <div className="space-y-2">
                 <Label htmlFor="youtube-language">默认语言</Label>
@@ -195,9 +201,10 @@ export function YouTubeApiSettings({ expanded, onToggle }: YouTubeApiSettingsPro
                   id="youtube-language"
                 value={defaultLanguage}
                 onChange={(event) => setDefaultLanguage(event.target.value)}
-                placeholder="es"
+                placeholder="留空=不限，例如 es"
                 className="rounded-lg border-white/65 bg-white/75"
               />
+              <p className="text-xs text-muted-foreground">留空表示不限制频道语言。</p>
               </div>
             </div>
 

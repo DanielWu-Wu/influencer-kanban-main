@@ -9,15 +9,22 @@ import { useEmailTranslations, useGmailAuth, useSettings } from '@/lib/data';
 import { 
   ArrowLeft, Reply, MoreHorizontal, Globe, Languages,
   Copy, Sparkles, ChevronDown, Loader2,
-  Paperclip, Download, Forward, Mail, MailOpen, UserRound,
+  Paperclip, Download, Forward, Mail, MailOpen,
   Database, Save, CheckCircle2, XCircle,
 } from 'lucide-react';
 import { EmailComposer } from './email-composer';
 import { NewEmailComposer } from './new-email-composer';
+import { YouTubeChannelAvatar } from './youtube-channel-avatar';
 import { textToEmailHtml } from '@/lib/email-content';
 import { repairTextEncoding, splitEmailForTranslation } from '@/lib/email-text';
 import type { FeishuFieldKey, FeishuFieldMapping } from '@/lib/feishu-mapping';
 import { normalizeEmail, type RecordAssistantLog } from '@/lib/record-assistant';
+import {
+  buildChannelAvatarLookup,
+  readChannelAvatarCache,
+  resolveChannelAvatar,
+  type ChannelAvatarState,
+} from '@/lib/youtube-channel-avatar';
 import { useRecordAssistant } from './record-assistant-provider';
 
 interface EmailDetailProps {
@@ -36,6 +43,8 @@ type FeishuCreatorProfile = {
   email: string;
   matchedBy: string;
   channelName: string;
+  channelUrl: string;
+  channelId: string;
   region: string;
   platform: string;
   followers: string;
@@ -341,6 +350,7 @@ export function EmailDetail({ thread, onBack, onThreadUpdated }: EmailDetailProp
   const [creatorProfile, setCreatorProfile] = useState<FeishuCreatorProfile | null>(null);
   const [creatorProfileLoading, setCreatorProfileLoading] = useState(false);
   const [creatorProfileError, setCreatorProfileError] = useState('');
+  const [channelAvatar, setChannelAvatar] = useState<ChannelAvatarState>({ status: 'idle' });
   const [pendingProfileAction, setPendingProfileAction] = useState<FeishuQuickAction | null>(null);
   const [profileActionLoading, setProfileActionLoading] = useState(false);
   const [profileActionMessage, setProfileActionMessage] = useState('');
@@ -413,6 +423,8 @@ export function EmailDetail({ thread, onBack, onThreadUpdated }: EmailDetailProp
           email: matched.matchedEmail,
           matchedBy: `邮箱：${matched.matchedEmail}`,
           channelName: getMappedFeishuValue(matchedRecord, mapping, 'channelName') || '未填写频道名',
+          channelUrl: getMappedFeishuValue(matchedRecord, mapping, 'channelUrl'),
+          channelId: getMappedFeishuValue(matchedRecord, mapping, 'channelId'),
           region: getMappedFeishuValue(matchedRecord, mapping, 'region') || '未填写',
           platform: getMappedFeishuValue(matchedRecord, mapping, 'platform') || '未填写',
           followers: getMappedFeishuValue(matchedRecord, mapping, 'followers') || '未填写',
@@ -434,6 +446,47 @@ export function EmailDetail({ thread, onBack, onThreadUpdated }: EmailDetailProp
       cancelled = true;
     };
   }, [profileContactEmail, settings.feishuFieldMapping, settings.feishuUrl]);
+
+  useEffect(() => {
+    let cancelled = false;
+    const lookup = buildChannelAvatarLookup(creatorProfile);
+
+    if (!lookup) {
+      setChannelAvatar({ status: 'idle' });
+      return;
+    }
+    const activeLookup = lookup;
+
+    const cached = readChannelAvatarCache(activeLookup.key);
+    if (cached) {
+      setChannelAvatar(cached);
+      return;
+    }
+
+    async function loadChannelAvatar() {
+      setChannelAvatar({ status: 'loading' });
+      const avatar = await resolveChannelAvatar(activeLookup, {
+        regionCode: settings.youtubeDefaultRegion || '',
+        relevanceLanguage: settings.youtubeDefaultLanguage || '',
+      });
+      if (!cancelled) {
+        setChannelAvatar({
+          ...avatar,
+          title: avatar.title || creatorProfile?.channelName,
+        });
+      }
+    }
+
+    void loadChannelAvatar();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [
+    creatorProfile,
+    settings.youtubeDefaultLanguage,
+    settings.youtubeDefaultRegion,
+  ]);
 
   useEffect(() => {
     setPendingProfileAction(null);
@@ -938,7 +991,11 @@ export function EmailDetail({ thread, onBack, onThreadUpdated }: EmailDetailProp
             <div className="space-y-2 rounded-lg border border-white/65 bg-white/72 px-3 py-2 shadow-apple">
               <div className="flex flex-wrap items-center gap-x-4 gap-y-1 text-sm">
                 <div className="flex min-w-[180px] items-center gap-2 font-medium">
-                  <UserRound className="h-4 w-4 text-primary" />
+                  <YouTubeChannelAvatar
+                    avatar={channelAvatar}
+                    label={channelAvatar.title || creatorProfile.channelName || 'YouTube 频道头像'}
+                    size="sm"
+                  />
                   <span className="truncate">{creatorProfile.channelName}</span>
                 </div>
                 <span className="text-xs text-muted-foreground">
@@ -1070,6 +1127,10 @@ export function EmailDetail({ thread, onBack, onThreadUpdated }: EmailDetailProp
             );
             const displayBody = repairTextEncoding(message.body);
             const displayHtmlBody = message.htmlBody ? repairTextEncoding(message.htmlBody) : '';
+            const isCreatorSender = creatorProfile
+              ? normalizeEmail(sender.email) === normalizeEmail(creatorProfile.email)
+              : false;
+            const senderAvatar = isCreatorSender ? channelAvatar : { status: 'idle' as const };
 
             return (
               <div key={message.id} className="space-y-3">
@@ -1084,11 +1145,13 @@ export function EmailDetail({ thread, onBack, onThreadUpdated }: EmailDetailProp
                   <div className="flex items-start justify-between gap-4">
                     <div className="flex min-w-0 items-start gap-3">
                       {/* 头像 */}
-                      <div className="flex h-10 w-10 flex-shrink-0 items-center justify-center rounded-lg bg-primary/10">
-                        <span className="text-sm font-medium text-primary">
-                          {sender.name.charAt(0).toUpperCase()}
-                        </span>
-                      </div>
+                      <YouTubeChannelAvatar
+                        avatar={senderAvatar}
+                        fallback={sender.name}
+                        label={isCreatorSender
+                          ? channelAvatar.title || creatorProfile?.channelName || sender.name
+                          : sender.name}
+                      />
                       
                       {/* 发件人信息 */}
                       <div className="min-w-0">
