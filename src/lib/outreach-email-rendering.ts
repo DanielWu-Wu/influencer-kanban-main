@@ -70,6 +70,10 @@ function escapeHtmlAttribute(value: string) {
     .replace(/>/g, '&gt;');
 }
 
+function normalizeOutreachParagraph(value: string) {
+  return value.replace(/\*\*([^*\n]+)\*\*/g, '$1');
+}
+
 function linkFirstProductMention(html: string, product?: OutreachEmailProductAsset | null) {
   const productUrl = product?.productUrl?.trim();
   if (!productUrl) return html;
@@ -78,9 +82,8 @@ function linkFirstProductMention(html: string, product?: OutreachEmailProductAss
     product?.name,
     product?.model,
   ].map((value) => value?.trim()).filter((value): value is string => Boolean(value));
-  const term = Array.from(new Set(terms)).sort((a, b) => b.length - a.length)[0];
-  if (!term) return html;
-  const pattern = new RegExp(escapeRegExp(term), 'i');
+  const orderedTerms = Array.from(new Set(terms)).sort((a, b) => b.length - a.length);
+  if (!orderedTerms.length) return html;
   let linked = false;
   let insideAnchor = false;
   return html.split(/(<[^>]+>)/g).map((part) => {
@@ -91,10 +94,15 @@ function linkFirstProductMention(html: string, product?: OutreachEmailProductAss
       return part;
     }
     if (linked || insideAnchor) return part;
-    return part.replace(pattern, (match) => {
-      linked = true;
-      return `<a href="${productUrl}" target="_blank" rel="noopener noreferrer">${match}</a>`;
-    });
+    for (const term of orderedTerms) {
+      const pattern = new RegExp(escapeRegExp(term), 'i');
+      if (!pattern.test(part)) continue;
+      return part.replace(pattern, (match) => {
+        linked = true;
+        return `<a href="${productUrl}" target="_blank" rel="noopener noreferrer">${match}</a>`;
+      });
+    }
+    return part;
   }).join('');
 }
 
@@ -132,7 +140,7 @@ export function buildOutreachEmailHtml({
   const parts: string[] = [];
   paragraphs.forEach((paragraph, index) => {
     if (shouldRenderImage && placement === index) parts.push(buildProductImageHtml({ src: imageSrc!, product }));
-    parts.push(`<div>${textToEmailHtml(paragraph)}</div>`);
+    parts.push(`<div>${textToEmailHtml(normalizeOutreachParagraph(paragraph))}</div>`);
   });
   if (shouldRenderImage && placement === paragraphs.length) parts.push(buildProductImageHtml({ src: imageSrc!, product }));
   return linkFirstProductMention(parts.join('<br>'), product);

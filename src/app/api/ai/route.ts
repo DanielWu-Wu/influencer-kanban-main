@@ -299,6 +299,11 @@ confidence 使用 0 到 100 的整数。
 1. channel.contactName 有值时，只使用这个已确认姓名作为联系人称呼。
 2. channel.contactName 为空时，不得猜测人名；使用频道名或自然的团队称呼。
 
+签名规则：
+1. body 正文末尾不要写完整签名块。
+2. 不要添加 Best regards、Kind regards、发件人姓名、职位、品牌名、官网链接等签名内容。
+3. 系统会在保存 Gmail 草稿时自动追加 Gmail 默认邮件签名。
+
 只返回以下 JSON，不要添加其他文字：
 {
   "subject": "邮件主题",
@@ -344,8 +349,10 @@ ${JSON.stringify({
   brandName: body.brandName || '',
   senderName: body.senderName || '',
   preferredLanguage: body.preferredLanguage || '',
-  emailSignature: body.emailSignature || '',
 }, null, 2)}
+
+邮件签名策略：
+系统会自动追加 Gmail 默认邮件签名。请在正文中使用品牌名和发件人姓名做自然自我介绍，但不要输出完整签名块。
 
 用户补充偏好：
 ${String(body.userPreference || '').trim() || '无'}
@@ -369,8 +376,12 @@ ${String(body.userPreference || '').trim() || '无'}
         })
         .filter((item) => item.subject)
         .slice(0, 3);
-      if (subject && !subjectOptions.some((item) => item.subject === subject)) {
-        subjectOptions.unshift({ subject, translatedSubject: '' });
+      if (subjectOptions.length) {
+        result.subject = subjectOptions.some((item) => item.subject === subject)
+          ? subject
+          : subjectOptions[0].subject;
+      } else if (subject) {
+        subjectOptions.push({ subject, translatedSubject: '' });
       }
       result.subjectOptions = subjectOptions.slice(0, 3);
       return NextResponse.json({ success: true, data: result });
