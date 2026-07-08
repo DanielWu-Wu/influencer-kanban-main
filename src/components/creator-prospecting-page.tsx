@@ -162,7 +162,6 @@ function buildResourceFields(prospect: Prospect, mapping: FeishuFieldMapping) {
   putMappedField(fields, mapping, 'followers', prospect.subscriberCount);
   putMappedField(fields, mapping, 'channelUrl', buildFeishuUrlValue(prospect));
   putMappedField(fields, mapping, 'channelId', prospect.channelId);
-  putMappedField(fields, mapping, 'language', prospect.language);
   putMappedField(fields, mapping, 'recentAverageViews', prospect.recentAverageViews);
   putMappedField(fields, mapping, 'email', prospect.publicEmail);
   putMappedField(fields, mapping, 'notes', notes);
@@ -628,11 +627,17 @@ export function CreatorProspectingPage() {
     () => prospects.filter((item) => ['outreach_pending', 'outreach_generated'].includes(item.workflowStatus)),
     [prospects],
   );
+  const importProspects = useMemo(
+    () => prospects.filter((item) =>
+      !['invitation_pending', 'outreach_pending', 'outreach_generated', 'gmail_draft_saved', 'skipped'].includes(item.workflowStatus),
+    ),
+    [prospects],
+  );
   const tabCounts = useMemo(() => ({
-    import: prospects.filter((item) => !['invitation_pending', 'outreach_pending', 'outreach_generated', 'gmail_draft_saved', 'skipped'].includes(item.workflowStatus)).length,
+    import: importProspects.length,
     invitation: invitationProspects.length,
     outreach: outreachProspects.length,
-  }), [invitationProspects.length, outreachProspects.length, prospects]);
+  }), [importProspects.length, invitationProspects.length, outreachProspects.length]);
   const productOptions = useMemo(
     () => {
       const activeProducts = Array.from(new Set(
@@ -1422,7 +1427,7 @@ export function CreatorProspectingPage() {
       <main className="flex min-h-0 flex-1 flex-col p-4">
         {activeTab === 'import' && (
           <InfluencerImportTab
-            prospects={prospects}
+            prospects={importProspects}
             selectedIds={selectedIds}
             input={input}
             preference={userPreference}

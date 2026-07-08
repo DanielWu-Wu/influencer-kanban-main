@@ -14,6 +14,12 @@ type RecordList = {
   total?: number;
 };
 
+type FieldList = {
+  items?: Array<{ field_name: string; type: number }>;
+};
+
+const FEISHU_MULTI_SELECT_FIELD_TYPE = 4;
+
 async function resolveTableId(
   appToken: string,
   tableId: string | undefined,
@@ -27,6 +33,33 @@ async function resolveTableId(
   const first = data.items?.[0];
   if (!first) throw new Error('没有找到可操作的数据表。');
   return first.table_id;
+}
+
+async function normalizeFieldsForWrite(
+  appToken: string,
+  tableId: string,
+  accessToken: string,
+  fields: Record<string, unknown>,
+) {
+  const fieldsData = await requestFeishuApi<FieldList>(
+    `/bitable/v1/apps/${encodeURIComponent(appToken)}/tables/${encodeURIComponent(tableId)}/fields?page_size=100`,
+    accessToken,
+  );
+  const fieldTypes = new Map(
+    (fieldsData.items || []).map((field) => [field.field_name, field.type]),
+  );
+  return Object.fromEntries(
+    Object.entries(fields).map(([fieldName, value]) => {
+      if (fieldTypes.get(fieldName) !== FEISHU_MULTI_SELECT_FIELD_TYPE) {
+        return [fieldName, value];
+      }
+      if (Array.isArray(value)) return [fieldName, value];
+      if (typeof value === 'string' || typeof value === 'number' || typeof value === 'boolean') {
+        return [fieldName, [String(value)]];
+      }
+      return [fieldName, value];
+    }),
+  );
 }
 
 export async function POST(request: NextRequest) {
@@ -67,6 +100,12 @@ export async function POST(request: NextRequest) {
     if (!body.fields || typeof body.fields !== 'object') {
       return NextResponse.json({ error: '缺少需要写入的字段。' }, { status: 400 });
     }
+    const normalizedFields = await normalizeFieldsForWrite(
+      location.appToken,
+      tableId,
+      auth.accessToken,
+      body.fields,
+    );
 
     if (body.action === 'create') {
       const data = await requestFeishuApi<{ record: unknown }>(
@@ -78,7 +117,7 @@ export async function POST(request: NextRequest) {
             Authorization: `Bearer ${auth.accessToken}`,
             'Content-Type': 'application/json; charset=utf-8',
           },
-          body: JSON.stringify({ fields: body.fields }),
+          body: JSON.stringify({ fields: normalizedFields }),
         },
       );
       return NextResponse.json({ success: true, data });
@@ -97,7 +136,7 @@ export async function POST(request: NextRequest) {
             Authorization: `Bearer ${auth.accessToken}`,
             'Content-Type': 'application/json; charset=utf-8',
           },
-          body: JSON.stringify({ fields: body.fields }),
+          body: JSON.stringify({ fields: normalizedFields }),
         },
       );
       return NextResponse.json({ success: true, data });
