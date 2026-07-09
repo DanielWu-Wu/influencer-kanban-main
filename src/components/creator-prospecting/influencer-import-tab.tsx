@@ -48,6 +48,7 @@ type Props = {
   resolving: boolean;
   checkingDedupe: boolean;
   writingFeishu: boolean;
+  preparingDevelopmentPreview: boolean;
   onInputChange: (value: string) => void;
   onPreferenceChange: (value: string) => void;
   onResolve: () => void;
@@ -142,6 +143,7 @@ export function InfluencerImportTab({
   resolving,
   checkingDedupe,
   writingFeishu,
+  preparingDevelopmentPreview,
   onInputChange,
   onPreferenceChange,
   onResolve,
@@ -223,9 +225,13 @@ export function InfluencerImportTab({
           <UserPlus className="mr-2 h-4 w-4" />
           加入资源库
         </Button>
-        <Button variant="outline" onClick={() => onCreateRecords(selected)} disabled={!canCreate || writingFeishu}>
-          {writingFeishu ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <UserPlus className="mr-2 h-4 w-4" />}
-          新建开发记录
+        <Button
+          variant="outline"
+          onClick={() => onCreateRecords(selected)}
+          disabled={!canCreate || preparingDevelopmentPreview || writingFeishu}
+        >
+          {preparingDevelopmentPreview ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <UserPlus className="mr-2 h-4 w-4" />}
+          {preparingDevelopmentPreview ? '准备预览中…' : '新建开发记录'}
         </Button>
         <Button variant="outline" onClick={() => onConfirmInvitation(selected)} disabled={!canConfirm}>
           <UserCheck className="mr-2 h-4 w-4" />

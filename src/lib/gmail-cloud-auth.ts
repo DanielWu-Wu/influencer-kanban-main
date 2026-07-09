@@ -20,10 +20,13 @@ export async function saveStoredGmailAuth(
   await setUserSecret(supabase, 'gmail_auth', auth);
 }
 
-export async function refreshStoredGmailAuth(supabase: SupabaseClient) {
+export async function refreshStoredGmailAuth(
+  supabase: SupabaseClient,
+  options: { force?: boolean } = {},
+) {
   const auth = await getStoredGmailAuth(supabase);
   if (!auth) throw new Error('尚未连接 Gmail。');
-  if (auth.expiresAt > Date.now() + 60_000) return auth;
+  if (!options.force && auth.expiresAt > Date.now() + 60_000) return auth;
 
   const clientId = process.env.GOOGLE_CLIENT_ID;
   const clientSecret = process.env.GOOGLE_CLIENT_SECRET;

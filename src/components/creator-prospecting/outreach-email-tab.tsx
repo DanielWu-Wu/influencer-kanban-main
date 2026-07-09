@@ -41,6 +41,7 @@ import {
   WORKFLOW_META,
 } from '@/lib/creator-prospecting';
 import { appendEmailSignature } from '@/lib/email-content';
+import { outreachLanguageLabel } from '@/lib/outreach-languages';
 import {
   buildOutreachEmailHtml,
   clampImagePlacement,
@@ -65,6 +66,19 @@ type Props = {
   onBack: (prospect: Prospect) => void;
   onSkip: (prospect: Prospect) => void;
 };
+
+function prospectLanguageLabel(prospect: Prospect) {
+  const language = prospect.outreachLanguage || prospect.language;
+  return language ? outreachLanguageLabel(language) : '语言未知';
+}
+
+function generationStageLabel(prospect: Prospect) {
+  if (prospect.outreachGenerationStage === 'preparing') return '生成准备中';
+  if (prospect.outreachGenerationStage === 'streaming_body') return '正在生成正文';
+  if (prospect.outreachGenerationStage === 'finalizing') return '正在整理标题和中文翻译';
+  if (prospect.outreachGenerationStage === 'error') return '生成失败';
+  return '正在生成开发信';
+}
 
 function patchDraft(
   prospect: Prospect,
@@ -285,6 +299,8 @@ export function OutreachEmailTab({
           const isEditing = editingIds.includes(prospect.id);
           const hasDraft = Boolean(prospect.aiDraft?.subject && prospect.aiDraft.body);
           const isSaved = prospect.workflowStatus === 'gmail_draft_saved';
+          const isGenerating = generatingId === prospect.id
+            || ['preparing', 'streaming_body', 'finalizing'].includes(prospect.outreachGenerationStage || '');
           const productAsset = selectedProductEmailAsset(products, prospect.targetProduct);
           const isRegeneratingSubject = regeneratingPart?.id === prospect.id && regeneratingPart.part === 'subject';
           const isRegeneratingBody = regeneratingPart?.id === prospect.id && regeneratingPart.part === 'body';
@@ -313,7 +329,7 @@ export function OutreachEmailTab({
                       )}
                     </div>
                     <p className="mt-1 text-xs text-muted-foreground">
-                      {countryLabel(prospect.country)} · {prospect.language || '语言未知'} · {prospect.targetProduct || '未选产品'} · {prospect.cooperationType || '未选合作形式'}
+                      {countryLabel(prospect.country)} · {prospectLanguageLabel(prospect)} · {prospect.targetProduct || '未选产品'} · {prospect.cooperationType || '未选合作形式'}
                     </p>
                   </div>
                 </div>
@@ -369,15 +385,54 @@ export function OutreachEmailTab({
 
                 <section className="min-w-0">
                   {!hasDraft ? (
-                    <div className="flex min-h-64 flex-col items-center justify-center rounded-md border border-dashed text-center">
-                      <Sparkles className="mb-3 h-8 w-8 text-muted-foreground" />
-                      <p className="font-medium">尚未生成开发信</p>
-                      <p className="mt-1 text-sm text-muted-foreground">AI 会结合频道资料、产品、合作形式和你的合作想法起草邮件。</p>
-                      <Button className="mt-4" onClick={() => onGenerate(prospect)} disabled={generatingId === prospect.id}>
-                        {generatingId === prospect.id ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <Sparkles className="mr-2 h-4 w-4" />}
-                        生成开发信
-                      </Button>
-                    </div>
+                    isGenerating ? (
+                      <div className="rounded-md border border-primary/20 bg-primary/5 p-4">
+                        <div className="flex items-start gap-3">
+                          <span className="mt-0.5 inline-flex h-8 w-8 shrink-0 items-center justify-center rounded-md bg-primary/10 text-primary">
+                            <Loader2 className="h-4 w-4 animate-spin" />
+                          </span>
+                          <div className="min-w-0 flex-1">
+                            <p className="font-medium">{generationStageLabel(prospect)}</p>
+                            <p className="mt-1 text-sm text-muted-foreground">
+                              正在根据频道资料、目标产品和合作想法起草邮件，正文会先逐步出现。
+                            </p>
+                          </div>
+                        </div>
+                        <div className="mt-4 grid gap-3">
+                          <div>
+                            <Label>邮件标题</Label>
+                            <div className="mt-1.5 rounded-md border bg-white/70 px-3 py-2 text-sm text-muted-foreground">
+                              {prospect.outreachGenerationStage === 'finalizing' ? '正在生成标题…' : '正文生成后整理标题'}
+                            </div>
+                          </div>
+                          <div>
+                            <Label>外语邮件正文</Label>
+                            <div className="mt-1.5 min-h-48 whitespace-pre-wrap rounded-md border bg-white px-3 py-2 text-sm leading-6">
+                              {prospect.streamingBody || prospect.aiDraft?.body || '正在等待第一段正文…'}
+                              <span className="ml-0.5 inline-block h-4 w-1 animate-pulse bg-primary align-[-2px]" />
+                            </div>
+                          </div>
+                          <div>
+                            <Label>中文翻译对照</Label>
+                            <div className="mt-1.5 rounded-md border bg-white/70 px-3 py-2 text-sm text-muted-foreground">
+                              正文生成完成后生成中文对照。
+                            </div>
+                          </div>
+                        </div>
+                      </div>
+                    ) : (
+                      <div className="flex min-h-64 flex-col items-center justify-center rounded-md border border-dashed text-center">
+                        <Sparkles className="mb-3 h-8 w-8 text-muted-foreground" />
+                        <p className="font-medium">{prospect.outreachGenerationStage === 'error' ? '开发信生成失败' : '尚未生成开发信'}</p>
+                        <p className="mt-1 max-w-md text-sm text-muted-foreground">
+                          {prospect.generationError || prospect.error || '智能助手会结合频道资料、产品、合作形式和你的合作想法起草邮件。'}
+                        </p>
+                        <Button className="mt-4" onClick={() => onGenerate(prospect)} disabled={generatingId === prospect.id}>
+                          {generatingId === prospect.id ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <Sparkles className="mr-2 h-4 w-4" />}
+                          {prospect.outreachGenerationStage === 'error' ? '重新生成' : '生成开发信'}
+                        </Button>
+                      </div>
+                    )
                   ) : (
                     <div className="space-y-3">
                       <div>

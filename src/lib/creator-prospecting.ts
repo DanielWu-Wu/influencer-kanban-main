@@ -71,6 +71,13 @@ export type OutreachDraft = {
   tone?: string;
 };
 
+export type OutreachGenerationStage =
+  | 'preparing'
+  | 'streaming_body'
+  | 'finalizing'
+  | 'completed'
+  | 'error';
+
 export type Prospect = {
   schemaVersion: number;
   id: string;
@@ -129,6 +136,9 @@ export type Prospect = {
   historyChecked?: boolean;
   gmailDraftId?: string;
   aiDraft?: OutreachDraft;
+  outreachGenerationStage?: OutreachGenerationStage;
+  streamingBody?: string;
+  generationError?: string;
   error?: string;
   syncError?: string;
   createdAt: string;
@@ -367,6 +377,15 @@ export function migrateProspects(value: unknown): Prospect[] {
       outreachLanguageInferenceStatus: item.outreachLanguageInferenceStatus === 'loading'
         ? undefined
         : item.outreachLanguageInferenceStatus,
+      outreachGenerationStage: ['preparing', 'streaming_body', 'finalizing'].includes(item.outreachGenerationStage || '')
+        ? undefined
+        : item.outreachGenerationStage,
+      streamingBody: ['preparing', 'streaming_body', 'finalizing'].includes(item.outreachGenerationStage || '')
+        ? undefined
+        : item.streamingBody,
+      generationError: ['preparing', 'streaming_body', 'finalizing'].includes(item.outreachGenerationStage || '')
+        ? undefined
+        : item.generationError,
       competitorCollaboration: item.competitorCollaboration || 'unknown',
       recentAverageViews: item.recentAverageViews ?? calculateRecentAverageViews(item.recentVideos),
       createdAt: item.createdAt || now,

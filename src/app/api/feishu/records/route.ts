@@ -68,7 +68,7 @@ export async function POST(request: NextRequest) {
 
   try {
     const body = await request.json() as {
-      action?: 'list' | 'create' | 'update';
+      action?: 'list' | 'get' | 'create' | 'update';
       url?: string;
       recordId?: string;
       fields?: Record<string, unknown>;
@@ -92,6 +92,17 @@ export async function POST(request: NextRequest) {
       if (body.pageToken) query.set('page_token', body.pageToken);
       const data = await requestFeishuApi<RecordList>(
         `${basePath}?${query.toString()}`,
+        auth.accessToken,
+      );
+      return NextResponse.json({ success: true, data });
+    }
+
+    if (body.action === 'get') {
+      if (!body.recordId) {
+        return NextResponse.json({ error: '缺少需要读取的记录 ID。' }, { status: 400 });
+      }
+      const data = await requestFeishuApi<{ record: { record_id: string; fields: Record<string, unknown> } }>(
+        `${basePath}/${encodeURIComponent(body.recordId)}`,
         auth.accessToken,
       );
       return NextResponse.json({ success: true, data });

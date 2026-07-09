@@ -2,6 +2,7 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
+  AlertTriangle,
   CheckCircle2,
   ClipboardCheck,
   Database,
@@ -49,6 +50,7 @@ import {
   normalizeYouTubeKey,
   type OutreachDraft,
   type Prospect,
+  type OutreachGenerationStage,
   type ProspectingTab,
   type RecentVideo,
   WORKFLOW_META,
@@ -58,6 +60,7 @@ import {
   stripOutreachPreviewData,
   type OutreachAiContext,
 } from '@/lib/outreach-context';
+import type { GmailAuth } from '@/lib/types';
 
 type YouTubeResolveChannel = {
   inputUrl?: string;
@@ -90,6 +93,10 @@ type FeishuRecord = {
 
 type ResourceEmailSyncPreview =
   | {
+      status: 'checking';
+      recordId: string;
+    }
+  | {
       status: 'will_update';
       recordId: string;
       fieldName: string;
@@ -104,6 +111,10 @@ type ResourceEmailSyncPreview =
     }
   | {
       status: 'missing_mapping' | 'missing_record' | 'missing_email';
+    }
+  | {
+      status: 'failed';
+      message: string;
     };
 
 type FeishuWritePreview = {
@@ -128,6 +139,12 @@ type FeishuInspectField = {
   };
   options?: FeishuFieldOption[];
 };
+
+type OutreachStreamEvent =
+  | { event: 'stage'; data: { stage?: OutreachGenerationStage; label?: string } }
+  | { event: 'delta'; data: { text?: string } }
+  | { event: 'final'; data: OutreachDraft }
+  | { event: 'error'; data: { message?: string } };
 
 const TAB_META: Array<{
   id: ProspectingTab;
@@ -166,6 +183,20 @@ function getErrorMessage(value: unknown, fallback: string) {
     }
   }
   return fallback;
+}
+
+function isGmailAuthError(error: unknown) {
+  const message = error instanceof Error ? error.message : String(error || '');
+  return [
+    'unauthenticated',
+    'invalid authentication credentials',
+    'invalid credentials',
+    'oauth',
+    'access token',
+    'authtoken',
+    'autherror',
+    '401',
+  ].some((keyword) => message.toLowerCase().includes(keyword));
 }
 
 function appendPlainTextSignature(body: string, signature?: string) {
@@ -410,6 +441,21 @@ function appendEmailValue(currentValue: string, email: string) {
   return `${trimmedCurrentValue}\n${trimmedEmail}`;
 }
 
+function buildPendingResourceEmailSyncPreview(
+  prospect: Prospect,
+  emailFieldName: string | undefined,
+  resourceUrl: string | undefined,
+): ResourceEmailSyncPreview {
+  const email = prospect.publicEmail?.trim();
+  if (!email) return { status: 'missing_email' };
+  if (!emailFieldName) return { status: 'missing_mapping' };
+  if (!prospect.resourceRecordId) return { status: 'missing_record' };
+  if (!resourceUrl) {
+    return { status: 'failed', message: '资源库未连接，本次只新建开发记录。' };
+  }
+  return { status: 'checking', recordId: prospect.resourceRecordId };
+}
+
 function buildResourceEmailSyncPreview(
   prospect: Prospect,
   resourceRecord: FeishuRecord | undefined,
@@ -438,6 +484,22 @@ function buildResourceEmailSyncPreview(
     nextValue,
     appendedEmail: email,
   };
+}
+
+async function mapWithConcurrency<T>(
+  items: T[],
+  limit: number,
+  worker: (item: T, index: number) => Promise<void>,
+) {
+  let nextIndex = 0;
+  const workers = Array.from({ length: Math.min(limit, items.length) }, async () => {
+    while (nextIndex < items.length) {
+      const index = nextIndex;
+      nextIndex += 1;
+      await worker(items[index], index);
+    }
+  });
+  await Promise.all(workers);
 }
 
 function splitContentTypeInput(value: string) {
@@ -495,6 +557,22 @@ function compactFeishuWriteFields(fields: Record<string, unknown>) {
       return true;
     }),
   );
+}
+
+function parseOutreachStreamEvents(chunk: string): { events: OutreachStreamEvent[]; rest: string } {
+  const parts = chunk.split(/\r?\n\r?\n/);
+  const rest = parts.pop() || '';
+  const events = parts.flatMap((part) => {
+    const eventName = part.match(/^event:\s*(.+)$/m)?.[1]?.trim();
+    const dataLine = part.match(/^data:\s*(.+)$/m)?.[1]?.trim();
+    if (!eventName || !dataLine) return [];
+    try {
+      return [{ event: eventName, data: JSON.parse(dataLine) } as OutreachStreamEvent];
+    } catch {
+      return [];
+    }
+  });
+  return { events, rest };
 }
 
 function buildResourceMatchPreview(
@@ -561,7 +639,7 @@ function findRecordMatch(
 export function CreatorProspectingPage() {
   const { settings } = useSettings();
   const { products } = useProducts();
-  const { auth } = useGmailAuth();
+  const { auth, connect } = useGmailAuth();
   const [activeTab, setActiveTab] = useState<ProspectingTab>('import');
   const [input, setInput] = useState('');
   const [userPreference, setUserPreference] = useState('');
@@ -577,6 +655,7 @@ export function CreatorProspectingPage() {
   const [resolving, setResolving] = useState(false);
   const [checkingDedupe, setCheckingDedupe] = useState(false);
   const [writingFeishu, setWritingFeishu] = useState(false);
+  const [preparingDevelopmentPreview, setPreparingDevelopmentPreview] = useState(false);
   const [generatingId, setGeneratingId] = useState<string | null>(null);
   const [regeneratingDraftPart, setRegeneratingDraftPart] = useState<{ id: string; part: 'subject' | 'body' } | null>(null);
   const [savingDraftId, setSavingDraftId] = useState<string | null>(null);
@@ -786,6 +865,8 @@ export function CreatorProspectingPage() {
         if (item.id !== prospect.id || item.outreachLanguageSource === 'manual') return item;
         return {
           ...item,
+          language: found ? languageCode : item.language,
+          languageSource: found ? 'inferred' : item.languageSource,
           outreachLanguage: found ? languageCode : '',
           outreachLanguageConfidence: found ? confidence : undefined,
           outreachLanguageSource: found ? 'ai' : undefined,
@@ -828,6 +909,9 @@ export function CreatorProspectingPage() {
     invitation: invitationProspects.length,
     outreach: outreachProspects.length,
   }), [importProspects.length, invitationProspects.length, outreachProspects.length]);
+  const hasPendingResourceEmailSync = previewItems.some(
+    (item) => item.resourceEmailSync?.status === 'checking',
+  );
   const productOptions = useMemo(
     () => {
       const activeProducts = Array.from(new Set(
@@ -1149,6 +1233,24 @@ export function CreatorProspectingPage() {
     return records;
   };
 
+  const loadFeishuRecord = async (url: string, recordId: string, label: string) => {
+    if (!url) throw new Error(`请先在设置中连接${label}。`);
+    const response = await fetch('/api/feishu/records', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        action: 'get',
+        url,
+        recordId,
+      }),
+    });
+    const result = await response.json();
+    if (!response.ok || !result.success) throw new Error(getErrorMessage(result, '飞书记录读取失败。'));
+    const record = (result.data?.record || result.data) as FeishuRecord | undefined;
+    if (!record?.record_id) throw new Error('飞书未返回有效的资源库记录。');
+    return record;
+  };
+
   const handleCheckDedupe = async (items: Prospect[]) => {
     const targets = items.filter((item) => item.workflowStatus === 'resolved');
     if (!targets.length) {
@@ -1231,50 +1333,68 @@ export function CreatorProspectingPage() {
   };
 
   const openDevelopmentPreview = async (items: Prospect[]) => {
+    setPreparingDevelopmentPreview(true);
     const targets = items.filter(canCreateFeishuRecord);
     if (!targets.length) {
+      setPreparingDevelopmentPreview(false);
       toast.error('没有可创建的线索。请先完成识别和飞书查重，并排除重复记录。');
       return;
     }
     const mapping = settings.feishuProspectingFieldMapping || {};
     const resourceMapping = settings.feishuFieldMapping || {};
     const resourceUrl = settings.feishuUrl;
-    const needsResourceEmailPreview = Boolean(
-      resourceUrl
-      && resourceMapping.email
-      && targets.some((prospect) => prospect.resourceRecordId && prospect.publicEmail?.trim()),
-    );
-    let resourceRecordsById = new Map<string, FeishuRecord>();
-    if (needsResourceEmailPreview && resourceUrl) {
-      try {
-        const resourceRecords = await loadFeishuRecords(resourceUrl, '红人信息数据库');
-        resourceRecordsById = new Map(resourceRecords.map((record) => [record.record_id, record]));
-      } catch (error) {
-        toast.warning(error instanceof Error ? error.message : '资源库邮箱同步预览读取失败，本次仅创建开发记录。');
-      }
-    }
     const previews = targets
-      .map((prospect) => {
-        const resourceRecord = prospect.resourceRecordId
-          ? resourceRecordsById.get(prospect.resourceRecordId)
-          : undefined;
-        return {
+      .map((prospect) => ({
+        prospect,
+        target: 'development' as const,
+        fields: buildDevelopmentFields({ ...prospect, workflowStatus: 'dedupe_completed' }, mapping),
+        resourceEmailSync: buildPendingResourceEmailSyncPreview(
           prospect,
-          target: 'development' as const,
-          fields: buildDevelopmentFields({ ...prospect, workflowStatus: 'dedupe_completed' }, mapping),
-          resourceEmailSync: buildResourceEmailSyncPreview(
-            prospect,
-            resourceRecord,
-            resourceMapping.email,
-          ),
-        };
-      })
+          resourceMapping.email,
+          resourceUrl,
+        ),
+      }))
       .filter((item) => Object.keys(item.fields).length > 0);
     if (!previews.length) {
+      setPreparingDevelopmentPreview(false);
       toast.error('没有可写入字段，请先检查“红人开发情况表”的字段映射。');
       return;
     }
     setPreviewItems(previews);
+    setPreparingDevelopmentPreview(false);
+
+    const syncTargets = previews.filter((item) => item.resourceEmailSync?.status === 'checking');
+    if (!syncTargets.length || !resourceUrl) return;
+
+    void mapWithConcurrency(syncTargets, 3, async (item) => {
+      const syncPreview = item.resourceEmailSync;
+      if (syncPreview?.status !== 'checking') return;
+      try {
+        const resourceRecord = await loadFeishuRecord(resourceUrl, syncPreview.recordId, '红人信息数据库');
+        const nextPreview = buildResourceEmailSyncPreview(
+          item.prospect,
+          resourceRecord,
+          resourceMapping.email,
+        );
+        setPreviewItems((current) => current.map((currentItem) => (
+          currentItem.prospect.id === item.prospect.id
+            ? { ...currentItem, resourceEmailSync: nextPreview }
+            : currentItem
+        )));
+      } catch (error) {
+        setPreviewItems((current) => current.map((currentItem) => (
+          currentItem.prospect.id === item.prospect.id
+            ? {
+                ...currentItem,
+                resourceEmailSync: {
+                  status: 'failed',
+                  message: error instanceof Error ? error.message : '资源库邮箱同步预览失败，本次只新建开发记录。',
+                },
+              }
+            : currentItem
+        )));
+      }
+    });
   };
 
   const loadContentTypeOptions = async (fieldName?: string) => {
@@ -1330,6 +1450,10 @@ export function CreatorProspectingPage() {
 
   const confirmWriteFeishu = async () => {
     if (!previewItems.length) return;
+    if (previewItems.some((item) => item.resourceEmailSync?.status === 'checking')) {
+      toast.warning('资源库邮箱同步还在检查中，请稍等几秒再确认。');
+      return;
+    }
     const target = previewItems[0].target;
     const targetUrl = target === 'resource' ? settings.feishuUrl : settings.feishuProspectingUrl;
     if (!targetUrl) return;
@@ -1471,11 +1595,11 @@ export function CreatorProspectingPage() {
       return;
     }
     const nextProspect: Prospect = { ...prospect, workflowStatus: 'outreach_pending' };
-    updateProspect(prospect.id, { workflowStatus: 'outreach_pending' });
-    await syncFeishuProspect(prospect, { workflowStatus: 'outreach_pending' });
+    updateProspect(prospect.id, { workflowStatus: 'outreach_pending', error: undefined });
     setActiveTab('outreach');
     toast.success('邀约方向已确认，正在生成开发信。');
-    await handleGenerateOutreach(nextProspect);
+    void syncFeishuProspect(prospect, { workflowStatus: 'outreach_pending' });
+    void handleGenerateOutreach(nextProspect);
   };
 
   const handleCheckHistory = async (prospect: Prospect) => {
@@ -1517,31 +1641,143 @@ export function CreatorProspectingPage() {
       toast.error('请先返回邀约确认，补齐产品、合作形式、开发信语言和合作想法。');
       return;
     }
-    setGeneratingId(prospect.id);
-    try {
-      const outreachContext = stripOutreachPreviewData(getOutreachContext(prospect));
+    const outreachContext = stripOutreachPreviewData(getOutreachContext(prospect));
+    const requestBody = {
+      action: 'outreach',
+      ...outreachContext,
+      outreachPrompt: settings.aiOutreachPrompt,
+      modelProvider: settings.modelProvider,
+      customApiUrl: settings.customApiUrl,
+      customApiKey: settings.customApiKey,
+      customModelName: settings.customModelName,
+    };
+    const generateOneShot = async () => {
       const response = await fetch('/api/ai', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          action: 'outreach',
-          ...outreachContext,
-          outreachPrompt: settings.aiOutreachPrompt,
-          modelProvider: settings.modelProvider,
-          customApiUrl: settings.customApiUrl,
-          customApiKey: settings.customApiKey,
-          customModelName: settings.customModelName,
-        }),
+        body: JSON.stringify(requestBody),
       });
       const result = await response.json();
       if (!response.ok || !result.success) throw new Error(getErrorMessage(result, '开发信生成失败。'));
-      const draft = result.data as OutreachDraft;
-      updateProspect(prospect.id, { aiDraft: draft, workflowStatus: 'outreach_generated', error: undefined });
+      return result.data as OutreachDraft;
+    };
+    setGeneratingId(prospect.id);
+    updateProspect(prospect.id, {
+      aiDraft: {
+        subject: '',
+        body: '',
+        translatedBody: '',
+        translatedSummary: '',
+        personalizationNotes: [],
+        riskNotes: [],
+        missingInfo: [],
+      },
+      streamingBody: '',
+      outreachGenerationStage: 'preparing',
+      generationError: undefined,
+      error: undefined,
+    });
+    try {
+      const response = await fetch('/api/ai/outreach-stream', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(requestBody),
+      });
+      if (!response.ok || !response.body) throw new Error('流式生成暂不可用，正在切换到普通生成。');
+
+      const reader = response.body.getReader();
+      const decoder = new TextDecoder();
+      let buffer = '';
+      let streamedBody = '';
+      const finalDraftRef: { current?: OutreachDraft } = {};
+      let streamError = '';
+
+      const handleStreamEvent = (event: OutreachStreamEvent) => {
+        if (event.event === 'stage' && event.data.stage) {
+          updateProspect(prospect.id, { outreachGenerationStage: event.data.stage });
+        }
+        if (event.event === 'delta') {
+          const text = event.data.text || '';
+          if (!text) return;
+          streamedBody += text;
+          updateProspect(prospect.id, {
+            streamingBody: streamedBody,
+            outreachGenerationStage: 'streaming_body',
+            aiDraft: {
+              subject: '',
+              body: streamedBody,
+              translatedBody: '',
+              translatedSummary: '',
+              personalizationNotes: [],
+              riskNotes: [],
+              missingInfo: [],
+            },
+          });
+        }
+        if (event.event === 'final') {
+          finalDraftRef.current = event.data;
+        }
+        if (event.event === 'error') {
+          streamError = event.data.message || '流式生成失败。';
+        }
+      };
+
+      while (true) {
+        const { value, done } = await reader.read();
+        if (done) break;
+        buffer += decoder.decode(value, { stream: true });
+        const parsed = parseOutreachStreamEvents(buffer);
+        buffer = parsed.rest;
+        parsed.events.forEach(handleStreamEvent);
+      }
+      const parsed = parseOutreachStreamEvents(`${buffer}\n\n`);
+      parsed.events.forEach(handleStreamEvent);
+
+      if (streamError) throw new Error(streamError);
+      const completedDraft = finalDraftRef.current;
+      if (!completedDraft) throw new Error('流式生成未返回完整草稿。');
+
+      const draft: OutreachDraft = {
+        ...completedDraft,
+        body: completedDraft.body || streamedBody,
+      };
+      updateProspect(prospect.id, {
+        aiDraft: draft,
+        workflowStatus: 'outreach_generated',
+        outreachGenerationStage: 'completed',
+        streamingBody: undefined,
+        generationError: undefined,
+        error: undefined,
+      });
       await syncFeishuProspect(prospect, { workflowStatus: 'outreach_generated', aiDraft: draft });
       toast.success(`已生成 ${prospect.title || '该频道'} 的开发信。`);
     } catch (error) {
-      updateProspect(prospect.id, { error: error instanceof Error ? error.message : '开发信生成失败。' });
-      toast.error(error instanceof Error ? error.message : '开发信生成失败。');
+      try {
+        updateProspect(prospect.id, { outreachGenerationStage: 'finalizing' });
+        const draft = await generateOneShot();
+        updateProspect(prospect.id, {
+          aiDraft: draft,
+          workflowStatus: 'outreach_generated',
+          outreachGenerationStage: 'completed',
+          streamingBody: undefined,
+          generationError: undefined,
+          error: undefined,
+        });
+        await syncFeishuProspect(prospect, { workflowStatus: 'outreach_generated', aiDraft: draft });
+        toast.success(`已生成 ${prospect.title || '该频道'} 的开发信。`);
+      } catch (fallbackError) {
+        const message = fallbackError instanceof Error
+          ? fallbackError.message
+          : error instanceof Error
+            ? error.message
+            : '开发信生成失败。';
+        updateProspect(prospect.id, {
+          outreachGenerationStage: 'error',
+          generationError: message,
+          error: message,
+        });
+        toast.error(message);
+      }
     } finally {
       setGeneratingId(null);
     }
@@ -1629,34 +1865,58 @@ export function CreatorProspectingPage() {
       toast.error('请先生成并确认开发信内容。');
       return;
     }
+    const draft = prospect.aiDraft;
     setSavingDraftId(prospect.id);
     try {
       const productAsset = selectedProductEmailAsset(products, prospect.targetProduct);
-      const inlineProductImage = prospect.aiDraft.productImageIncluded === false
+      const inlineProductImage = draft.productImageIncluded === false
         ? undefined
         : getProductInlineImage(productAsset);
       const renderedBodyHtml = buildOutreachEmailHtml({
-        body: prospect.aiDraft.body,
+        body: draft.body,
         product: productAsset,
         imageSrc: inlineProductImage ? `cid:${inlineProductImage.contentId}` : undefined,
-        imagePlacement: prospect.aiDraft.productImagePlacement,
+        imagePlacement: draft.productImagePlacement,
         includeImage: Boolean(inlineProductImage),
       });
-      const response = await fetch('/api/gmail', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          action: 'draft',
-          accessToken: auth.accessToken,
-          to: prospect.publicEmail,
-          subject: prospect.aiDraft.subject,
-          body: appendPlainTextSignature(prospect.aiDraft.body, settings.emailSignature),
-          bodyHtml: appendEmailSignature(renderedBodyHtml, settings.emailSignature),
-          inlineImages: inlineProductImage ? [inlineProductImage] : [],
-        }),
-      });
-      const result = await response.json();
-      if (!response.ok || !result.success) throw new Error(getErrorMessage(result, '保存 Gmail 草稿失败。'));
+      const createGmailDraft = async (accessToken: string) => {
+        const response = await fetch('/api/gmail', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            action: 'draft',
+            accessToken,
+            to: prospect.publicEmail,
+            subject: draft.subject,
+            body: appendPlainTextSignature(draft.body, settings.emailSignature),
+            bodyHtml: appendEmailSignature(renderedBodyHtml, settings.emailSignature),
+            inlineImages: inlineProductImage ? [inlineProductImage] : [],
+          }),
+        });
+        const result = await response.json();
+        if (!response.ok || !result.success) {
+          const message = getErrorMessage(result, '保存 Gmail 草稿失败。');
+          const draftError = new Error(`${response.status} ${message}`);
+          throw draftError;
+        }
+        return result;
+      };
+      let result;
+      try {
+        result = await createGmailDraft(auth.accessToken);
+      } catch (error) {
+        if (!isGmailAuthError(error)) throw error;
+        toast.info('Gmail 授权已过期，正在自动刷新后重试。');
+        const refreshResponse = await fetch('/api/auth/refresh?force=1', { method: 'POST' });
+        const refreshResult = await refreshResponse.json();
+        if (!refreshResponse.ok || !refreshResult.success || !refreshResult.data?.accessToken) {
+          throw new Error('Gmail 授权已失效，请到“设置 > Gmail 邮件”重新连接 Gmail。');
+        }
+        const freshAuth = refreshResult.data as GmailAuth;
+        connect(freshAuth);
+        result = await createGmailDraft(freshAuth.accessToken || '');
+      }
+      if (!result.success) throw new Error('保存 Gmail 草稿失败。');
       const gmailDraftId = String(result.data?.id || result.data?.message?.id || '');
       const patch: Partial<Prospect> = {
         workflowStatus: 'gmail_draft_saved',
@@ -1760,6 +2020,7 @@ export function CreatorProspectingPage() {
             resolving={resolving}
             checkingDedupe={checkingDedupe}
             writingFeishu={writingFeishu}
+            preparingDevelopmentPreview={preparingDevelopmentPreview}
             onInputChange={setInput}
             onPreferenceChange={setUserPreference}
             onResolve={handleResolve}
@@ -1859,8 +2120,8 @@ export function CreatorProspectingPage() {
       </main>
 
       <Dialog open={previewItems.length > 0} onOpenChange={(open) => !open && setPreviewItems([])}>
-        <DialogContent className="max-h-[82vh] max-w-3xl overflow-hidden">
-          <DialogHeader>
+        <DialogContent className="flex max-h-[82vh] max-w-3xl flex-col overflow-hidden p-0">
+          <DialogHeader className="px-6 pt-6">
             <DialogTitle>
               {previewItems[0]?.target === 'resource' ? '确认加入红人资源库' : '确认新建红人开发记录'}
             </DialogTitle>
@@ -1870,8 +2131,13 @@ export function CreatorProspectingPage() {
                 : '只有开发记录表中不存在的红人才会出现在这里。确认后写入“红人开发情况表”。'}
               单条失败不会影响其他记录。
             </DialogDescription>
+            {previewItems[0]?.target === 'development' && (
+              <div className="rounded-md border border-sky-100 bg-sky-50/80 px-3 py-2 text-xs text-sky-800">
+                开发记录预览已生成；资源库邮箱同步会在弹窗内后台检查，检查完成后再确认写入。
+              </div>
+            )}
           </DialogHeader>
-          <div className="min-h-0 overflow-auto rounded-lg border bg-slate-50/80">
+          <div className="mx-6 min-h-0 flex-1 overflow-y-auto rounded-lg border bg-slate-50/80">
             {previewItems.map((item) => (
               <div key={item.prospect.id} className="border-b p-3 last:border-b-0">
                 <div className="flex items-center justify-between gap-3">
@@ -1925,6 +2191,12 @@ export function CreatorProspectingPage() {
                 {item.target === 'development' && item.resourceEmailSync && (
                   <div className="mt-3 rounded-md border border-sky-100 bg-sky-50/80 p-3 text-sm text-slate-700">
                     <p className="font-medium text-slate-900">资源库邮箱同步</p>
+                    {item.resourceEmailSync.status === 'checking' && (
+                      <div className="mt-1 flex items-center gap-2 text-xs text-sky-700">
+                        <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                        正在检查资源库邮箱是否需要补写…
+                      </div>
+                    )}
                     {item.resourceEmailSync.status === 'will_update' && (
                       <div className="mt-1 space-y-1">
                         <p>确认后会把当前邮箱补写到红人资源库，不覆盖原有邮箱。</p>
@@ -1956,16 +2228,25 @@ export function CreatorProspectingPage() {
                         当前线索邮箱为空，本次不补写资源库邮箱。
                       </p>
                     )}
+                    {item.resourceEmailSync.status === 'failed' && (
+                      <div className="mt-1 flex gap-2 rounded-md border border-amber-200 bg-amber-50 px-2 py-1.5 text-xs text-amber-800">
+                        <AlertTriangle className="mt-0.5 h-3.5 w-3.5 shrink-0" />
+                        <p>
+                          邮箱同步预览失败：{item.resourceEmailSync.message}
+                          本次仍可新建开发记录，但不会补写资源库邮箱。
+                        </p>
+                      </div>
+                    )}
                   </div>
                 )}
               </div>
             ))}
           </div>
-          <DialogFooter>
+          <DialogFooter className="border-t bg-white/95 px-6 py-4">
             <Button variant="outline" onClick={() => setPreviewItems([])} disabled={writingFeishu}>取消</Button>
-            <Button onClick={confirmWriteFeishu} disabled={writingFeishu}>
-              {writingFeishu ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <Database className="mr-2 h-4 w-4" />}
-              确认新建 {previewItems.length} 条
+            <Button onClick={confirmWriteFeishu} disabled={writingFeishu || hasPendingResourceEmailSync}>
+              {writingFeishu || hasPendingResourceEmailSync ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <Database className="mr-2 h-4 w-4" />}
+              {hasPendingResourceEmailSync ? '正在检查邮箱同步…' : `确认新建 ${previewItems.length} 条`}
             </Button>
           </DialogFooter>
         </DialogContent>

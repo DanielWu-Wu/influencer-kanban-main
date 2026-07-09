@@ -7,7 +7,8 @@ export async function POST(request: NextRequest) {
   if (!appAuth) return NextResponse.json({ error: '未登录。' }, { status: 401 });
 
   try {
-    const auth = await refreshStoredGmailAuth(appAuth.supabase);
+    const force = new URL(request.url).searchParams.get('force') === '1';
+    const auth = await refreshStoredGmailAuth(appAuth.supabase, { force });
     return NextResponse.json({ success: true, data: toBrowserGmailAuth(auth) });
   } catch (error) {
     return NextResponse.json(

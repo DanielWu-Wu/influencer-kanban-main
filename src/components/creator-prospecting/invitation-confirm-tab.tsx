@@ -84,6 +84,12 @@ function yesNoUnknown(value?: boolean) {
   return '待确认';
 }
 
+function prospectLanguageLabel(prospect: Prospect) {
+  if (prospect.outreachLanguageInferenceStatus === 'loading') return '正在识别语言';
+  const language = prospect.outreachLanguage || prospect.language;
+  return language ? outreachLanguageLabel(language) : '语言未知';
+}
+
 function formatVideoEngagementRate(video: NonNullable<Prospect['recentVideos']>[number]) {
   if (
     typeof video.viewCount !== 'number'
@@ -284,7 +290,7 @@ function OutreachContextPreview({ context }: { context: OutreachAiContext }) {
               <div>
                 <p className="text-xs font-medium text-muted-foreground">产品描述卖点</p>
                 <p className="mt-1 whitespace-pre-wrap text-muted-foreground">
-                  {product.sellingPoints || '产品数据库暂无卖点资料。AI 只能收到产品名称，请先补充产品卖点。'}
+                  {product.sellingPoints || '产品数据库暂无卖点资料。智能助手只能收到产品名称，请先补充产品卖点。'}
                 </p>
               </div>
               {product.technicalSpecifications && (
@@ -307,7 +313,7 @@ function OutreachContextPreview({ context }: { context: OutreachAiContext }) {
           </div>
         ) : (
           <p className="mt-1 rounded-md bg-white p-3 text-muted-foreground">
-            当前选项尚未关联产品数据库资料，AI 只能收到产品名称。请先到设置里的产品数据库补充产品链接和卖点。
+            当前选项尚未关联产品数据库资料，智能助手只能收到产品名称。请先到设置里的产品数据库补充产品链接和卖点。
           </p>
         )}
       </div>
@@ -411,7 +417,7 @@ export function InvitationConfirmTab({
               <div className="min-w-0 flex-1">
                 <p className="truncate text-sm font-medium">{prospect.title || prospect.inputUrl}</p>
                 <p className={`truncate text-xs ${selected?.id === prospect.id ? 'text-primary-foreground/75' : 'text-muted-foreground'}`}>
-                  {countryLabel(prospect.country)} · {prospect.language || '语言未知'}
+                  {countryLabel(prospect.country)} · {prospectLanguageLabel(prospect)}
                 </p>
               </div>
             </button>
@@ -439,7 +445,7 @@ export function InvitationConfirmTab({
                   </Badge>
                 </div>
                 <p className="mt-1 text-sm text-muted-foreground">
-                  {countryLabel(selected.country)} · {selected.language || '语言未知'} · 粉丝 {formatCompactNumber(selected.subscriberCount)}
+                  {countryLabel(selected.country)} · {prospectLanguageLabel(selected)} · 粉丝 {formatCompactNumber(selected.subscriberCount)}
                   {' · '}近期均播 {formatCompactNumber(selected.recentAverageViews)}
                 </p>
               </div>
@@ -594,7 +600,7 @@ export function InvitationConfirmTab({
                     })}
                     placeholder={
                       inferringContactNameIds.includes(selected.id)
-                        ? 'AI 正在从频道资料中判断...'
+                        ? '智能助手正在从频道资料中判断...'
                         : '未发现姓名时请人工填写'
                     }
                     className="bg-white"
@@ -610,7 +616,7 @@ export function InvitationConfirmTab({
                     && typeof selected.contactNameConfidence === 'number' ? (
                       <ConfidenceIcon
                         confidence={selected.contactNameConfidence}
-                        label="AI 姓名置信度"
+                        label="智能姓名识别置信度"
                       />
                     ) : null}
                 </div>
@@ -655,13 +661,13 @@ export function InvitationConfirmTab({
                     && typeof selected.outreachLanguageConfidence === 'number' ? (
                       <ConfidenceIcon
                         confidence={selected.outreachLanguageConfidence}
-                        label="AI 语言置信度"
+                        label="智能语言识别置信度"
                       />
                     ) : null}
                 </div>
                 {selected.outreachLanguageInferenceStatus === 'not_found' && (
                   <p className="mt-1 text-xs text-amber-700">
-                    AI 未能确认语言，请手动搜索并选择后再生成开发信。
+                    智能助手未能确认语言，请手动搜索并选择后再生成开发信。
                   </p>
                 )}
               </div>
@@ -732,9 +738,9 @@ export function InvitationConfirmTab({
                   </DialogTrigger>
                   <DialogContent className="max-h-[86vh] sm:max-w-4xl">
                     <DialogHeader>
-                      <DialogTitle>开发信 AI 输入预览</DialogTitle>
+                      <DialogTitle>开发信智能输入预览</DialogTitle>
                       <DialogDescription>
-                        核对邮件生成规则和本次实际提交给 AI 的红人资料。
+                        核对邮件生成规则和本次实际提交给智能助手的红人资料。
                       </DialogDescription>
                     </DialogHeader>
                     <Tabs defaultValue="rules" className="min-h-0">
