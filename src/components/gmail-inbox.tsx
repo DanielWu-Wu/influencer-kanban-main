@@ -119,6 +119,29 @@ function sortThreadsByLatest(threads: GmailThread[]): GmailThread[] {
   return [...threads].sort((left, right) => getThreadTimestamp(right) - getThreadTimestamp(left));
 }
 
+function isGmailAuthError(status: number, details: unknown) {
+  const message = typeof details === 'string'
+    ? details
+    : details && typeof details === 'object'
+      ? JSON.stringify(details)
+      : '';
+  return status === 401 || [
+    'unauthenticated',
+    'invalid authentication credentials',
+    'invalid credentials',
+    'oauth',
+    'access token',
+    'autherror',
+  ].some((keyword) => message.toLowerCase().includes(keyword));
+}
+
+function readableGmailAuthError(message?: string) {
+  if (message?.includes('尚未连接 Gmail')) {
+    return 'Gmail 连接记录不完整，请到“设置 > Gmail 邮件”断开后重新连接。';
+  }
+  return message || 'Gmail 授权已过期，请重新连接。';
+}
+
 function hasThreadLabel(thread: GmailThread, label: string): boolean {
   return thread.labels.includes(label);
 }
@@ -577,22 +600,24 @@ export function GmailInbox({
     }
   }, [connect]);
 
-  const getAccessToken = useCallback(async () => {
-    if (!auth?.accessToken) throw new Error('\u8bf7\u91cd\u65b0\u8fde\u63a5 Gmail\u3002');
-    if (auth.expiresAt && auth.expiresAt > Date.now() + 60_000) {
+  const getAccessToken = useCallback(async (options: { force?: boolean } = {}) => {
+    if (!auth?.isConnected) throw new Error('请重新连接 Gmail。');
+    if (!options.force && auth.accessToken && auth.expiresAt && auth.expiresAt > Date.now() + 60_000) {
       return auth.accessToken;
     }
 
-    const response = await fetch('/api/auth/refresh', {
+    const response = await fetch(options.force ? '/api/auth/refresh?force=1' : '/api/auth/refresh', {
       method: 'POST',
     });
     const result = await response.json();
     if (!response.ok || !result.data?.accessToken) {
-      throw new Error(result.error || 'Gmail \u6388\u6743\u5df2\u8fc7\u671f\uff0c\u8bf7\u91cd\u65b0\u8fde\u63a5\u3002');
+      throw new Error(readableGmailAuthError(result.error));
     }
 
     connect({
       ...auth,
+      isConnected: true,
+      email: result.data.email || auth.email,
       accessToken: result.data.accessToken,
       expiresAt: result.data.expiresAt,
     });
@@ -608,8 +633,8 @@ export function GmailInbox({
     setError(null);
 
     try {
-      const accessToken = await getAccessToken();
-      const headers = { Authorization: `Bearer ${accessToken}` };
+      let accessToken = await getAccessToken();
+      let headers = { Authorization: `Bearer ${accessToken}` };
       const pageToken = pageTokens[pageIndex] || '';
       const params = new URLSearchParams({ maxResults: String(GMAIL_PAGE_SIZE) });
       const requestLabelIds = [...MAILBOX_API_LABELS[mailbox]];
@@ -635,7 +660,7 @@ export function GmailInbox({
             })
             .catch(() => null)
         : Promise.resolve(null);
-      const [listResponse, unreadCount] = await Promise.all([
+      let [listResponse, unreadCount] = await Promise.all([
         fetchWithTimeout(
           `https://gmail.googleapis.com/gmail/v1/users/me/threads?${params.toString()}`,
           { headers },
@@ -643,6 +668,35 @@ export function GmailInbox({
         unreadCountRequest,
       ]);
       if (fetchId !== latestFetchIdRef.current) return;
+
+      if (!listResponse.ok) {
+        const result = await listResponse.json().catch(() => ({}));
+        if (isGmailAuthError(listResponse.status, result)) {
+          accessToken = await getAccessToken({ force: true });
+          headers = { Authorization: `Bearer ${accessToken}` };
+          [listResponse, unreadCount] = await Promise.all([
+            fetchWithTimeout(
+              `https://gmail.googleapis.com/gmail/v1/users/me/threads?${params.toString()}`,
+              { headers },
+            ),
+            mailbox === 'inbox' || mailbox === 'unread'
+              ? fetchWithTimeout(
+                  `https://gmail.googleapis.com/gmail/v1/users/me/threads?${unreadCountParams.toString()}`,
+                  { headers },
+                  8_000,
+                )
+                  .then(async (response) => {
+                    if (!response.ok) return null;
+                    const retryResult = await response.json() as GmailThreadListResult;
+                    return typeof retryResult.resultSizeEstimate === 'number' ? retryResult.resultSizeEstimate : null;
+                  })
+                  .catch(() => null)
+              : Promise.resolve(null),
+          ]);
+          if (fetchId !== latestFetchIdRef.current) return;
+        }
+      }
+
       if (unreadCount !== null) setNormalUnreadCount(unreadCount);
 
       if (!listResponse.ok) {
