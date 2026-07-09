@@ -16,6 +16,7 @@ import { InvitationConfirmTab } from '@/components/creator-prospecting/invitatio
 import { OutreachEmailTab } from '@/components/creator-prospecting/outreach-email-tab';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
+import { Input } from '@/components/ui/input';
 import {
   Dialog,
   DialogContent,
@@ -24,6 +25,7 @@ import {
   DialogHeader,
   DialogTitle,
 } from '@/components/ui/dialog';
+import { Textarea } from '@/components/ui/textarea';
 import { generateId, useGmailAuth, useProducts, useSettings, type AppSettings } from '@/lib/data';
 import { DEFAULT_OUTREACH_PROMPT } from '@/lib/ai-prompts';
 import { appendEmailSignature } from '@/lib/email-content';
@@ -86,10 +88,45 @@ type FeishuRecord = {
   fields: Record<string, unknown>;
 };
 
+type ResourceEmailSyncPreview =
+  | {
+      status: 'will_update';
+      recordId: string;
+      fieldName: string;
+      currentValue: string;
+      nextValue: string;
+      appendedEmail: string;
+    }
+  | {
+      status: 'already_exists';
+      currentValue: string;
+      appendedEmail: string;
+    }
+  | {
+      status: 'missing_mapping' | 'missing_record' | 'missing_email';
+    };
+
 type FeishuWritePreview = {
   prospect: Prospect;
   fields: Record<string, unknown>;
   target: 'resource' | 'development';
+  resourceEmailSync?: ResourceEmailSyncPreview;
+};
+
+type FeishuFieldOption = {
+  id?: string;
+  name?: string;
+  text?: string;
+  value?: string;
+};
+
+type FeishuInspectField = {
+  field_name: string;
+  type: number;
+  property?: {
+    options?: FeishuFieldOption[];
+  };
+  options?: FeishuFieldOption[];
 };
 
 const TAB_META: Array<{
@@ -108,8 +145,25 @@ function firstValue(...values: Array<string | undefined>) {
 
 function getErrorMessage(value: unknown, fallback: string) {
   if (value && typeof value === 'object' && 'error' in value) {
-    const error = (value as { error?: unknown }).error;
+    const error = (value as { error?: unknown; details?: unknown }).error;
     if (typeof error === 'string') return error;
+    const details = (value as { details?: unknown }).details;
+    if (typeof details === 'string' && details.trim()) {
+      try {
+        const payload = JSON.parse(details) as {
+          error?: {
+            message?: string;
+            status?: string;
+            errors?: Array<{ reason?: string; message?: string }>;
+          };
+        };
+        const reason = payload.error?.errors?.map((item) => item.reason || item.message).filter(Boolean).join('；');
+        const message = [payload.error?.message, payload.error?.status, reason].filter(Boolean).join('；');
+        if (message) return message;
+      } catch {
+        return details.trim();
+      }
+    }
   }
   return fallback;
 }
@@ -141,13 +195,18 @@ function buildFeishuUrlValue(prospect: Prospect) {
   };
 }
 
-function buildResourceFields(prospect: Prospect, mapping: FeishuFieldMapping) {
+function buildResourceFields(
+  prospect: Prospect,
+  mapping: FeishuFieldMapping,
+  contentTypes: string[] = [],
+) {
   const fields: Record<string, unknown> = {};
   const notes = '来源：红人开发台';
 
   putMappedField(fields, mapping, 'channelName', prospect.title);
   putMappedField(fields, mapping, 'platform', 'YouTube');
   putMappedField(fields, mapping, 'region', prospect.country ? countryLabel(prospect.country) : '');
+  putMappedField(fields, mapping, 'contentType', contentTypes);
   putMappedField(fields, mapping, 'followers', prospect.subscriberCount);
   putMappedField(fields, mapping, 'channelUrl', buildFeishuUrlValue(prospect));
   putMappedField(fields, mapping, 'channelId', prospect.channelId);
@@ -311,7 +370,8 @@ async function refreshRecentVideos(
   return result.channels[0].recentVideos || prospect.recentVideos || [];
 }
 
-function formatPreviewValue(value: unknown) {
+function formatPreviewValue(value: unknown): string {
+  if (Array.isArray(value)) return value.map(formatPreviewValue).filter(Boolean).join('，');
   if (typeof value === 'number' && value > 1_000_000_000_000) {
     return new Date(value).toLocaleDateString('zh-CN');
   }
@@ -322,6 +382,141 @@ function formatPreviewValue(value: unknown) {
     }
   }
   return String(value);
+}
+
+function normalizeEmailForCompare(value: string) {
+  return value.trim().toLowerCase();
+}
+
+function splitEmailValues(value: string) {
+  return value
+    .split(/[\n,，;；、\s]+/)
+    .map((item) => item.trim())
+    .filter(Boolean);
+}
+
+function formatFeishuEmailValue(value: unknown) {
+  if (value === null || value === undefined) return '';
+  if (typeof value === 'string') return value.trim();
+  return formatPreviewValue(value).trim();
+}
+
+function appendEmailValue(currentValue: string, email: string) {
+  const trimmedCurrentValue = currentValue.trim();
+  const trimmedEmail = email.trim();
+  if (!trimmedCurrentValue) return trimmedEmail;
+  const existingEmails = splitEmailValues(trimmedCurrentValue).map(normalizeEmailForCompare);
+  if (existingEmails.includes(normalizeEmailForCompare(trimmedEmail))) return trimmedCurrentValue;
+  return `${trimmedCurrentValue}\n${trimmedEmail}`;
+}
+
+function buildResourceEmailSyncPreview(
+  prospect: Prospect,
+  resourceRecord: FeishuRecord | undefined,
+  emailFieldName: string | undefined,
+): ResourceEmailSyncPreview {
+  const email = prospect.publicEmail?.trim();
+  if (!email) return { status: 'missing_email' };
+  if (!emailFieldName) return { status: 'missing_mapping' };
+  if (!prospect.resourceRecordId || !resourceRecord) return { status: 'missing_record' };
+
+  const currentValue = formatFeishuEmailValue(resourceRecord.fields[emailFieldName]);
+  const nextValue = appendEmailValue(currentValue, email);
+  if (nextValue === currentValue) {
+    return {
+      status: 'already_exists',
+      currentValue,
+      appendedEmail: email,
+    };
+  }
+
+  return {
+    status: 'will_update',
+    recordId: resourceRecord.record_id,
+    fieldName: emailFieldName,
+    currentValue,
+    nextValue,
+    appendedEmail: email,
+  };
+}
+
+function splitContentTypeInput(value: string) {
+  return value
+    .split(/[,，、\n]/)
+    .map((item) => item.trim())
+    .filter(Boolean);
+}
+
+function prospectContentText(prospect: Prospect) {
+  return [
+    prospect.title,
+    prospect.description,
+    prospect.country,
+    prospect.language,
+    ...(prospect.recentVideos || []).flatMap((video) => [
+      video.title,
+      video.translatedTitle,
+    ]),
+  ].filter(Boolean).join(' ').toLowerCase();
+}
+
+const CONTENT_TYPE_KEYWORDS: Array<{ pattern: RegExp; keywords: string[] }> = [
+  { pattern: /房车|camper|rv/i, keywords: ['rv', 'camper', 'camping', 'husbil', 'husvagn', 'motorhome', 'caravan', 'vanlife', 'wohnmobil', 'autocaravan', 'furgon', 'campervan'] },
+  { pattern: /off\s*grid|离网/i, keywords: ['off grid', 'off-grid', 'solar', 'photovoltaic', 'battery', 'power station', 'energy storage', 'independent energy', 'self sufficient', 'zonnepaneel'] },
+  { pattern: /工具|tools?/i, keywords: ['tool', 'tools', 'workshop', 'garage', 'repair', 'renovation', 'construction', 'woodworking'] },
+  { pattern: /diy|手工/i, keywords: ['diy', 'do it yourself', 'zelf', 'själv', 'gör', 'build', 'bygg', 'klussen', 'bricolage', 'maker'] },
+  { pattern: /科技|tech/i, keywords: ['tech', 'technology', 'gadget', 'electronics', 'smart home', 'domotica', 'device'] },
+  { pattern: /越野|overland/i, keywords: ['overland', 'offroad', 'off-road', '4x4', 'expedition', 'adventure vehicle'] },
+  { pattern: /农场|homestead/i, keywords: ['homestead', 'farm', 'garden', 'self sufficiency', 'permaculture', 'smallholding'] },
+  { pattern: /应急|prepper/i, keywords: ['prepper', 'prepping', 'emergency', 'survival', 'backup power'] },
+  { pattern: /海上|sailing|marine/i, keywords: ['sailing', 'boat', 'yacht', 'marine', 'sea', 'sailboat'] },
+  { pattern: /新闻|news/i, keywords: ['news', 'politics', 'current affairs'] },
+];
+
+function inferContentTypesFromOptions(prospect: Prospect, options: string[]) {
+  const text = prospectContentText(prospect);
+  return options.filter((option) => {
+    const normalized = option.toLowerCase();
+    if (text.includes(normalized)) return true;
+    const rule = CONTENT_TYPE_KEYWORDS.find((item) => item.pattern.test(option));
+    return Boolean(rule?.keywords.some((keyword) => text.includes(keyword)));
+  });
+}
+
+function extractFeishuOptionName(option: FeishuFieldOption) {
+  return String(option.name || option.text || option.value || '').trim();
+}
+
+function compactFeishuWriteFields(fields: Record<string, unknown>) {
+  return Object.fromEntries(
+    Object.entries(fields).filter(([, value]) => {
+      if (value === undefined || value === null || value === '') return false;
+      if (Array.isArray(value) && value.length === 0) return false;
+      return true;
+    }),
+  );
+}
+
+function buildResourceMatchPreview(
+  record: FeishuRecord | undefined,
+  mapping: FeishuFieldMapping,
+  matchReason: string,
+): Prospect['resourceMatchPreview'] {
+  if (!record) return undefined;
+  const fieldValue = (key: FeishuFieldKey) => {
+    const fieldName = mapping[key];
+    return fieldName ? flattenFeishuValue(record.fields[fieldName]).trim() : '';
+  };
+  return {
+    recordId: record.record_id,
+    matchReason,
+    channelName: fieldValue('channelName'),
+    channelUrl: fieldValue('channelUrl'),
+    email: fieldValue('email'),
+    region: fieldValue('region'),
+    platform: fieldValue('platform'),
+    notes: fieldValue('notes'),
+  };
 }
 
 function findRecordMatch(
@@ -756,27 +951,35 @@ export function CreatorProspectingPage() {
     }
   };
 
-  const handleWriteFirstOutreachSent = async (prospect: Prospect, patch: Partial<Prospect> = {}) => {
+  const writeFirstOutreachSent = async (prospect: Prospect, patch: Partial<Prospect> = {}) => {
     if (!settings.feishuProspectingUrl || !settings.feishuUrl) {
-      toast.error('请先在设置中连接“红人信息数据库”和“红人开发情况表”。');
-      return;
+      return {
+        success: false,
+        error: '请先在设置中连接“红人信息数据库”和“红人开发情况表”。',
+      };
     }
     const next = { ...prospect, ...patch } as Prospect;
     if (!next.feishuRecordId || !next.resourceRecordId) {
-      toast.error('这条线索还没有同时关联资源库记录和开发记录，暂时不能双表写回“初次开发信”。');
-      return;
+      return {
+        success: false,
+        error: '这条线索还没有同时关联资源库记录和开发记录，暂时不能双表写回“初次开发信”。',
+      };
     }
     const developmentMapping = settings.feishuProspectingFieldMapping || {};
     const resourceMapping = settings.feishuFieldMapping || {};
     if (!developmentMapping.firstOutreach || !resourceMapping.firstOutreach) {
-      toast.error('请先在两个飞书表的字段映射中都配置“初次开发信”字段。');
-      return;
+      return {
+        success: false,
+        error: '请先在两个飞书表的字段映射中都配置“初次开发信”字段。',
+      };
     }
     const developmentFields = buildFirstOutreachSentFields(next, developmentMapping);
     const resourceFields = buildFirstOutreachResourceFields(resourceMapping);
     if (!Object.keys(developmentFields).length || !Object.keys(resourceFields).length) {
-      toast.error('没有可写入的飞书字段，请检查字段映射。');
-      return;
+      return {
+        success: false,
+        error: '没有可写入的飞书字段，请检查字段映射。',
+      };
     }
     try {
       const writes = [
@@ -812,11 +1015,11 @@ export function CreatorProspectingPage() {
       }));
       if (results.length !== writes.length) throw new Error('飞书写回结果不完整。');
       updateProspect(next.id, { syncError: undefined });
-      toast.success('已写回飞书双表：初次开发信 = 已发。');
+      return { success: true };
     } catch (error) {
       const message = error instanceof Error ? error.message : '飞书写回失败。';
       updateProspect(next.id, { syncError: message });
-      toast.error(message);
+      return { success: false, error: message };
     }
   };
 
@@ -996,6 +1199,9 @@ export function CreatorProspectingPage() {
           resourceRecordId: resourceMatch.exact?.record_id || resourceMatch.suspected?.record_id,
           feishuRecordId: linkedDevelopmentId,
           duplicateRecordId: developmentMatch.suspected?.record_id || resourceMatch.suspected?.record_id,
+          resourceMatchPreview: resourceMatch.suspected
+            ? buildResourceMatchPreview(resourceMatch.suspected, resourceMapping, resourceMatch.reason)
+            : undefined,
           duplicateReason: developmentMatch.exact
             ? `已关联现有开发记录：${developmentMatch.reason}`
             : developmentMatch.suspected
@@ -1024,19 +1230,45 @@ export function CreatorProspectingPage() {
     }
   };
 
-  const openDevelopmentPreview = (items: Prospect[]) => {
+  const openDevelopmentPreview = async (items: Prospect[]) => {
     const targets = items.filter(canCreateFeishuRecord);
     if (!targets.length) {
       toast.error('没有可创建的线索。请先完成识别和飞书查重，并排除重复记录。');
       return;
     }
     const mapping = settings.feishuProspectingFieldMapping || {};
+    const resourceMapping = settings.feishuFieldMapping || {};
+    const resourceUrl = settings.feishuUrl;
+    const needsResourceEmailPreview = Boolean(
+      resourceUrl
+      && resourceMapping.email
+      && targets.some((prospect) => prospect.resourceRecordId && prospect.publicEmail?.trim()),
+    );
+    let resourceRecordsById = new Map<string, FeishuRecord>();
+    if (needsResourceEmailPreview && resourceUrl) {
+      try {
+        const resourceRecords = await loadFeishuRecords(resourceUrl, '红人信息数据库');
+        resourceRecordsById = new Map(resourceRecords.map((record) => [record.record_id, record]));
+      } catch (error) {
+        toast.warning(error instanceof Error ? error.message : '资源库邮箱同步预览读取失败，本次仅创建开发记录。');
+      }
+    }
     const previews = targets
-      .map((prospect) => ({
-        prospect,
-        target: 'development' as const,
-        fields: buildDevelopmentFields({ ...prospect, workflowStatus: 'dedupe_completed' }, mapping),
-      }))
+      .map((prospect) => {
+        const resourceRecord = prospect.resourceRecordId
+          ? resourceRecordsById.get(prospect.resourceRecordId)
+          : undefined;
+        return {
+          prospect,
+          target: 'development' as const,
+          fields: buildDevelopmentFields({ ...prospect, workflowStatus: 'dedupe_completed' }, mapping),
+          resourceEmailSync: buildResourceEmailSyncPreview(
+            prospect,
+            resourceRecord,
+            resourceMapping.email,
+          ),
+        };
+      })
       .filter((item) => Object.keys(item.fields).length > 0);
     if (!previews.length) {
       toast.error('没有可写入字段，请先检查“红人开发情况表”的字段映射。');
@@ -1045,7 +1277,24 @@ export function CreatorProspectingPage() {
     setPreviewItems(previews);
   };
 
-  const openResourcePreview = (items: Prospect[]) => {
+  const loadContentTypeOptions = async (fieldName?: string) => {
+    if (!settings.feishuUrl || !fieldName) return [];
+    const response = await fetch('/api/feishu/inspect', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ url: settings.feishuUrl }),
+    });
+    const result = await response.json();
+    if (!response.ok || !result.success) {
+      throw new Error(getErrorMessage(result, '读取飞书内容类型选项失败。'));
+    }
+    const fields = (result.data?.fields || []) as FeishuInspectField[];
+    const field = fields.find((item) => item.field_name === fieldName);
+    const rawOptions = field?.property?.options || field?.options || [];
+    return rawOptions.map(extractFeishuOptionName).filter(Boolean);
+  };
+
+  const openResourcePreview = async (items: Prospect[]) => {
     const targets = items.filter((item) => (
       item.resourceStatus === 'missing'
       && !item.resourceRecordId
@@ -1055,11 +1304,21 @@ export function CreatorProspectingPage() {
       return;
     }
     const mapping = settings.feishuFieldMapping || {};
+    let contentTypeOptions: string[] = [];
+    try {
+      contentTypeOptions = await loadContentTypeOptions(mapping.contentType);
+    } catch (error) {
+      toast.warning(error instanceof Error ? error.message : '内容类型选项读取失败，本次可手动填写。');
+    }
     const previews = targets
       .map((prospect) => ({
         prospect,
         target: 'resource' as const,
-        fields: buildResourceFields(prospect, mapping),
+        fields: buildResourceFields(
+          prospect,
+          mapping,
+          inferContentTypesFromOptions(prospect, contentTypeOptions),
+        ),
       }))
       .filter((item) => Object.keys(item.fields).length > 0);
     if (!previews.length) {
@@ -1077,15 +1336,18 @@ export function CreatorProspectingPage() {
     setWritingFeishu(true);
     const successes: Array<{ id: string; recordId: string }> = [];
     const failures: string[] = [];
+    const resourceEmailFailures: string[] = [];
+    let resourceEmailSyncCount = 0;
     for (const item of previewItems) {
       try {
+        const fields = compactFeishuWriteFields(item.fields);
         const response = await fetch('/api/feishu/records', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({
             action: 'create',
             url: targetUrl,
-            fields: item.fields,
+            fields,
           }),
         });
         const result = await response.json();
@@ -1093,6 +1355,31 @@ export function CreatorProspectingPage() {
         const recordId = extractRecordId(result);
         if (!recordId) throw new Error('飞书已创建记录，但未返回记录 ID。');
         successes.push({ id: item.prospect.id, recordId });
+        if (target === 'development' && item.resourceEmailSync?.status === 'will_update') {
+          try {
+            const syncResponse = await fetch('/api/feishu/records', {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({
+                action: 'update',
+                url: settings.feishuUrl,
+                recordId: item.resourceEmailSync.recordId,
+                fields: {
+                  [item.resourceEmailSync.fieldName]: item.resourceEmailSync.nextValue,
+                },
+              }),
+            });
+            const syncResult = await syncResponse.json();
+            if (!syncResponse.ok || !syncResult.success) {
+              throw new Error(getErrorMessage(syncResult, '资源库邮箱同步失败。'));
+            }
+            resourceEmailSyncCount += 1;
+          } catch (error) {
+            resourceEmailFailures.push(
+              `${item.prospect.title || item.prospect.inputUrl}：${error instanceof Error ? error.message : '资源库邮箱同步失败'}`,
+            );
+          }
+        }
       } catch (error) {
         failures.push(`${item.prospect.title || item.prospect.inputUrl}：${error instanceof Error ? error.message : '写入失败'}`);
       }
@@ -1122,13 +1409,29 @@ export function CreatorProspectingPage() {
     setWritingFeishu(false);
     if (failures.length) {
       toast.error(`已创建 ${successes.length} 个，失败 ${failures.length} 个。${failures[0]}`);
+    } else if (resourceEmailFailures.length) {
+      toast.warning(`开发记录已创建 ${successes.length} 条，但资源库邮箱同步失败 ${resourceEmailFailures.length} 条。${resourceEmailFailures[0]}`);
     } else {
       toast.success(
         target === 'resource'
           ? `已在红人资源库新增 ${successes.length} 条记录。`
-          : `已在红人开发情况表新增 ${successes.length} 条开发记录。`,
+          : `已在红人开发情况表新增 ${successes.length} 条开发记录${resourceEmailSyncCount ? `，并同步补全 ${resourceEmailSyncCount} 条资源库邮箱` : ''}。`,
       );
     }
+  };
+
+  const updatePreviewField = (prospectId: string, fieldName: string, value: unknown) => {
+    setPreviewItems((current) => current.map((item) => (
+      item.prospect.id === prospectId
+        ? {
+            ...item,
+            fields: {
+              ...item.fields,
+              [fieldName]: value,
+            },
+          }
+        : item
+    )));
   };
 
   const handleConfirmInvitation = async (items: Prospect[]) => {
@@ -1362,22 +1665,16 @@ export function CreatorProspectingPage() {
       };
       updateProspect(prospect.id, patch);
       const synced = await syncFeishuProspect(prospect, patch);
-      toast[ synced ? 'success' : 'warning' ](
-        synced
-          ? 'Gmail 草稿已保存，这条线索已从开发信队列移出。请前往 Gmail 手动检查和发送。'
-          : 'Gmail 草稿已保存，这条线索已从开发信队列移出，但飞书状态同步失败。邮件没有被自动发送。',
-        {
-          action: {
-            label: (
-              <span title="写回双表：资源库和开发记录表的初次开发信=已发；开发记录表同步草稿 ID 和开发状态">
-                写回飞书
-              </span>
-            ),
-            onClick: () => void handleWriteFirstOutreachSent(prospect, patch),
-          },
-          duration: 12000,
-        },
-      );
+      const firstOutreachResult = await writeFirstOutreachSent(prospect, patch);
+      if (firstOutreachResult.success) {
+        toast.success(
+          `红人 ${prospect.title || '该红人'} 的开发信已保存到 Gmail 草稿箱，并已在飞书双表标记为“已发”。请前往 Gmail 手动检查和发送。`,
+        );
+      } else {
+        toast.warning(
+          `Gmail 草稿已保存，但飞书“已发”标记失败：${firstOutreachResult.error || (synced ? '未知原因' : '飞书状态同步失败')}。邮件没有被自动发送。`,
+        );
+      }
     } catch (error) {
       toast.error(error instanceof Error ? error.message : '保存 Gmail 草稿失败。');
     } finally {
@@ -1487,6 +1784,7 @@ export function CreatorProspectingPage() {
               duplicateConfirmedUnique: true,
               duplicateRecordId: undefined,
               duplicateReason: '疑似重复已由人工确认，不关联现有记录',
+              resourceMatchPreview: undefined,
             })}
             onUseExistingResource={(id) => {
               const prospect = prospects.find((item) => item.id === id);
@@ -1494,6 +1792,7 @@ export function CreatorProspectingPage() {
               updateProspect(id, {
                 resourceStatus: 'exists',
                 duplicateReason: '已由用户确认关联红人资源库中的现有记录',
+                resourceMatchPreview: undefined,
               });
               toast.success('已关联资源库现有记录，不会重复建档。');
             }}
@@ -1580,13 +1879,85 @@ export function CreatorProspectingPage() {
                   <Badge variant="outline">{Object.keys(item.fields).length} 个字段</Badge>
                 </div>
                 <dl className="mt-2 grid gap-2 text-sm sm:grid-cols-2">
-                  {Object.entries(item.fields).map(([key, value]) => (
-                    <div key={key} className="rounded-md bg-white px-2 py-1.5">
-                      <dt className="text-xs text-muted-foreground">{key}</dt>
-                      <dd className="mt-0.5 max-h-16 overflow-auto whitespace-pre-wrap">{formatPreviewValue(value)}</dd>
-                    </div>
-                  ))}
+                  {Object.entries(item.fields).map(([key, value]) => {
+                    const isEditableResourceNote = item.target === 'resource'
+                      && key === settings.feishuFieldMapping?.notes;
+                    const isEditableResourceContentType = item.target === 'resource'
+                      && key === settings.feishuFieldMapping?.contentType;
+                    return (
+                      <div key={key} className={`rounded-md bg-white px-2 py-1.5 ${isEditableResourceNote ? 'sm:col-span-2' : ''}`}>
+                        <dt className="text-xs text-muted-foreground">{key}</dt>
+                        {isEditableResourceContentType ? (
+                          <dd className="mt-1">
+                            <Input
+                              value={formatPreviewValue(value)}
+                              onChange={(event) => updatePreviewField(
+                                item.prospect.id,
+                                key,
+                                splitContentTypeInput(event.target.value),
+                              )}
+                              placeholder="例如：房车RV，Camper, Off Grid"
+                              className="h-9 bg-white"
+                            />
+                            <p className="mt-1 text-xs text-muted-foreground">
+                              会按飞书内容类型标签写入，多个标签用逗号分隔。
+                            </p>
+                          </dd>
+                        ) : isEditableResourceNote ? (
+                          <dd className="mt-1">
+                            <Textarea
+                              value={formatPreviewValue(value)}
+                              onChange={(event) => updatePreviewField(item.prospect.id, key, event.target.value)}
+                              placeholder="可补充人工备注，例如内容方向、合作判断或来源说明"
+                              className="min-h-20 resize-y bg-white"
+                            />
+                            <p className="mt-1 text-xs text-muted-foreground">
+                              会写入红人资源库的备注字段，可在确认前修改。
+                            </p>
+                          </dd>
+                        ) : (
+                          <dd className="mt-0.5 max-h-16 overflow-auto whitespace-pre-wrap">{formatPreviewValue(value)}</dd>
+                        )}
+                      </div>
+                    );
+                  })}
                 </dl>
+                {item.target === 'development' && item.resourceEmailSync && (
+                  <div className="mt-3 rounded-md border border-sky-100 bg-sky-50/80 p-3 text-sm text-slate-700">
+                    <p className="font-medium text-slate-900">资源库邮箱同步</p>
+                    {item.resourceEmailSync.status === 'will_update' && (
+                      <div className="mt-1 space-y-1">
+                        <p>确认后会把当前邮箱补写到红人资源库，不覆盖原有邮箱。</p>
+                        <p className="text-xs text-muted-foreground">
+                          当前资源库邮箱：{item.resourceEmailSync.currentValue || '空'}
+                        </p>
+                        <p className="whitespace-pre-wrap text-xs text-muted-foreground">
+                          写入后：{item.resourceEmailSync.nextValue}
+                        </p>
+                      </div>
+                    )}
+                    {item.resourceEmailSync.status === 'already_exists' && (
+                      <p className="mt-1 text-xs text-muted-foreground">
+                        资源库已包含 {item.resourceEmailSync.appendedEmail}，不会重复追加。
+                      </p>
+                    )}
+                    {item.resourceEmailSync.status === 'missing_mapping' && (
+                      <p className="mt-1 text-xs text-muted-foreground">
+                        资源库未配置“联系邮箱”字段映射，本次只新建开发记录。
+                      </p>
+                    )}
+                    {item.resourceEmailSync.status === 'missing_record' && (
+                      <p className="mt-1 text-xs text-muted-foreground">
+                        当前线索未关联资源库记录，本次只新建开发记录。
+                      </p>
+                    )}
+                    {item.resourceEmailSync.status === 'missing_email' && (
+                      <p className="mt-1 text-xs text-muted-foreground">
+                        当前线索邮箱为空，本次不补写资源库邮箱。
+                      </p>
+                    )}
+                  </div>
+                )}
               </div>
             ))}
           </div>

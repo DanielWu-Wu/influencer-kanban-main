@@ -66,6 +66,7 @@ const ROLE_CONFIG: Record<TableRole, {
       'channelUrl',
       'channelId',
       'region',
+      'contentType',
       'followers',
       'recentAverageViews',
       'firstOutreach',

@@ -97,6 +97,16 @@ export type Prospect = {
   duplicateReason?: string;
   duplicateRecordId?: string;
   duplicateConfirmedUnique?: boolean;
+  resourceMatchPreview?: {
+    recordId: string;
+    matchReason: string;
+    channelName?: string;
+    channelUrl?: string;
+    email?: string;
+    region?: string;
+    platform?: string;
+    notes?: string;
+  };
   resourceStatus: ProspectResourceStatus;
   developmentStatus: ProspectDevelopmentStatus;
   resourceRecordId?: string;

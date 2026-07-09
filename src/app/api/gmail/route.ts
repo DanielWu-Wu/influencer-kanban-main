@@ -45,6 +45,43 @@ function dataUrlToBase64(dataUrl: string) {
   };
 }
 
+function sleep(ms: number) {
+  return new Promise((resolve) => {
+    setTimeout(resolve, ms);
+  });
+}
+
+function summarizeGmailError(status: number, details: string) {
+  try {
+    const payload = JSON.parse(details) as {
+      error?: {
+        message?: string;
+        status?: string;
+        errors?: Array<{ reason?: string; message?: string }>;
+      };
+    };
+    const reason = payload.error?.errors?.map((item) => item.reason || item.message).filter(Boolean).join('；');
+    return [payload.error?.message, payload.error?.status, reason]
+      .filter(Boolean)
+      .join('；') || `Gmail 返回 ${status}`;
+  } catch {
+    return details.trim() || `Gmail 返回 ${status}`;
+  }
+}
+
+function shouldRetryGmailDraft(status: number, details: string) {
+  if ([429, 500, 502, 503, 504].includes(status)) return true;
+  const normalized = details.toLowerCase();
+  return [
+    'ratelimit',
+    'rate limit',
+    'backenderror',
+    'internal error',
+    'temporarily',
+    'timeout',
+  ].some((keyword) => normalized.includes(keyword));
+}
+
 function getHeader(headers: GmailHeader[] = [], name: string) {
   return headers.find((header) => header.name.toLowerCase() === name.toLowerCase())?.value || '';
 }
@@ -390,24 +427,38 @@ export async function POST(request: NextRequest) {
         .replace(/\//g, '_')
         .replace(/=+$/, '');
 
-      const res = await fetch('https://gmail.googleapis.com/gmail/v1/users/me/drafts', {
-        method: 'POST',
-        headers,
-        body: JSON.stringify({
-          message: {
-            raw: encodedEmail,
-            threadId: threadId || undefined,
-          },
-        }),
-      });
+      let lastStatus = 500;
+      let lastError = '';
+      for (let attempt = 0; attempt < 3; attempt += 1) {
+        const res = await fetch('https://gmail.googleapis.com/gmail/v1/users/me/drafts', {
+          method: 'POST',
+          headers,
+          body: JSON.stringify({
+            message: {
+              raw: encodedEmail,
+              threadId: threadId || undefined,
+            },
+          }),
+        });
 
-      if (!res.ok) {
-        const err = await res.text();
-        return NextResponse.json({ error: '创建草稿失败', details: err }, { status: res.status });
+        if (res.ok) {
+          const data = await res.json();
+          return NextResponse.json({ success: true, data });
+        }
+
+        lastStatus = res.status;
+        lastError = await res.text();
+        if (!shouldRetryGmailDraft(res.status, lastError) || attempt === 2) break;
+        await sleep(600 * (attempt + 1));
       }
 
-      const data = await res.json();
-      return NextResponse.json({ success: true, data });
+      return NextResponse.json(
+        {
+          error: `创建草稿失败：${summarizeGmailError(lastStatus, lastError)}`,
+          details: lastError,
+        },
+        { status: lastStatus },
+      );
     }
 
     return NextResponse.json({ error: '未知操作' }, { status: 400 });

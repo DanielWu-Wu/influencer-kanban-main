@@ -17,6 +17,7 @@ import {
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { Checkbox } from '@/components/ui/checkbox';
+import { HoverCard, HoverCardContent, HoverCardTrigger } from '@/components/ui/hover-card';
 import { Input } from '@/components/ui/input';
 import {
   Table,
@@ -63,6 +64,75 @@ type Props = {
   onRemove: (id: string) => void;
   onClearInput: () => void;
 };
+
+function FieldLine({ label, value }: { label: string; value?: string | number | null }) {
+  const text = value === null || value === undefined || value === '' ? '未填写' : String(value);
+  return (
+    <div className="min-w-0">
+      <p className="text-[11px] text-muted-foreground">{label}</p>
+      <p className="truncate text-sm text-slate-800" title={text}>{text}</p>
+    </div>
+  );
+}
+
+function ResourceStatusText({
+  prospect,
+  className,
+  label,
+}: {
+  prospect: Prospect;
+  className: string;
+  label: string;
+}) {
+  if (prospect.resourceStatus !== 'suspected') {
+    return <p className={className}>{label}</p>;
+  }
+
+  const preview = prospect.resourceMatchPreview;
+  return (
+    <HoverCard openDelay={120} closeDelay={120}>
+      <HoverCardTrigger asChild>
+        <button
+          type="button"
+          className={`${className} cursor-help text-left underline decoration-dotted underline-offset-2`}
+        >
+          {label}
+        </button>
+      </HoverCardTrigger>
+      <HoverCardContent align="start" side="top" className="w-[460px] p-0">
+        <div className="border-b bg-amber-50/80 px-4 py-3">
+          <p className="font-medium text-amber-900">疑似资源库记录</p>
+          <p className="mt-1 text-xs text-amber-800">
+            {preview?.matchReason || '暂无资源库预览，请重新飞书查重'}
+          </p>
+        </div>
+        {preview ? (
+          <div className="grid gap-3 p-4 sm:grid-cols-2">
+            <div className="space-y-2 rounded-md border bg-white/80 p-3">
+              <p className="text-xs font-medium text-slate-900">当前识别频道</p>
+              <FieldLine label="频道名" value={prospect.title} />
+              <FieldLine label="频道链接" value={prospect.url || prospect.sourceUrl || prospect.inputUrl} />
+              <FieldLine label="邮箱" value={prospect.publicEmail} />
+              <FieldLine label="地区" value={prospect.country ? countryLabel(prospect.country) : ''} />
+            </div>
+            <div className="space-y-2 rounded-md border bg-white/80 p-3">
+              <p className="text-xs font-medium text-slate-900">飞书资源库记录</p>
+              <FieldLine label="频道名" value={preview.channelName} />
+              <FieldLine label="频道链接" value={preview.channelUrl} />
+              <FieldLine label="邮箱" value={preview.email} />
+              <FieldLine label="地区 / 平台" value={[preview.region, preview.platform].filter(Boolean).join(' / ')} />
+              <FieldLine label="备注" value={preview.notes} />
+            </div>
+          </div>
+        ) : (
+          <div className="p-4 text-sm text-muted-foreground">
+            暂无资源库预览，请重新点击“飞书查重”。
+          </div>
+        )}
+      </HoverCardContent>
+    </HoverCard>
+  );
+}
 
 export function InfluencerImportTab({
   prospects,
@@ -272,7 +342,11 @@ export function InfluencerImportTab({
                     </p>
                   </TableCell>
                   <TableCell>
-                    <p className={resourceStatus.className}>{resourceStatus.label}</p>
+                    <ResourceStatusText
+                      prospect={prospect}
+                      className={resourceStatus.className}
+                      label={resourceStatus.label}
+                    />
                     <p className={`mt-0.5 text-xs ${developmentStatus.className}`}>{developmentStatus.label}</p>
                     {prospect.duplicateReason && (
                       <p className="mt-0.5 max-w-40 truncate text-xs text-muted-foreground" title={prospect.duplicateReason}>
@@ -287,9 +361,14 @@ export function InfluencerImportTab({
                     <div className="flex justify-end gap-1">
                       {(prospect.resourceStatus === 'suspected' || prospect.developmentStatus === 'suspected')
                         && !prospect.duplicateConfirmedUnique && (
-                        <Button variant="ghost" size="sm" onClick={() => onConfirmSuspected(prospect.id)}>
+                        <Button
+                          variant="ghost"
+                          size="sm"
+                          title="不关联疑似记录，允许新建红人信息"
+                          onClick={() => onConfirmSuspected(prospect.id)}
+                        >
                           <CheckCircle2 className="mr-1 h-4 w-4" />
-                          确认可建
+                          确认为新红人
                         </Button>
                       )}
                       {prospect.resourceStatus === 'suspected' && prospect.resourceRecordId && (
