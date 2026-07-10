@@ -4,6 +4,7 @@ import {
   DEFAULT_DRAFT_PROMPT,
   DEFAULT_OUTREACH_PROMPT,
 } from '@/lib/ai-prompts';
+import { sanitizeOutreachEmailBody } from '@/lib/outreach-draft-sanitizer';
 import { getRequestUser } from '@/lib/supabase/server';
 import { getUserSecret } from '@/lib/user-private-storage';
 
@@ -165,40 +166,6 @@ async function hydrateSecrets(request: NextRequest, body: Record<string, unknown
 
 function safeArray(value: unknown) {
   return Array.isArray(value) ? value : [];
-}
-
-function removeOutreachSignaturePlaceholders(value: unknown) {
-  return String(value || '')
-    .split(/\r?\n/)
-    .filter((line) => {
-      const normalized = line
-        .trim()
-        .replace(/^[\s[*（(【「『]+|[\s\]*）)】」』]+$/g, '')
-        .toLowerCase();
-      if (!normalized) return true;
-      const mentionsGmail = normalized.includes('gmail');
-      const mentionsSignature = [
-        'signature',
-        'signatur',
-        '签名',
-        '署名',
-      ].some((keyword) => normalized.includes(keyword));
-      const mentionsSystemInstruction = [
-        'system',
-        'systemet',
-        '系统',
-        'automatically',
-        'automatic',
-        'automatiskt',
-        '自动',
-        'placeholder',
-        '占位',
-      ].some((keyword) => normalized.includes(keyword));
-      return !(mentionsSignature && (mentionsGmail || mentionsSystemInstruction));
-    })
-    .join('\n')
-    .replace(/\n{3,}/g, '\n\n')
-    .trim();
 }
 
 export async function POST(request: NextRequest) {
@@ -374,8 +341,8 @@ ${initialEmail.body}`;
         ],
         getModelOptions(body, 0.45),
       )) as Record<string, unknown>;
-      result.body = removeOutreachSignaturePlaceholders(result.body);
-      result.translatedBody = removeOutreachSignaturePlaceholders(result.translatedBody);
+      result.body = sanitizeOutreachEmailBody(result.body);
+      result.translatedBody = sanitizeOutreachEmailBody(result.translatedBody);
       if (!String(result.body || '').trim()) {
         return NextResponse.json({ error: 'AI 没有返回可用的跟进邮件正文。' }, { status: 502 });
       }
@@ -406,6 +373,11 @@ ${initialEmail.body}`;
 2. 不要添加发件人姓名、职位、品牌名、官网链接等签名内容。
 3. 不要输出任何关于“签名会由系统/Gmail 自动添加”的说明、占位符或括号提示。
 4. 正文可以用一句自然礼貌的收尾，但收尾后必须直接结束。
+
+正文边界规则：
+1. body 字段只能包含发给红人的目标语言邮件正文。
+2. 不得在正文末尾追加分隔线、中文“注意”、产品事实核对、合作承诺、称呼建议、语言判断、风险提示、缺失信息或任何人工审核说明。
+3. 上述审核内容只能放在 riskNotes 或 missingInfo 字段，绝不能混入 body。
 
 只返回以下 JSON，不要添加其他文字：
 {
@@ -487,8 +459,8 @@ ${String(body.userPreference || '').trim() || '无'}
         subjectOptions.push({ subject, translatedSubject: '' });
       }
       result.subjectOptions = subjectOptions.slice(0, 3);
-      result.body = removeOutreachSignaturePlaceholders(result.body);
-      result.translatedBody = removeOutreachSignaturePlaceholders(result.translatedBody);
+      result.body = sanitizeOutreachEmailBody(result.body);
+      result.translatedBody = sanitizeOutreachEmailBody(result.translatedBody);
       return NextResponse.json({ success: true, data: result });
     }
 

@@ -32,6 +32,7 @@ import { Textarea } from '@/components/ui/textarea';
 import { generateId, useGmailAuth, useProducts, useSettings, type AppSettings } from '@/lib/data';
 import { DEFAULT_OUTREACH_PROMPT } from '@/lib/ai-prompts';
 import { appendEmailSignature } from '@/lib/email-content';
+import { sanitizeOutreachEmailBody } from '@/lib/outreach-draft-sanitizer';
 import {
   buildOutreachEmailHtml,
   getProductInlineImage,
@@ -427,6 +428,10 @@ function splitEmailValues(value: string) {
     .split(/[\n,，;；、\s]+/)
     .map((item) => item.trim())
     .filter(Boolean);
+}
+
+function firstValidEmail(value: string | undefined) {
+  return splitEmailValues(value || '').find((email) => /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) || '';
 }
 
 function formatFeishuEmailValue(value: unknown) {
@@ -1704,12 +1709,13 @@ export function CreatorProspectingPage() {
           const text = event.data.text || '';
           if (!text) return;
           streamedBody += text;
+          const cleanStreamingBody = sanitizeOutreachEmailBody(streamedBody);
           updateProspect(prospect.id, {
-            streamingBody: streamedBody,
+            streamingBody: cleanStreamingBody,
             outreachGenerationStage: 'streaming_body',
             aiDraft: {
               subject: '',
-              body: streamedBody,
+              body: cleanStreamingBody,
               translatedBody: '',
               translatedSummary: '',
               personalizationNotes: [],
@@ -1743,7 +1749,7 @@ export function CreatorProspectingPage() {
 
       const draft: OutreachDraft = {
         ...completedDraft,
-        body: completedDraft.body || streamedBody,
+        body: sanitizeOutreachEmailBody(completedDraft.body || streamedBody),
       };
       updateProspect(prospect.id, {
         aiDraft: draft,
@@ -1758,7 +1764,11 @@ export function CreatorProspectingPage() {
     } catch (error) {
       try {
         updateProspect(prospect.id, { outreachGenerationStage: 'finalizing' });
-        const draft = await generateOneShot();
+        const generatedDraft = await generateOneShot();
+        const draft: OutreachDraft = {
+          ...generatedDraft,
+          body: sanitizeOutreachEmailBody(generatedDraft.body),
+        };
         updateProspect(prospect.id, {
           aiDraft: draft,
           workflowStatus: 'outreach_generated',
@@ -1869,7 +1879,14 @@ export function CreatorProspectingPage() {
       toast.error('请先生成并确认开发信内容。');
       return;
     }
-    const draft = prospect.aiDraft;
+    const sanitizedBody = sanitizeOutreachEmailBody(prospect.aiDraft.body);
+    const draft: OutreachDraft = {
+      ...prospect.aiDraft,
+      body: sanitizedBody,
+    };
+    if (sanitizedBody !== prospect.aiDraft.body) {
+      updateProspect(prospect.id, { aiDraft: draft });
+    }
     setSavingDraftId(prospect.id);
     try {
       const productAsset = selectedProductEmailAsset(products, prospect.targetProduct);
@@ -2054,12 +2071,23 @@ export function CreatorProspectingPage() {
             onUseExistingResource={(id) => {
               const prospect = prospects.find((item) => item.id === id);
               if (!prospect?.resourceRecordId) return;
+              const resourceEmail = firstValidEmail(prospect.resourceMatchPreview?.email);
+              const shouldFillEmail = !prospect.publicEmail?.trim() && Boolean(resourceEmail);
               updateProspect(id, {
                 resourceStatus: 'exists',
                 duplicateReason: '已由用户确认关联红人资源库中的现有记录',
                 resourceMatchPreview: undefined,
+                ...(shouldFillEmail
+                  ? {
+                      publicEmail: resourceEmail,
+                      emailStatus: 'available' as const,
+                      error: prospect.error?.includes('邮箱') ? undefined : prospect.error,
+                    }
+                  : {}),
               });
-              toast.success('已关联资源库现有记录，不会重复建档。');
+              toast.success(shouldFillEmail
+                ? '已关联资源库记录，并已自动填入资源库邮箱。'
+                : '已关联资源库现有记录，不会重复建档。');
             }}
             onUseExisting={(id) => {
               const prospect = prospects.find((item) => item.id === id);

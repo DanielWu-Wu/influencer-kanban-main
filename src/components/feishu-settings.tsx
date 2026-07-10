@@ -83,6 +83,7 @@ const ROLE_CONFIG: Record<TableRole, {
       'avatar',
       'region',
       'channelUrl',
+      'channelId',
       'email',
       'developmentDate',
       'firstOutreach',

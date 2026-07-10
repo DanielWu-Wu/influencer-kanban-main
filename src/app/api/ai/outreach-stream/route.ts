@@ -1,5 +1,6 @@
 import { NextRequest } from 'next/server';
 import { DEFAULT_OUTREACH_PROMPT } from '@/lib/ai-prompts';
+import { sanitizeOutreachEmailBody } from '@/lib/outreach-draft-sanitizer';
 import { getRequestUser } from '@/lib/supabase/server';
 import { getUserSecret } from '@/lib/user-private-storage';
 
@@ -77,21 +78,6 @@ function parseJson(content: string) {
 
 function safeArray(value: unknown) {
   return Array.isArray(value) ? value : [];
-}
-
-function removeOutreachSignaturePlaceholders(value: unknown) {
-  return String(value || '')
-    .split(/\r?\n/)
-    .filter((line) => {
-      const normalized = line.trim().toLowerCase();
-      if (!normalized) return true;
-      const mentionsSignature = ['signature', 'signatur', '签名', '署名'].some((keyword) => normalized.includes(keyword));
-      const mentionsSystemInstruction = ['system', '自动', 'placeholder', '占位'].some((keyword) => normalized.includes(keyword));
-      return !(mentionsSignature && mentionsSystemInstruction);
-    })
-    .join('\n')
-    .replace(/\n{3,}/g, '\n\n')
-    .trim();
 }
 
 async function invokeOpenAICompatibleApi(messages: ChatMessage[], options: ChatOptions) {
@@ -217,12 +203,13 @@ export async function POST(request: NextRequest) {
 只输出目标语言的邮件正文，不要输出 JSON，不要输出标题，不要输出中文翻译，不要输出签名块。
 正文需要自然、礼貌、具体，结合频道资料、目标产品、合作形式和合作想法。
 不要编造未提供的产品参数、价格、库存、认证、安全结论或发货承诺。
-如果有联系人姓名，可以自然称呼；没有联系人姓名时，不要猜测人名。`,
+如果有联系人姓名，可以自然称呼；没有联系人姓名时，不要猜测人名。
+正文在自然礼貌的收尾后必须立刻结束。不得追加分隔线、中文“注意”、产品事实核对、合作承诺、称呼建议、语言判断、风险提示、缺失信息或任何人工审核说明。`,
           body.outreachPrompt,
         );
 
         send('stage', { stage: 'streaming_body', label: '正在生成正文' });
-        const streamedBody = removeOutreachSignaturePlaceholders(await streamOpenAICompatibleApi(
+        const streamedBody = sanitizeOutreachEmailBody(await streamOpenAICompatibleApi(
           [
             { role: 'system', content: bodySystemPrompt },
             { role: 'user', content: `请根据以下资料撰写开发信正文：\n${contextSummary}` },
@@ -288,7 +275,7 @@ ${contextSummary}
             : subjectOptions[0]?.subject || subject,
           subjectOptions,
           body: streamedBody,
-          translatedBody: removeOutreachSignaturePlaceholders(metadata.translatedBody),
+          translatedBody: sanitizeOutreachEmailBody(metadata.translatedBody),
         };
 
         send('final', finalDraft);

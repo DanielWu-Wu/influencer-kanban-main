@@ -1,6 +1,6 @@
 'use client';
 
-import { Fragment, useCallback, useEffect, useMemo, useState } from 'react';
+import { Fragment, useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   AlertTriangle,
   CheckCheck,
@@ -33,6 +33,7 @@ import { appendEmailSignature, textToEmailHtml } from '@/lib/email-content';
 import type { AppSettings } from '@/lib/data';
 import type { FeishuFieldKey, FeishuFieldMapping } from '@/lib/feishu-mapping';
 import type { GmailAuth } from '@/lib/types';
+import { buildChannelAvatarLookup, resolveChannelAvatar } from '@/lib/youtube-channel-avatar';
 
 type FeishuRecord = { record_id: string; fields: Record<string, unknown> };
 type GmailMessage = {
@@ -58,6 +59,8 @@ type FollowUpRecord = {
   channelName: string;
   avatarUrl: string;
   email: string;
+  channelUrl: string;
+  channelId: string;
   developmentDate: number;
   firstOutreach: string;
   secondOutreachDate: number;
@@ -70,6 +73,7 @@ type FollowUpRecord = {
   cooperationType: string;
   cooperationIdea: string;
   check?: FollowUpCheck;
+  checkedAt?: number;
   checkError?: string;
   synced?: boolean;
 };
@@ -147,6 +151,14 @@ function formatDate(value: number | string | undefined) {
   return new Intl.DateTimeFormat('zh-CN', { month: 'numeric', day: 'numeric' }).format(date);
 }
 
+function formatCheckTime(value: number | undefined) {
+  if (!value) return '';
+  return new Intl.DateTimeFormat('zh-CN', {
+    hour: '2-digit',
+    minute: '2-digit',
+  }).format(value);
+}
+
 function startOfToday() {
   const date = new Date();
   date.setHours(0, 0, 0, 0);
@@ -211,24 +223,41 @@ function followUpStatus(record: FollowUpRecord) {
       detail: '请确认后补写飞书状态和实际日期',
     };
   }
+  const checkedWithoutReply = Boolean(record.check && !record.check.reply);
   const sentCount = effectiveSentCount(record);
   const elapsed = Math.floor((startOfToday() - record.developmentDate) / DAY_MS);
-  if (sentCount >= 3) return { tone: 'neutral', title: '三次跟进完成，等待回复', detail: '当前没有新的跟进计划' };
+  if (sentCount >= 3) {
+    return checkedWithoutReply
+      ? { tone: 'neutral', title: '已检查，暂无人工回复', detail: '三次跟进已完成，当前没有新的跟进计划' }
+      : { tone: 'neutral', title: '三次跟进完成，等待回复', detail: '当前没有新的跟进计划' };
+  }
   if (sentCount === 2) {
     const remaining = 7 - elapsed;
-    if (remaining > 0) return { tone: 'neutral', title: `等待三次跟进，还剩 ${remaining} 天`, detail: '第 7 天进行三次跟进开发信' };
+    if (remaining > 0) {
+      return checkedWithoutReply
+        ? { tone: 'neutral', title: '已检查，暂无人工回复', detail: `下一步：${remaining} 天后进行三次跟进开发信` }
+        : { tone: 'neutral', title: `等待三次跟进，还剩 ${remaining} 天`, detail: '第 7 天进行三次跟进开发信' };
+    }
     return {
       tone: elapsed === 7 ? 'warning' : 'danger',
-      title: elapsed === 7 ? '今天应三次跟进' : `三次跟进已逾期 ${elapsed - 7} 天`,
-      detail: record.check ? '可以生成简短跟进草稿' : '请先检查回复，再决定是否跟进',
+      title: checkedWithoutReply ? '已检查，暂无人工回复' : elapsed === 7 ? '今天应三次跟进' : `三次跟进已逾期 ${elapsed - 7} 天`,
+      detail: checkedWithoutReply
+        ? (elapsed === 7 ? '今天可生成三次跟进草稿' : `三次跟进已逾期 ${elapsed - 7} 天，可生成跟进草稿`)
+        : '请先检查回复，再决定是否跟进',
     };
   }
   const remaining = 3 - elapsed;
-  if (remaining > 0) return { tone: 'neutral', title: `等待二次跟进，还剩 ${remaining} 天`, detail: '第 3 天进行二次跟进开发信' };
+  if (remaining > 0) {
+    return checkedWithoutReply
+      ? { tone: 'neutral', title: '已检查，暂无人工回复', detail: `下一步：${remaining} 天后进行二次跟进开发信` }
+      : { tone: 'neutral', title: `等待二次跟进，还剩 ${remaining} 天`, detail: '第 3 天进行二次跟进开发信' };
+  }
   return {
     tone: elapsed === 3 ? 'warning' : 'danger',
-    title: elapsed === 3 ? '今天应二次跟进' : `二次跟进已逾期 ${elapsed - 3} 天`,
-    detail: record.check ? '可以生成简短跟进草稿' : '请先检查回复，再决定是否跟进',
+    title: checkedWithoutReply ? '已检查，暂无人工回复' : elapsed === 3 ? '今天应二次跟进' : `二次跟进已逾期 ${elapsed - 3} 天`,
+    detail: checkedWithoutReply
+      ? (elapsed === 3 ? '今天可生成二次跟进草稿' : `二次跟进已逾期 ${elapsed - 3} 天，可生成跟进草稿`)
+      : '请先检查回复，再决定是否跟进',
   };
 }
 
@@ -262,8 +291,13 @@ function StatusCell({ record }: { record: FollowUpRecord }) {
         : 'border-slate-200 bg-slate-50 text-slate-700';
   return (
     <div className="min-w-[210px] space-y-1">
-      <Badge variant="outline" className={className}>{status.title}</Badge>
-      <p className="text-xs leading-5 text-muted-foreground">{status.detail}</p>
+    <Badge variant="outline" className={className}>{status.title}</Badge>
+    <p className="text-xs leading-5 text-muted-foreground">{status.detail}</p>
+    {record.checkedAt && record.check && !record.check.reply ? (
+      <p className="inline-flex items-center gap-1 text-xs text-emerald-700">
+        <CheckCircle2 className="h-3.5 w-3.5" />已于 {formatCheckTime(record.checkedAt)} 检查
+      </p>
+    ) : null}
       {record.check?.automatedReply ? <p className="text-xs text-amber-700">检测到自动回复，不停止跟进</p> : null}
       {record.check?.deliveryFailure ? <p className="text-xs text-red-700">检测到退信，请核对邮箱</p> : null}
     </div>
@@ -294,11 +328,18 @@ export function OutreachFollowUpTab({ settings, auth, onAuthRefresh }: Props) {
   const [writePreview, setWritePreview] = useState<WritePreview | null>(null);
   const [markSentPreview, setMarkSentPreview] = useState<MarkSentPreview | null>(null);
   const [writingId, setWritingId] = useState<string | null>(null);
+  const avatarLookupIdsRef = useRef(new Set<string>());
+  const resourceMapping = useMemo(
+    () => settings.feishuFieldMapping || {},
+    [settings.feishuFieldMapping],
+  );
   const canLoad = Boolean(settings.feishuProspectingUrl && mapping.developmentDate);
   const fieldNames = useMemo(() => Array.from(new Set([
     mapping.channelName,
     mapping.avatar,
     mapping.email,
+    mapping.channelUrl,
+    mapping.channelId,
     mapping.developmentDate,
     mapping.firstOutreach,
     mapping.secondOutreachDate,
@@ -347,6 +388,8 @@ export function OutreachFollowUpTab({ settings, auth, onAuthRefresh }: Props) {
         channelName: mappedValue(record, mapping, 'channelName') || '未填写红人名称',
         avatarUrl: getFeishuImageUrl(mapping.avatar ? record.fields[mapping.avatar] : undefined),
         email: mappedValue(record, mapping, 'email').toLowerCase(),
+        channelUrl: mappedValue(record, mapping, 'channelUrl'),
+        channelId: mappedValue(record, mapping, 'channelId'),
         developmentDate: parseFeishuDate(record.fields[mapping.developmentDate || '']),
         firstOutreach: mappedValue(record, mapping, 'firstOutreach'),
         secondOutreachDate: parseFeishuDate(mapping.secondOutreachDate ? record.fields[mapping.secondOutreachDate] : undefined),
@@ -360,6 +403,7 @@ export function OutreachFollowUpTab({ settings, auth, onAuthRefresh }: Props) {
         cooperationIdea: mappedValue(record, mapping, 'cooperationIdea'),
       })).filter((record) => record.developmentDate >= startAt)
         .sort((a, b) => b.developmentDate - a.developmentDate);
+      avatarLookupIdsRef.current.clear();
       setRecords(next);
     } catch (error) {
       setRecords([]);
@@ -372,6 +416,107 @@ export function OutreachFollowUpTab({ settings, auth, onAuthRefresh }: Props) {
   useEffect(() => {
     void loadRecords();
   }, [loadRecords]);
+
+  useEffect(() => {
+    const targets = records.filter((record) => (
+      !record.avatarUrl && !avatarLookupIdsRef.current.has(record.recordId)
+    ));
+    if (!targets.length) return;
+
+    let cancelled = false;
+    targets.forEach((record) => avatarLookupIdsRef.current.add(record.recordId));
+
+    const resourceFieldNames = Array.from(new Set([
+      resourceMapping.channelName,
+      resourceMapping.email,
+      resourceMapping.avatar,
+      resourceMapping.channelUrl,
+      resourceMapping.channelId,
+    ].filter(Boolean))) as string[];
+
+    const loadResourceProfiles = async () => {
+      const profiles = new Map<string, { avatarUrl: string; channelUrl: string; channelId: string }>();
+      if (!settings.feishuUrl || !resourceFieldNames.length) return profiles;
+      const remainingEmails = new Set(targets.map((record) => record.email).filter(Boolean));
+      const remainingNames = new Set(targets.map((record) => record.channelName).filter(Boolean));
+      let pageToken = '';
+      for (let page = 0; page < 10 && (remainingEmails.size || remainingNames.size); page += 1) {
+        const response = await fetch('/api/feishu/records', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            action: 'search',
+            url: settings.feishuUrl,
+            pageSize: 500,
+            pageToken,
+            fieldNames: resourceFieldNames,
+          }),
+        });
+        const result = await response.json();
+        if (!response.ok || !result.success) break;
+        const data = result.data as { items?: FeishuRecord[]; has_more?: boolean; page_token?: string };
+        for (const item of data.items || []) {
+          const email = mappedValue(item, resourceMapping, 'email').toLowerCase();
+          const channelName = mappedValue(item, resourceMapping, 'channelName');
+          if (!remainingEmails.has(email) && !remainingNames.has(channelName)) continue;
+          const profile = {
+            avatarUrl: getFeishuImageUrl(resourceMapping.avatar ? item.fields[resourceMapping.avatar] : undefined),
+            channelUrl: mappedValue(item, resourceMapping, 'channelUrl'),
+            channelId: mappedValue(item, resourceMapping, 'channelId'),
+          };
+          if (email) profiles.set(`email:${email}`, profile);
+          if (channelName) profiles.set(`name:${channelName}`, profile);
+          remainingEmails.delete(email);
+          remainingNames.delete(channelName);
+        }
+        if (!data.has_more || !data.page_token) break;
+        pageToken = data.page_token;
+      }
+      return profiles;
+    };
+
+    const enrichAvatar = async (
+      record: FollowUpRecord,
+      resourceProfiles: Map<string, { avatarUrl: string; channelUrl: string; channelId: string }>,
+    ) => {
+      const resourceProfile = resourceProfiles.get(`email:${record.email}`)
+        || resourceProfiles.get(`name:${record.channelName}`)
+        || null;
+      if (resourceProfile?.avatarUrl) return { recordId: record.recordId, avatarUrl: resourceProfile.avatarUrl };
+
+      const lookup = buildChannelAvatarLookup({
+        channelId: resourceProfile?.channelId || record.channelId,
+        channelUrl: resourceProfile?.channelUrl || record.channelUrl,
+      });
+      if (!lookup) return null;
+      const resolved = await resolveChannelAvatar(lookup);
+      return resolved.status === 'ready' && resolved.avatarUrl
+        ? { recordId: record.recordId, avatarUrl: resolved.avatarUrl }
+        : null;
+    };
+
+    const resolveAll = async () => {
+      const resourceProfiles = await loadResourceProfiles().catch(() => new Map());
+      if (cancelled) return;
+      let nextIndex = 0;
+      const resolved = new Map<string, string>();
+      const worker = async () => {
+        while (nextIndex < targets.length) {
+          const target = targets[nextIndex++];
+          const result = await enrichAvatar(target, resourceProfiles).catch(() => null);
+          if (result) resolved.set(result.recordId, result.avatarUrl);
+        }
+      };
+      await Promise.all(Array.from({ length: Math.min(3, targets.length) }, worker));
+      if (cancelled || !resolved.size) return;
+      setRecords((current) => current.map((record) => (
+        resolved.has(record.recordId) ? { ...record, avatarUrl: resolved.get(record.recordId) || record.avatarUrl } : record
+      )));
+    };
+
+    void resolveAll();
+    return () => { cancelled = true; };
+  }, [records, resourceMapping, settings.feishuUrl]);
 
   const requestCheck = useCallback(async (record: FollowUpRecord, token: string) => {
     if (!record.email) throw new Error('该红人没有可用于 Gmail 检查的邮箱。');
@@ -401,7 +546,7 @@ export function OutreachFollowUpTab({ settings, auth, onAuthRefresh }: Props) {
     return accessToken;
   }, [onAuthRefresh]);
 
-  const checkRecord = useCallback(async (record: FollowUpRecord) => {
+  const checkRecord = useCallback(async (record: FollowUpRecord, showFeedback = true) => {
     if (!auth?.accessToken) throw new Error('请先在“设置 > Gmail 邮件”连接 Gmail。');
     setCheckingIds((current) => Array.from(new Set([...current, record.recordId])));
     try {
@@ -413,8 +558,13 @@ export function OutreachFollowUpTab({ settings, auth, onAuthRefresh }: Props) {
         check = await requestCheck(record, await refreshGmailAuth());
       }
       setRecords((current) => current.map((item) => (
-        item.recordId === record.recordId ? { ...item, check, checkError: undefined } : item
+        item.recordId === record.recordId ? { ...item, check, checkedAt: Date.now(), checkError: undefined } : item
       )));
+      if (showFeedback) {
+        toast.success(check.reply
+          ? `已检查 ${record.channelName}：收到人工回复，后续跟进已停止。`
+          : `已检查 ${record.channelName}：暂未发现人工回复，已保留当前跟进计划。`);
+      }
       return check;
     } catch (error) {
       const checkError = error instanceof Error ? error.message : '检查 Gmail 回复失败。';
@@ -445,7 +595,7 @@ export function OutreachFollowUpTab({ settings, auth, onAuthRefresh }: Props) {
       while (nextIndex < targets.length) {
         const record = targets[nextIndex++];
         try {
-          if ((await checkRecord(record)).reply) replied += 1;
+          if ((await checkRecord(record, false)).reply) replied += 1;
         } catch {
           failed += 1;
         } finally {
@@ -816,7 +966,7 @@ export function OutreachFollowUpTab({ settings, auth, onAuthRefresh }: Props) {
                             disabled={checking || !record.email}
                           >
                             {checking ? <Loader2 className="h-4 w-4 animate-spin" /> : <MailCheck className="h-4 w-4" />}
-                            检查回复
+                            {record.check ? '重新检查回复' : '检查回复'}
                           </Button>
 
                           {unsyncedStage ? (

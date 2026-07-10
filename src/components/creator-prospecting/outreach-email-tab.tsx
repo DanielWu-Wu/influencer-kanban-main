@@ -42,6 +42,7 @@ import {
 } from '@/lib/creator-prospecting';
 import { appendEmailSignature } from '@/lib/email-content';
 import { outreachLanguageLabel } from '@/lib/outreach-languages';
+import { sanitizeOutreachEmailBody } from '@/lib/outreach-draft-sanitizer';
 import {
   buildOutreachEmailHtml,
   clampImagePlacement,
@@ -297,7 +298,8 @@ export function OutreachEmailTab({
       <div className="min-h-0 flex-1 space-y-3 overflow-y-auto pr-1">
         {filtered.map((prospect) => {
           const isEditing = editingIds.includes(prospect.id);
-          const hasDraft = Boolean(prospect.aiDraft?.subject && prospect.aiDraft.body);
+          const safeDraftBody = sanitizeOutreachEmailBody(prospect.aiDraft?.body);
+          const hasDraft = Boolean(prospect.aiDraft?.subject && safeDraftBody);
           const isSaved = prospect.workflowStatus === 'gmail_draft_saved';
           const isGenerating = generatingId === prospect.id
             || ['preparing', 'streaming_body', 'finalizing'].includes(prospect.outreachGenerationStage || '');
@@ -519,7 +521,7 @@ export function OutreachEmailTab({
                           </div>
                           <Textarea
                             id={`body-${prospect.id}`}
-                            value={prospect.aiDraft?.body || ''}
+                            value={safeDraftBody}
                             readOnly={!isEditing}
                             onChange={(event) => onPatch(prospect.id, {
                               aiDraft: { ...prospect.aiDraft!, body: event.target.value },
@@ -541,7 +543,10 @@ export function OutreachEmailTab({
                         </div>
                       </div>
                       <MailPreview
-                        prospect={prospect}
+                        prospect={{
+                          ...prospect,
+                          aiDraft: prospect.aiDraft ? { ...prospect.aiDraft, body: safeDraftBody } : undefined,
+                        }}
                         product={productAsset}
                         emailSignature={emailSignature}
                         onPatch={onPatch}
