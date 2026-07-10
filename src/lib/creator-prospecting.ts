@@ -1,7 +1,7 @@
 export const CREATOR_PROSPECTS_STORAGE_KEY = 'influencer-board-creator-prospects';
 export const CREATOR_PROSPECTS_SCHEMA_VERSION = 5;
 
-export type ProspectingTab = 'import' | 'invitation' | 'outreach';
+export type ProspectingTab = 'import' | 'invitation' | 'outreach' | 'follow_up';
 
 export type ProspectWorkflowStatus =
   | 'recorded'

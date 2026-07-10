@@ -86,6 +86,26 @@ function getHeader(headers: GmailHeader[] = [], name: string) {
   return headers.find((header) => header.name.toLowerCase() === name.toLowerCase())?.value || '';
 }
 
+function getEmailAddress(value: string) {
+  return value.match(/<([^>]+)>/)?.[1]?.trim().toLowerCase()
+    || value.match(/[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}/i)?.[0]?.toLowerCase()
+    || '';
+}
+
+function isAutomatedReply(headers: GmailHeader[], subject: string, from: string) {
+  const autoSubmitted = getHeader(headers, 'Auto-Submitted').toLowerCase();
+  const precedence = getHeader(headers, 'Precedence').toLowerCase();
+  const normalized = `${subject} ${from}`.toLowerCase();
+  return autoSubmitted && autoSubmitted !== 'no'
+    || ['bulk', 'junk', 'list', 'auto_reply'].includes(precedence)
+    || /(automatic reply|auto[- ]?reply|out of office|autoreply|vacation reply|自动回复)/i.test(normalized);
+}
+
+function isDeliveryFailure(subject: string, from: string) {
+  const normalized = `${subject} ${from}`.toLowerCase();
+  return /(mailer-daemon|postmaster|delivery status notification|undeliverable|delivery failed|delivery failure|地址不存在|投递失败)/i.test(normalized);
+}
+
 function decodeBase64Url(data: string, charset = 'utf-8') {
   const normalized = data.replace(/-/g, '+').replace(/_/g, '/');
   const buffer = Buffer.from(normalized, 'base64');
@@ -129,11 +149,15 @@ function parseHistoryMessage(message: Record<string, unknown>) {
   return {
     id: String(message.id || ''),
     threadId: String(message.threadId || ''),
+    rfcMessageId: getHeader(headers, 'Message-ID'),
+    references: getHeader(headers, 'References'),
     subject: getHeader(headers, 'Subject') || '无主题',
     from: getHeader(headers, 'From'),
     to: getHeader(headers, 'To'),
     date: rawDate ? new Date(rawDate).toISOString() : '',
     body: repairTextEncoding(text.join('\n\n').trim() || htmlFallback || String(message.snippet || '')),
+    automated: isAutomatedReply(headers, getHeader(headers, 'Subject'), getHeader(headers, 'From')),
+    deliveryFailure: isDeliveryFailure(getHeader(headers, 'Subject'), getHeader(headers, 'From')),
   };
 }
 
@@ -267,6 +291,67 @@ export async function GET(request: NextRequest) {
         data: messages
           .filter(Boolean)
           .sort((a, b) => new Date(a!.date || 0).getTime() - new Date(b!.date || 0).getTime()),
+      });
+    }
+
+    if (action === 'outreachFollowUp') {
+      const contactEmail = searchParams.get('email')?.trim().toLowerCase();
+      const sentAt = Number(searchParams.get('sentAt') || 0);
+      if (!contactEmail || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(contactEmail)) {
+        return NextResponse.json({ error: '请提供有效的红人邮箱。' }, { status: 400 });
+      }
+      if (!Number.isFinite(sentAt) || sentAt <= 0) {
+        return NextResponse.json({ error: '缺少初次开发信发送日期。' }, { status: 400 });
+      }
+
+      const afterDate = new Date(sentAt).toISOString().slice(0, 10).replace(/-/g, '/');
+      const q = `{from:${contactEmail} to:${contactEmail}} after:${afterDate}`;
+      const listRes = await fetch(
+        `https://gmail.googleapis.com/gmail/v1/users/me/messages?maxResults=50&q=${encodeURIComponent(q)}`,
+        { headers },
+      );
+      if (!listRes.ok) {
+        const details = await listRes.text();
+        return NextResponse.json(
+          { error: `读取开发信往来失败：${summarizeGmailError(listRes.status, details)}`, details },
+          { status: listRes.status },
+        );
+      }
+
+      const listData = await listRes.json();
+      const references = (listData.messages || []) as Array<{ id: string }>;
+      const messages = (await Promise.all(references.map(async ({ id }) => {
+        const messageRes = await fetch(
+          `https://gmail.googleapis.com/gmail/v1/users/me/messages/${id}?format=full`,
+          { headers },
+        );
+        if (!messageRes.ok) return null;
+        return parseHistoryMessage(await messageRes.json());
+      }))).filter(Boolean);
+
+      const timeline = messages
+        .filter((message): message is NonNullable<typeof message> => Boolean(message))
+        .filter((message) => new Date(message.date || 0).getTime() >= sentAt)
+        .sort((a, b) => new Date(a.date || 0).getTime() - new Date(b.date || 0).getTime());
+      const outbound = timeline.filter((message) => {
+        const sender = getEmailAddress(message.from);
+        const recipients = message.to.toLowerCase();
+        return sender !== contactEmail && recipients.includes(contactEmail);
+      });
+      const incoming = timeline.filter((message) => getEmailAddress(message.from) === contactEmail);
+      const deliveryFailures = timeline.filter((message) => message.deliveryFailure);
+      const automatedReplies = incoming.filter((message) => message.automated && !message.deliveryFailure);
+      const humanReplies = incoming.filter((message) => !message.automated && !message.deliveryFailure);
+      const latestReply = humanReplies.at(-1);
+
+      return NextResponse.json({
+        success: true,
+        data: {
+          outbound: outbound.slice(0, 3),
+          reply: latestReply || null,
+          automatedReply: automatedReplies.at(-1) || null,
+          deliveryFailure: deliveryFailures.at(-1) || null,
+        },
       });
     }
 

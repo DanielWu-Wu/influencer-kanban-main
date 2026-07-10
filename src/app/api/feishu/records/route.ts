@@ -14,6 +14,15 @@ type RecordList = {
   total?: number;
 };
 
+type RecordSearchFilter = {
+  conjunction?: 'and' | 'or';
+  conditions?: Array<{
+    field_name: string;
+    operator: string;
+    value?: string[];
+  }>;
+};
+
 type FieldList = {
   items?: Array<{ field_name: string; type: number }>;
 };
@@ -68,12 +77,14 @@ export async function POST(request: NextRequest) {
 
   try {
     const body = await request.json() as {
-      action?: 'list' | 'get' | 'create' | 'update';
+      action?: 'list' | 'search' | 'get' | 'create' | 'update';
       url?: string;
       recordId?: string;
       fields?: Record<string, unknown>;
       pageSize?: number;
       pageToken?: string;
+      filter?: RecordSearchFilter;
+      fieldNames?: string[];
     };
     if (!body.url) return NextResponse.json({ error: '缺少多维表格网址。' }, { status: 400 });
 
@@ -93,6 +104,28 @@ export async function POST(request: NextRequest) {
       const data = await requestFeishuApi<RecordList>(
         `${basePath}?${query.toString()}`,
         auth.accessToken,
+      );
+      return NextResponse.json({ success: true, data });
+    }
+
+    if (body.action === 'search') {
+      const pageSize = Math.max(1, Math.min(body.pageSize || 100, 500));
+      const query = new URLSearchParams({ page_size: String(pageSize) });
+      if (body.pageToken) query.set('page_token', body.pageToken);
+      const data = await requestFeishuApi<RecordList>(
+        `${basePath}/search?${query.toString()}`,
+        auth.accessToken,
+        {
+          method: 'POST',
+          headers: {
+            Authorization: `Bearer ${auth.accessToken}`,
+            'Content-Type': 'application/json; charset=utf-8',
+          },
+          body: JSON.stringify({
+            filter: body.filter,
+            field_names: body.fieldNames,
+          }),
+        },
       );
       return NextResponse.json({ success: true, data });
     }

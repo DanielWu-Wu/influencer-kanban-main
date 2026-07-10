@@ -1,5 +1,6 @@
 export type FeishuFieldKey =
   | 'channelName'
+  | 'avatar'
   | 'platform'
   | 'region'
   | 'followers'
@@ -13,7 +14,9 @@ export type FeishuFieldKey =
   | 'email'
   | 'developmentDate'
   | 'firstOutreach'
+  | 'secondOutreachDate'
   | 'secondOutreach'
+  | 'thirdOutreachDate'
   | 'thirdOutreach'
   | 'hasReply'
   | 'collaborationStatus'
@@ -54,6 +57,12 @@ export const FEISHU_FIELD_TARGETS: Array<{
     description: '用于在看板和邮件里识别红人',
     keywords: ['红人频道名', '频道名称', '频道名', 'channel name', 'channel'],
     required: true,
+  },
+  {
+    key: 'avatar',
+    label: '频道头像',
+    description: '用于在红人开发和跟进列表中快速识别频道',
+    keywords: ['频道头像', '红人头像', '头像', 'avatar', 'thumbnail', '缩略图'],
   },
   {
     key: 'email',
@@ -130,10 +139,22 @@ export const FEISHU_FIELD_TARGETS: Array<{
     keywords: ['初次开发信', '首次开发信', '首封', 'first outreach'],
   },
   {
+    key: 'secondOutreachDate',
+    label: '二次跟进日期',
+    description: '记录二次跟进开发信实际发送的日期',
+    keywords: ['二次跟进日期', '二次跟进时间', 'second follow date'],
+  },
+  {
     key: 'secondOutreach',
     label: '二次跟进开发信',
     description: '用于判断是否需要继续跟进',
     keywords: ['二次跟进开发信', '二次跟进', 'second follow'],
+  },
+  {
+    key: 'thirdOutreachDate',
+    label: '三次跟进日期',
+    description: '记录三次跟进开发信实际发送的日期',
+    keywords: ['三次跟进日期', '三次跟进时间', 'third follow date'],
   },
   {
     key: 'thirdOutreach',

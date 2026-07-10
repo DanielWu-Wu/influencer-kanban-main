@@ -8,6 +8,7 @@ import {
   Database,
   Loader2,
   MailCheck,
+  Send,
   UserPlus,
   Youtube,
 } from 'lucide-react';
@@ -15,6 +16,7 @@ import { toast, Toaster } from 'sonner';
 import { InfluencerImportTab } from '@/components/creator-prospecting/influencer-import-tab';
 import { InvitationConfirmTab } from '@/components/creator-prospecting/invitation-confirm-tab';
 import { OutreachEmailTab } from '@/components/creator-prospecting/outreach-email-tab';
+import { OutreachFollowUpTab } from '@/components/creator-prospecting/outreach-follow-up-tab';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
@@ -154,6 +156,7 @@ const TAB_META: Array<{
   { id: 'import', label: '红人录入', icon: UserPlus },
   { id: 'invitation', label: '邀约确认', icon: ClipboardCheck },
   { id: 'outreach', label: '开发信', icon: MailCheck },
+  { id: 'follow_up', label: '开发信跟进', icon: Send },
 ];
 
 function firstValue(...values: Array<string | undefined>) {
@@ -908,6 +911,7 @@ export function CreatorProspectingPage() {
     import: importProspects.length,
     invitation: invitationProspects.length,
     outreach: outreachProspects.length,
+    follow_up: 0,
   }), [importProspects.length, invitationProspects.length, outreachProspects.length]);
   const hasPendingResourceEmailSync = previewItems.some(
     (item) => item.resourceEmailSync?.status === 'checking',
@@ -2115,6 +2119,13 @@ export function CreatorProspectingPage() {
             onSaveDraft={handleSaveGmailDraft}
             onBack={handleBackToInvitation}
             onSkip={handleSkip}
+          />
+        )}
+        {activeTab === 'follow_up' && (
+          <OutreachFollowUpTab
+            settings={settings}
+            auth={auth}
+            onAuthRefresh={connect}
           />
         )}
       </main>

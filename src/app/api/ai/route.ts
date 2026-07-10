@@ -314,6 +314,74 @@ confidence 使用 0 到 100 的整数。
       });
     }
 
+    if (action === 'followUpOutreach') {
+      const stage = Number(body.stage) === 3 ? 3 : 2;
+      const channelName = String(body.channelName || '').trim();
+      const contactName = String(body.contactName || '').trim();
+      const preferredLanguage = String(body.preferredLanguage || '').trim();
+      const targetProduct = String(body.targetProduct || '').trim();
+      const cooperationType = String(body.cooperationType || '').trim();
+      const cooperationIdea = String(body.cooperationIdea || '').trim();
+      const initialEmail = (body.initialEmail || {}) as ThreadMessage;
+
+      if (!initialEmail.body?.trim()) {
+        return NextResponse.json(
+          { error: '没有找到初次开发信正文，无法生成跟进邮件。' },
+          { status: 400 },
+        );
+      }
+
+      const systemPrompt = `你是海外红人推广专员的轻量跟进邮件助手。
+你的任务是根据已经发送的初次开发信，生成第 ${stage === 2 ? '二' : '三'} 次联系邮件。
+
+写作规则：
+1. 使用初次开发信相同的语言。preferredLanguage 仅作为辅助，不能覆盖初次邮件的明确语言。
+2. 邮件必须简短、自然、像真人跟进，不要重新完整介绍品牌和产品。
+3. ${stage === 2
+  ? '二次跟进应礼貌提醒对方查看上一封邮件，简要重申合作兴趣，并邀请对方回复。正文控制在约 55-110 个单词。'
+  : '三次跟进应更克制、低压力，说明这是一次简短的最后跟进，并允许对方在当前不合适时简单告知。正文控制在约 45-90 个单词。'}
+4. 只能使用输入中明确出现的人名、产品和合作信息，不得编造价格、寄样、时间、折扣或合作承诺。
+5. 不写完整签名块，不输出主题，不使用 Markdown，不解释写作过程。
+6. 同时给出完整中文对照，便于人工审核。
+
+只返回严格 JSON：
+{
+  "body": "目标语言的跟进邮件正文",
+  "translatedBody": "完整中文对照",
+  "language": "实际使用的语言代码或语言名称"
+}`;
+
+      const userPrompt = `红人和本次合作资料：
+${JSON.stringify({
+  channelName,
+  contactName,
+  preferredLanguage,
+  targetProduct,
+  cooperationType,
+  cooperationIdea,
+  followUpStage: stage,
+}, null, 2)}
+
+已经发送的初次开发信：
+主题：${initialEmail.subject || '无主题'}
+正文：
+${initialEmail.body}`;
+
+      const result = parseJson(await invokeOpenAICompatibleApi(
+        [
+          { role: 'system', content: systemPrompt },
+          { role: 'user', content: userPrompt },
+        ],
+        getModelOptions(body, 0.45),
+      )) as Record<string, unknown>;
+      result.body = removeOutreachSignaturePlaceholders(result.body);
+      result.translatedBody = removeOutreachSignaturePlaceholders(result.translatedBody);
+      if (!String(result.body || '').trim()) {
+        return NextResponse.json({ error: 'AI 没有返回可用的跟进邮件正文。' }, { status: 502 });
+      }
+      return NextResponse.json({ success: true, data: result });
+    }
+
     if (action === 'outreach') {
       const channel = (body.channel || {}) as OutreachChannel;
       if (!channel.title && !channel.url) {
