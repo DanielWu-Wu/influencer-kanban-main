@@ -11,6 +11,7 @@ import {
   Copy, Sparkles, ChevronDown, Loader2,
   Paperclip, Download, Forward, Mail, MailOpen,
   Database, Save, CheckCircle2, XCircle,
+  Maximize2, X,
 } from 'lucide-react';
 import { EmailComposer } from './email-composer';
 import { NewEmailComposer } from './new-email-composer';
@@ -217,7 +218,7 @@ export function EmailDetail({ thread, onBack, onThreadUpdated }: EmailDetailProp
     const newestMessage = sortMessagesNewestFirst(thread.messages)[0];
     return new Set(newestMessage ? [newestMessage.id] : []);
   });
-  const [showComposer, setShowComposer] = useState(false);
+  const [composerState, setComposerState] = useState<'closed' | 'expanded' | 'minimized'>('closed');
   const [replyMode, setReplyMode] = useState<'compose' | 'ai'>('compose');
   const [savedReplyDraft, setSavedReplyDraft] = useState('');
   const [changingReadStateId, setChangingReadStateId] = useState<string | null>(null);
@@ -965,7 +966,7 @@ export function EmailDetail({ thread, onBack, onThreadUpdated }: EmailDetailProp
             title="AI 辅助回复"
             onClick={() => {
               setReplyMode('ai');
-              setShowComposer(true);
+              setComposerState('expanded');
             }}
           >
             <Sparkles className="w-4 h-4 text-primary" />
@@ -1333,15 +1334,25 @@ export function EmailDetail({ thread, onBack, onThreadUpdated }: EmailDetailProp
       </ScrollArea>
 
       {/* 底部回复区域 */}
-      <div className={`${showComposer ? 'max-h-[72%] overflow-y-auto' : ''} shrink-0 border-t border-white/55 bg-white/72 p-4 backdrop-blur-xl`}>
-        {!showComposer ? (
+      <div
+        className={`shrink-0 border-t border-white/55 bg-white/82 backdrop-blur-xl ${
+          composerState === 'expanded' && replyMode === 'ai'
+            ? 'h-[68dvh] min-h-0 overflow-hidden sm:h-[min(62dvh,640px)]'
+            : composerState === 'expanded'
+              ? 'max-h-[72%] overflow-y-auto p-4'
+              : composerState === 'minimized'
+                ? 'p-0'
+                : 'p-4'
+        }`}
+      >
+        {composerState === 'closed' ? (
           <div className="flex items-center justify-center gap-3">
             <Button 
               variant="outline" 
               className="h-10 flex-1 rounded-lg bg-white/80"
               onClick={() => {
                 setReplyMode('compose');
-                setShowComposer(true);
+                setComposerState('expanded');
               }}
             >
               <Reply className="w-4 h-4 mr-2" />
@@ -1351,7 +1362,7 @@ export function EmailDetail({ thread, onBack, onThreadUpdated }: EmailDetailProp
               className="h-10 flex-1 rounded-lg shadow-apple"
               onClick={() => {
                 setReplyMode('ai');
-                setShowComposer(true);
+                setComposerState('expanded');
               }}
             >
               <Sparkles className="w-4 h-4 mr-2" />
@@ -1359,13 +1370,50 @@ export function EmailDetail({ thread, onBack, onThreadUpdated }: EmailDetailProp
             </Button>
           </div>
         ) : (
-          <EmailComposer
-            thread={thread}
-            mode={replyMode}
-            onClose={() => setShowComposer(false)}
-            initialMessage={replyMode === 'compose' ? savedReplyDraft : undefined}
-            onDraftSaved={setSavedReplyDraft}
-          />
+          <>
+            {composerState === 'minimized' && replyMode === 'ai' && (
+              <div className="flex h-12 items-center gap-3 px-4">
+                <span className="flex size-8 shrink-0 items-center justify-center rounded-md bg-primary/10 text-primary">
+                  <Sparkles className="size-4" />
+                </span>
+                <div className="min-w-0 flex-1">
+                  <p className="truncate text-sm font-medium">AI 邮件助手</p>
+                  <p className="truncate text-xs text-muted-foreground">分析和回复内容已保留</p>
+                </div>
+                <Button
+                  variant="ghost"
+                  size="icon"
+                  className="size-8"
+                  title="展开 AI 邮件助手"
+                  aria-label="展开 AI 邮件助手"
+                  onClick={() => setComposerState('expanded')}
+                >
+                  <Maximize2 />
+                </Button>
+                <Button
+                  variant="ghost"
+                  size="icon"
+                  className="size-8"
+                  title="关闭 AI 邮件助手"
+                  aria-label="关闭 AI 邮件助手"
+                  onClick={() => setComposerState('closed')}
+                >
+                  <X />
+                </Button>
+              </div>
+            )}
+            <div className={composerState === 'minimized' ? 'hidden' : 'h-full min-h-0'}>
+              <EmailComposer
+                key={replyMode}
+                thread={thread}
+                mode={replyMode}
+                onMinimize={replyMode === 'ai' ? () => setComposerState('minimized') : undefined}
+                onClose={() => setComposerState('closed')}
+                initialMessage={replyMode === 'compose' ? savedReplyDraft : undefined}
+                onDraftSaved={setSavedReplyDraft}
+              />
+            </div>
+          </>
         )}
       </div>
       <NewEmailComposer

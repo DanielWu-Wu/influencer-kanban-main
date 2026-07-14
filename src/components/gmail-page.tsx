@@ -141,6 +141,7 @@ export function GmailPage() {
           <GmailSignatureSettings onBack={() => setShowSettings(false)} />
         ) : selectedThread ? (
           <EmailDetail
+            key={selectedThread.id}
             thread={selectedThread}
             onBack={() => setSelectedThread(null)}
             onThreadUpdated={setSelectedThread}

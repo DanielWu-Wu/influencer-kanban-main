@@ -5,9 +5,12 @@ import {
   AlertCircle,
   ArrowRight,
   Check,
+  ChevronDown,
+  ChevronUp,
   Copy,
   Globe,
   Loader2,
+  Minimize2,
   Paperclip,
   RefreshCw,
   Save,
@@ -17,6 +20,8 @@ import {
 } from 'lucide-react';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
+import { Collapsible, CollapsibleContent, CollapsibleTrigger } from '@/components/ui/collapsible';
+import { ScrollArea } from '@/components/ui/scroll-area';
 import { Textarea } from '@/components/ui/textarea';
 import { useEmailAISuggestions, useEmailDrafts, useGmailAuth, useSettings } from '@/lib/data';
 import {
@@ -34,6 +39,7 @@ import { useRecordAssistant } from './record-assistant-provider';
 interface EmailComposerProps {
   thread: GmailThread;
   mode: 'compose' | 'ai';
+  onMinimize?: () => void;
   onClose: () => void;
   initialMessage?: string;
   onDraftSaved?: (content: string) => void;
@@ -90,6 +96,12 @@ const LANGUAGE_OPTIONS = [
 
 const MAX_ATTACHMENT_BYTES = 18 * 1024 * 1024;
 const GMAIL_AI_HISTORY_LIMIT = 15;
+const QUICK_REPLY_IDEAS = [
+  ['接受报价', '可以接受对方的报价和合作条件。'],
+  ['需要降价', '当前报价超出预算，请礼貌协商更合适的价格。'],
+  ['确认发布时间', '请确认视频预计发布时间和交付安排。'],
+  ['询问数据', '请询问频道近期视频表现和受众数据。'],
+] as const;
 
 function extractEmail(value: string) {
   return value.match(/<([^>]+)>/)?.[1] || value.split(',')[0]?.trim() || value;
@@ -110,6 +122,7 @@ function buildThreadMessages(thread: GmailThread) {
 export function EmailComposer({
   thread,
   mode,
+  onMinimize,
   onClose,
   initialMessage,
   onDraftSaved,
@@ -137,6 +150,8 @@ export function EmailComposer({
   const [copied, setCopied] = useState(false);
   const [attachments, setAttachments] = useState<File[]>([]);
   const [attachmentError, setAttachmentError] = useState('');
+  const [analysisExpanded, setAnalysisExpanded] = useState(false);
+  const [translationExpanded, setTranslationExpanded] = useState(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
 
   const threadMessages = useMemo(() => buildThreadMessages(thread), [thread]);
@@ -443,24 +458,78 @@ export function EmailComposer({
     );
   }
 
-  return (
-    <div className="space-y-4">
-      <div className="flex items-center justify-between">
-        <div className="flex items-center gap-2">
-          <Badge variant="secondary" className="gap-1">
-            {mode === 'ai' ? <Sparkles className="h-3 w-3" /> : <Globe className="h-3 w-3" />}
-            {mode === 'ai' ? 'AI 合作助手' : '手动回复'}
-          </Badge>
-          {analysis && <Badge variant="outline">{analysis.languageName || targetLangName}</Badge>}
+  const attachmentList = attachments.length > 0 ? (
+    <div className="flex flex-col gap-2 rounded-md border bg-muted/20 p-2">
+      {attachments.map((file, index) => (
+        <div key={`${file.name}-${file.size}-${index}`} className="flex items-center gap-2 rounded-md bg-background px-3 py-2">
+          <Paperclip className="size-4 shrink-0 text-muted-foreground" />
+          <div className="min-w-0 flex-1">
+            <p className="truncate text-sm">{file.name}</p>
+            <p className="text-xs text-muted-foreground">{formatFileSize(file.size)}</p>
+          </div>
+          <Button
+            type="button"
+            variant="ghost"
+            size="icon"
+            className="size-7"
+            title="移除附件"
+            aria-label={`移除附件 ${file.name}`}
+            onClick={() => {
+              setAttachments((current) => current.filter((_, fileIndex) => fileIndex !== index));
+              setAttachmentError('');
+            }}
+          >
+            <X />
+          </Button>
         </div>
-        <Button variant="ghost" size="icon" className="h-8 w-8" onClick={onClose}>
-          <X className="h-4 w-4" />
-        </Button>
-      </div>
+      ))}
+    </div>
+  ) : null;
 
-      {mode === 'ai' && (analysisLoading || settingsLoading) && (
-        <div className="flex items-center gap-3 rounded-lg border p-4">
-          <Loader2 className="h-5 w-5 animate-spin text-primary" />
+  const header = (
+    <div className="flex h-12 shrink-0 items-center gap-3 border-b bg-background/95 px-4">
+      <div className="flex min-w-0 flex-1 items-center gap-2">
+        <span className="flex size-7 shrink-0 items-center justify-center rounded-md bg-primary/10 text-primary">
+          {mode === 'ai' ? <Sparkles className="size-4" /> : <Globe className="size-4" />}
+        </span>
+        <p className="truncate text-sm font-semibold">{mode === 'ai' ? 'AI 邮件助手' : '手动回复'}</p>
+        {mode === 'ai' && analysis && <Badge variant="outline">已分析 {historyMessages.length} 封邮件</Badge>}
+        {analysis && <Badge variant="secondary">{analysis.languageName || targetLangName}</Badge>}
+      </div>
+      <input
+        ref={fileInputRef}
+        type="file"
+        multiple
+        className="hidden"
+        onChange={(event) => handleAttachmentSelection(event.target.files)}
+      />
+      <Button
+        type="button"
+        variant="ghost"
+        size="sm"
+        className="shrink-0"
+        title="添加附件"
+        onClick={() => fileInputRef.current?.click()}
+      >
+        <Paperclip data-icon="inline-start" />
+        附件{attachments.length > 0 ? ` ${attachments.length}` : ''}
+      </Button>
+      {mode === 'ai' && onMinimize && (
+        <Button variant="ghost" size="icon" className="size-8" title="缩小 AI 邮件助手" aria-label="缩小 AI 邮件助手" onClick={onMinimize}>
+          <Minimize2 />
+        </Button>
+      )}
+      <Button variant="ghost" size="icon" className="size-8" title="关闭回复助手" aria-label="关闭回复助手" onClick={onClose}>
+        <X />
+      </Button>
+    </div>
+  );
+
+  const aiBody = (
+    <div className="flex flex-col gap-4 p-4">
+      {(analysisLoading || settingsLoading) && (
+        <div className="flex items-center gap-3 rounded-md border bg-muted/20 p-4">
+          <Loader2 className="size-5 animate-spin text-primary" />
           <div>
             <p className="text-sm font-medium">正在快速分析最近往来</p>
             <p className="text-xs text-muted-foreground">
@@ -476,140 +545,84 @@ export function EmailComposer({
         </ErrorMessage>
       )}
 
-      <div className="space-y-2">
-        <input
-          ref={fileInputRef}
-          type="file"
-          multiple
-          className="hidden"
-          onChange={(event) => handleAttachmentSelection(event.target.files)}
-        />
-        <div className="flex items-center justify-between">
-          <label className="text-sm font-medium">附件</label>
-          <Button
-            type="button"
-            variant="outline"
-            size="sm"
-            className="h-8 gap-1.5"
-            onClick={() => fileInputRef.current?.click()}
-          >
-            <Paperclip className="h-3.5 w-3.5" />
-            添加附件
-          </Button>
-        </div>
-        {attachments.length > 0 && (
-          <div className="space-y-2 rounded-lg border p-2">
-            {attachments.map((file, index) => (
-              <div
-                key={`${file.name}-${file.size}-${index}`}
-                className="flex items-center gap-2 rounded-md bg-muted/40 px-3 py-2"
-              >
-                <Paperclip className="h-4 w-4 shrink-0 text-muted-foreground" />
-                <div className="min-w-0 flex-1">
-                  <p className="truncate text-sm">{file.name}</p>
-                  <p className="text-xs text-muted-foreground">{formatFileSize(file.size)}</p>
-                </div>
-                <Button
-                  type="button"
-                  variant="ghost"
-                  size="icon"
-                  className="h-7 w-7"
-                  title="移除附件"
-                  onClick={() => {
-                    setAttachments((current) => current.filter((_, fileIndex) => fileIndex !== index));
-                    setAttachmentError('');
-                  }}
-                >
-                  <X className="h-3.5 w-3.5" />
-                </Button>
-              </div>
-            ))}
-          </div>
-        )}
-        <p className="text-xs text-muted-foreground">
-          支持图片、PDF、文档等常见文件，附件总大小上限为 18 MB。
-        </p>
-        {attachmentError && <p className="text-xs text-destructive">{attachmentError}</p>}
-      </div>
+      {attachmentList}
+      {attachmentError && <p className="text-xs text-destructive">{attachmentError}</p>}
 
-      {mode === 'ai' && analysis && !suggestion && (
+      {analysis && !suggestion && (
         <>
-          <div className="flex items-center justify-between rounded-md bg-muted/40 px-3 py-2 text-xs text-muted-foreground">
-            <span>本次快速分析已合并当前线程和最近联系人历史</span>
-            <Badge variant="outline">{historyMessages.length} 封</Badge>
-          </div>
-          <div className="grid gap-3 sm:grid-cols-2">
-            <AnalysisItem title="最新邮件意思梗概" content={analysis.latestSummary} />
-            <AnalysisItem title="红人的意图" content={analysis.creatorIntent} />
-            <AnalysisItem title="当前合作进度" content={analysis.stage} />
-            <AnalysisItem title="红人的态度" content={analysis.attitude} />
-            <AnalysisItem
-              title="沟通风格与当前情绪"
-              content={[
-                analysis.communicationStyle && `沟通风格：${analysis.communicationStyle}`,
-                analysis.currentEmotion && `当前情绪：${analysis.currentEmotion}`,
-              ].filter(Boolean).join('\n')}
-            />
-            <AnalysisItem title="表面立场" content={analysis.statedPosition || ''} />
-            <AnalysisItem title="核心利益" content={analysis.coreInterests || ''} />
+          <div className="grid gap-3 lg:grid-cols-4 sm:grid-cols-2">
+            <AnalysisItem title="邮件摘要" content={analysis.latestSummary} />
+            <AnalysisItem title="对方意图" content={analysis.creatorIntent} />
+            <AnalysisItem title="当前阶段" content={analysis.stage} />
+            <AnalysisItem title="风险提醒" content={analysis.risks?.join('\n') || ''} tone="warning" />
           </div>
 
-          <AnalysisList title="已确认事项" items={analysis.confirmedItems} />
-          <AnalysisList title="待解决事项" items={analysis.openQuestions} />
-          <AnalysisList title="沟通雷区" items={analysis.communicationRisks} />
-          <AnalysisList title="破局筹码" items={analysis.leverageOptions} />
-          <AnalysisList title="风险提醒" items={analysis.risks} />
-          <AnalysisList title="回复建议" items={analysis.replyStrategy} />
+          <Collapsible open={analysisExpanded} onOpenChange={setAnalysisExpanded} className="rounded-md border">
+            <CollapsibleTrigger asChild>
+              <Button variant="ghost" className="h-10 w-full justify-between rounded-md px-3 font-normal">
+                <span>查看完整分析</span>
+                {analysisExpanded ? <ChevronUp /> : <ChevronDown />}
+              </Button>
+            </CollapsibleTrigger>
+            <CollapsibleContent>
+              <div className="grid gap-3 border-t p-3 sm:grid-cols-2">
+                <AnalysisItem title="红人的态度" content={analysis.attitude} />
+                <AnalysisItem
+                  title="沟通风格与当前情绪"
+                  content={[
+                    analysis.communicationStyle && `沟通风格：${analysis.communicationStyle}`,
+                    analysis.currentEmotion && `当前情绪：${analysis.currentEmotion}`,
+                  ].filter(Boolean).join('\n')}
+                />
+                <AnalysisItem title="表面立场" content={analysis.statedPosition || ''} />
+                <AnalysisItem title="核心利益" content={analysis.coreInterests || ''} />
+                <AnalysisList title="已确认事项" items={analysis.confirmedItems} />
+                <AnalysisList title="待解决事项" items={analysis.openQuestions} />
+                <AnalysisList title="沟通雷区" items={analysis.communicationRisks} />
+                <AnalysisList title="破局筹码" items={analysis.leverageOptions} />
+                <AnalysisList title="风险提醒" items={analysis.risks} />
+                <AnalysisList title="回复建议" items={analysis.replyStrategy} />
+              </div>
+            </CollapsibleContent>
+          </Collapsible>
 
-          <div className="space-y-2 border-t pt-4">
-            <label className="text-sm font-medium">你是怎么想的？</label>
-            <p className="text-xs text-muted-foreground">
-              用中文告诉 AI 你的判断、预算、底线、产品安排或想向对方确认的问题。
-            </p>
+          <div className="flex flex-col gap-2">
+            <div>
+              <label className="text-sm font-medium">我的回复思路</label>
+              <p className="text-xs text-muted-foreground">补充预算、底线、产品安排或需要对方确认的问题。</p>
+            </div>
             <Textarea
               value={userIdeas}
               onChange={(event) => setUserIdeas(event.target.value)}
               placeholder="例如：价格可以接受，但需要确认视频发布时间；请礼貌询问能否在月底前发布..."
               className="min-h-24 resize-none"
             />
-          </div>
-
-          <div className="flex items-center gap-3">
-            <label className="shrink-0 text-sm text-muted-foreground">回复语言</label>
-            <select
-              value={targetLang}
-              className="h-9 flex-1 rounded-md border bg-background px-3 text-sm"
-              onChange={(event) => {
-                const language = LANGUAGE_OPTIONS.find(([code]) => code === event.target.value);
-                setTargetLang(event.target.value);
-                setTargetLangName(language?.[1] || event.target.value);
-              }}
-            >
-              {LANGUAGE_OPTIONS.map(([code, name]) => (
-                <option key={code} value={code}>{name}</option>
+            <div className="flex flex-wrap gap-2">
+              {QUICK_REPLY_IDEAS.map(([label, text]) => (
+                <Button
+                  key={label}
+                  type="button"
+                  variant="outline"
+                  size="sm"
+                  onClick={() => setUserIdeas((current) => current ? `${current}\n${text}` : text)}
+                >
+                  {label}
+                </Button>
               ))}
-            </select>
+            </div>
           </div>
-
           {aiError && <ErrorMessage message={aiError} />}
-          <Button className="w-full" onClick={generateReply} disabled={!userIdeas.trim() || aiLoading}>
-            {aiLoading ? (
-              <><Loader2 className="mr-2 h-4 w-4 animate-spin" />正在起草回复...</>
-            ) : (
-              <><Sparkles className="mr-2 h-4 w-4" />根据我的想法起草邮件</>
-            )}
-          </Button>
         </>
       )}
 
       {suggestion && (
-        <div className="space-y-4">
+        <>
           <AnalysisList title="本次回复要点" items={suggestion.keyPoints} />
-          <div className="space-y-2">
+          <div className="flex flex-col gap-2">
             <div className="flex items-center justify-between">
               <label className="text-sm font-medium">{targetLangName}回复</label>
-              <Button variant="ghost" size="sm" className="h-7 gap-1" onClick={copyToClipboard}>
-                {copied ? <Check className="h-3 w-3" /> : <Copy className="h-3 w-3" />}
+              <Button variant="ghost" size="sm" onClick={copyToClipboard}>
+                {copied ? <Check data-icon="inline-start" /> : <Copy data-icon="inline-start" />}
                 {copied ? '已复制' : '复制'}
               </Button>
             </div>
@@ -620,82 +633,132 @@ export function EmailComposer({
               minHeight="11rem"
             />
           </div>
-          <div className="space-y-2">
-            <label className="text-sm font-medium">中文对照</label>
-            <div className="whitespace-pre-wrap rounded-lg bg-muted/50 p-4 text-sm">
-              {suggestion.translatedReply}
-            </div>
-          </div>
+          <Collapsible open={translationExpanded} onOpenChange={setTranslationExpanded} className="rounded-md border">
+            <CollapsibleTrigger asChild>
+              <Button variant="ghost" className="h-10 w-full justify-between rounded-md px-3 font-normal">
+                <span>中文对照</span>
+                {translationExpanded ? <ChevronUp /> : <ChevronDown />}
+              </Button>
+            </CollapsibleTrigger>
+            <CollapsibleContent>
+              <div className="whitespace-pre-wrap border-t bg-muted/20 p-4 text-sm">{suggestion.translatedReply}</div>
+            </CollapsibleContent>
+          </Collapsible>
           {aiError && <ErrorMessage message={aiError} />}
-          <div className="grid grid-cols-3 gap-2">
-            <Button
-              variant="outline"
-              onClick={() => {
-                setSuggestion(null);
-                setAiError('');
-              }}
-            >
-              <RefreshCw className="mr-2 h-4 w-4" />
-              调整想法
-            </Button>
-            <Button
-              variant="outline"
-              onClick={sendEmail}
-              disabled={sending || savingDraft || isEmailContentEmpty(replyContent)}
-            >
-              {sending ? (
-                <Loader2 className="mr-2 h-4 w-4 animate-spin" />
-              ) : (
-                <Send className="mr-2 h-4 w-4" />
-              )}
-              直接发送
-            </Button>
-            <Button onClick={saveToGmailDrafts} disabled={savingDraft || sending || isEmailContentEmpty(replyContent)}>
-              {savingDraft ? (
-                <Loader2 className="mr-2 h-4 w-4 animate-spin" />
-              ) : (
-                <Save className="mr-2 h-4 w-4" />
-              )}
-              保存为草稿
-            </Button>
-          </div>
-        </div>
+        </>
       )}
+    </div>
+  );
 
-      {mode === 'compose' && (
-        <div className="space-y-4">
-          <RichEmailEditor
-            value={replyContent}
-            onChange={setReplyContent}
-            placeholder="输入回复内容..."
-            minHeight="12rem"
-          />
-          {aiError && <ErrorMessage message={aiError} />}
-          <div className="grid grid-cols-2 gap-2">
-          <Button
-            variant="outline"
-            onClick={sendEmail}
-            disabled={sending || savingDraft || isEmailContentEmpty(replyContent)}
-          >
-            {sending ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <Send className="mr-2 h-4 w-4" />}
-            直接发送
-          </Button>
-          <Button onClick={saveToGmailDrafts} disabled={savingDraft || sending || isEmailContentEmpty(replyContent)}>
-            {savingDraft ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <ArrowRight className="mr-2 h-4 w-4" />}
-            保存为草稿
-          </Button>
-          </div>
+  if (mode === 'ai') {
+    return (
+      <div className="flex h-full min-h-0 flex-col bg-background">
+        {header}
+        <ScrollArea className="min-h-0 flex-1">{aiBody}</ScrollArea>
+        <div className="shrink-0 border-t bg-background/95 p-3">
+          {analysis && !suggestion ? (
+            <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-end">
+              <label className="flex items-center gap-2 text-sm text-muted-foreground">
+                <span className="shrink-0">回复语言</span>
+                <select
+                  value={targetLang}
+                  className="h-9 min-w-32 rounded-md border bg-background px-3 text-sm text-foreground"
+                  onChange={(event) => {
+                    const language = LANGUAGE_OPTIONS.find(([code]) => code === event.target.value);
+                    setTargetLang(event.target.value);
+                    setTargetLangName(language?.[1] || event.target.value);
+                  }}
+                >
+                  {LANGUAGE_OPTIONS.map(([code, name]) => (
+                    <option key={code} value={code}>
+                      {code === analysis.language ? `${name}（来信语言）` : name}
+                    </option>
+                  ))}
+                </select>
+              </label>
+              <Button onClick={generateReply} disabled={!userIdeas.trim() || aiLoading}>
+                {aiLoading ? <Loader2 className="animate-spin" data-icon="inline-start" /> : <Sparkles data-icon="inline-start" />}
+                {aiLoading ? '正在起草回复...' : '根据我的想法起草邮件'}
+              </Button>
+            </div>
+          ) : suggestion ? (
+            <div className="grid gap-2 sm:grid-cols-[auto_1fr_1fr]">
+              <Button
+                variant="outline"
+                onClick={() => {
+                  setSuggestion(null);
+                  setAiError('');
+                }}
+              >
+                <RefreshCw data-icon="inline-start" />
+                调整想法
+              </Button>
+              <Button variant="outline" onClick={sendEmail} disabled={sending || savingDraft || isEmailContentEmpty(replyContent)}>
+                {sending ? <Loader2 className="animate-spin" data-icon="inline-start" /> : <Send data-icon="inline-start" />}
+                直接发送
+              </Button>
+              <Button onClick={saveToGmailDrafts} disabled={savingDraft || sending || isEmailContentEmpty(replyContent)}>
+                {savingDraft ? <Loader2 className="animate-spin" data-icon="inline-start" /> : <Save data-icon="inline-start" />}
+                保存 Gmail 草稿
+              </Button>
+            </div>
+          ) : (
+            <p className="text-center text-xs text-muted-foreground">分析完成后可在这里生成回复</p>
+          )}
         </div>
-      )}
+      </div>
+    );
+  }
+
+  return (
+    <div className="flex flex-col gap-4">
+      <div className="flex items-center justify-between">
+        <Badge variant="secondary" className="gap-1">
+          <Globe className="size-3" />
+          手动回复
+        </Badge>
+        <Button variant="ghost" size="icon" className="size-8" onClick={onClose} aria-label="关闭手动回复">
+          <X />
+        </Button>
+      </div>
+      <input
+        ref={fileInputRef}
+        type="file"
+        multiple
+        className="hidden"
+        onChange={(event) => handleAttachmentSelection(event.target.files)}
+      />
+      <div className="flex items-center justify-between">
+        <label className="text-sm font-medium">附件</label>
+        <Button type="button" variant="outline" size="sm" onClick={() => fileInputRef.current?.click()}>
+          <Paperclip data-icon="inline-start" />
+          添加附件
+        </Button>
+      </div>
+      {attachmentList}
+      <p className="text-xs text-muted-foreground">支持图片、PDF、文档等常见文件，附件总大小上限为 18 MB。</p>
+      {attachmentError && <p className="text-xs text-destructive">{attachmentError}</p>}
+      <RichEmailEditor value={replyContent} onChange={setReplyContent} placeholder="输入回复内容..." minHeight="12rem" />
+      {aiError && <ErrorMessage message={aiError} />}
+      <div className="grid grid-cols-2 gap-2">
+        <Button variant="outline" onClick={sendEmail} disabled={sending || savingDraft || isEmailContentEmpty(replyContent)}>
+          {sending ? <Loader2 className="animate-spin" data-icon="inline-start" /> : <Send data-icon="inline-start" />}
+          直接发送
+        </Button>
+        <Button onClick={saveToGmailDrafts} disabled={savingDraft || sending || isEmailContentEmpty(replyContent)}>
+          {savingDraft ? <Loader2 className="animate-spin" data-icon="inline-start" /> : <ArrowRight data-icon="inline-start" />}
+          保存为草稿
+        </Button>
+      </div>
     </div>
   );
 }
 
-function AnalysisItem({ title, content }: { title: string; content: string }) {
+function AnalysisItem({ title, content, tone = 'default' }: { title: string; content: string; tone?: 'default' | 'warning' }) {
   return (
-    <div className="rounded-lg border p-3">
-      <p className="text-xs text-muted-foreground">{title}</p>
-      <p className="mt-1 whitespace-pre-line text-sm leading-6">{content || '暂无明确结论'}</p>
+    <div className="rounded-md border bg-background p-3">
+      <p className={tone === 'warning' ? 'text-xs text-amber-700' : 'text-xs text-muted-foreground'}>{title}</p>
+      <p className="mt-1 line-clamp-4 whitespace-pre-line text-sm leading-6">{content || '暂无明确结论'}</p>
     </div>
   );
 }
@@ -703,9 +766,9 @@ function AnalysisItem({ title, content }: { title: string; content: string }) {
 function AnalysisList({ title, items }: { title: string; items?: string[] }) {
   if (!items?.length) return null;
   return (
-    <div className="rounded-lg border p-3">
+    <div className="rounded-md border bg-background p-3">
       <p className="text-sm font-medium">{title}</p>
-      <ul className="mt-2 space-y-1.5">
+      <ul className="mt-2 flex flex-col gap-1.5">
         {items.map((item, index) => (
           <li key={`${title}-${index}`} className="flex gap-2 text-sm text-muted-foreground">
             <span className="text-primary">•</span>

@@ -44,6 +44,7 @@ import {
   calculateRecentAverageViews,
   canCreateFeishuRecord,
   countryLabel,
+  CREATOR_PROSPECTS_DELETED_STORAGE_KEY,
   CREATOR_PROSPECTS_SCHEMA_VERSION,
   CREATOR_PROSPECTS_STORAGE_KEY,
   extractYouTubeInputs,
@@ -644,6 +645,23 @@ function findRecordMatch(
   return suspected ? { suspected, reason: suspectedReason } : {};
 }
 
+function loadDeletedProspectIds() {
+  try {
+    const value = JSON.parse(localStorage.getItem(CREATOR_PROSPECTS_DELETED_STORAGE_KEY) || '[]');
+    return Array.isArray(value) ? value.filter((item): item is string => typeof item === 'string') : [];
+  } catch {
+    return [];
+  }
+}
+
+function saveDeletedProspectIds(ids: string[]) {
+  localStorage.setItem(CREATOR_PROSPECTS_DELETED_STORAGE_KEY, JSON.stringify(Array.from(new Set(ids))));
+}
+
+function rememberDeletedProspect(id: string) {
+  saveDeletedProspectIds([...loadDeletedProspectIds(), id]);
+}
+
 export function CreatorProspectingPage() {
   const { settings } = useSettings();
   const { products } = useProducts();
@@ -671,9 +689,11 @@ export function CreatorProspectingPage() {
   const [previewItems, setPreviewItems] = useState<FeishuWritePreview[]>([]);
 
   useEffect(() => {
+    const deletedIds = new Set(loadDeletedProspectIds());
     const localProspects = (() => {
       try {
-        return migrateProspects(JSON.parse(localStorage.getItem(CREATOR_PROSPECTS_STORAGE_KEY) || '[]'));
+        return migrateProspects(JSON.parse(localStorage.getItem(CREATOR_PROSPECTS_STORAGE_KEY) || '[]'))
+          .filter((item) => !deletedIds.has(item.id));
       } catch {
         return [];
       }
@@ -703,10 +723,13 @@ export function CreatorProspectingPage() {
         setCloudReady(true);
         return;
       }
-      const cloudProspects = migrateProspects((data || []).map((row) => row.data));
+      const latestDeletedIds = new Set(loadDeletedProspectIds());
+      const cloudProspects = migrateProspects((data || []).map((row) => row.data))
+        .filter((item) => !latestDeletedIds.has(item.id));
       if (cloudProspects.length) {
         const merged = new Map<string, Prospect>();
         [...localProspects, ...cloudProspects].forEach((item) => {
+          if (latestDeletedIds.has(item.id)) return;
           const current = merged.get(item.id);
           if (!current || item.updatedAt > current.updatedAt) merged.set(item.id, item);
         });
@@ -2101,12 +2124,23 @@ export function CreatorProspectingPage() {
               toast.success('已关联现有开发记录，可以继续确认邀约方向。');
             }}
             onRemove={(id) => {
+              rememberDeletedProspect(id);
               setProspects((current) => current.filter((item) => item.id !== id));
               setSelectedIds((current) => current.filter((item) => item !== id));
               const supabase = getSupabaseBrowserClient();
               if (supabase) {
-                void supabase.from('creator_prospects').delete().eq('id', id).then(({ error }) => {
-                  if (error) console.warn('云端红人线索删除失败:', error.message);
+                void supabase.auth.getUser().then(({ data: authData }) => {
+                  if (!authData.user) return null;
+                  return supabase
+                    .from('creator_prospects')
+                    .delete()
+                    .eq('id', id)
+                    .eq('user_id', authData.user.id);
+                }).then((result) => {
+                  if (result?.error) {
+                    console.warn('云端红人线索删除失败:', result.error.message);
+                    toast.warning('已从当前列表删除；云端清理暂时失败，下次打开也会继续隐藏这条记录。');
+                  }
                 });
               }
             }}
