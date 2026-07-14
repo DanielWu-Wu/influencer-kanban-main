@@ -1335,14 +1335,14 @@ export function EmailDetail({ thread, onBack, onThreadUpdated }: EmailDetailProp
 
       {/* 底部回复区域 */}
       <div
-        className={`shrink-0 border-t border-white/55 bg-white/82 backdrop-blur-xl ${
+        className={`shrink-0 ${
           composerState === 'expanded' && replyMode === 'ai'
-            ? 'h-[68dvh] min-h-0 overflow-hidden sm:h-[min(62dvh,640px)]'
+            ? 'h-[68dvh] min-h-0 overflow-hidden border-t border-gray-300 bg-white shadow-[0_-8px_24px_rgba(15,23,42,0.08)] sm:h-[min(62dvh,640px)]'
             : composerState === 'expanded'
-              ? 'max-h-[72%] overflow-y-auto p-4'
+              ? 'max-h-[72%] overflow-y-auto border-t border-white/55 bg-white/82 p-4 backdrop-blur-xl'
               : composerState === 'minimized'
-                ? 'p-0'
-                : 'p-4'
+                ? 'border-t border-gray-200 bg-white p-0 shadow-[0_-4px_14px_rgba(15,23,42,0.05)]'
+                : 'border-t border-white/55 bg-white/82 p-4 backdrop-blur-xl'
         }`}
       >
         {composerState === 'closed' ? (

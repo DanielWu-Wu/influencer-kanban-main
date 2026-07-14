@@ -514,6 +514,15 @@ ${buildConversation(threadMessages)}`;
     const userIdeas = String(body.userIdeas || '').trim();
     const targetLang = String(body.targetLang || 'en');
     const targetLangName = String(body.targetLangName || targetLang);
+    const requestedTone = String(body.replyTone || 'friendly');
+    const replyTone = ['friendly', 'formal', 'casual'].includes(requestedTone)
+      ? requestedTone
+      : 'friendly';
+    const replyToneName = replyTone === 'formal'
+      ? '正式专业'
+      : replyTone === 'casual'
+        ? '轻松亲切'
+        : '自然友好';
     const analysis = body.analysis || {};
 
     if (!userIdeas || threadMessages.length === 0) {
@@ -527,6 +536,7 @@ ${buildConversation(threadMessages)}`;
       `${DEFAULT_DRAFT_PROMPT}
 
 目标语言：${targetLangName}
+目标语气：${replyToneName}
 只返回以下 JSON，不要添加其他文字：
 {
   "suggestedReply": "使用目标语言撰写的完整回复邮件",
@@ -549,7 +559,8 @@ ${JSON.stringify(analysis)}
 我的回复想法和判断（中文）：
 ${userIdeas}
 
-目标语言代码：${targetLang}`;
+目标语言代码：${targetLang}
+目标语气代码：${replyTone}`;
 
     const result = parseJson(await invokeOpenAICompatibleApi(
       [

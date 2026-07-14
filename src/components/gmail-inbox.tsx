@@ -111,12 +111,30 @@ function getApiMessageTimestamp(message: Record<string, unknown>): number {
   return getDateTimestamp(getHeader(headers, 'Date'));
 }
 
-function getThreadTimestamp(thread: GmailThread): number {
-  return getDateTimestamp(thread.lastMessageDate);
+function usesLatestIncomingMessage(mailbox: GmailMailbox): boolean {
+  return mailbox === 'inbox' || mailbox === 'unread';
 }
 
-function sortThreadsByLatest(threads: GmailThread[]): GmailThread[] {
-  return [...threads].sort((left, right) => getThreadTimestamp(right) - getThreadTimestamp(left));
+function getThreadListMessage(thread: GmailThread, mailbox: GmailMailbox): GmailMessage | undefined {
+  if (usesLatestIncomingMessage(mailbox)) {
+    for (let index = thread.messages.length - 1; index >= 0; index -= 1) {
+      const message = thread.messages[index];
+      if (message.labels.includes('INBOX')) return message;
+    }
+  }
+
+  return thread.messages[thread.messages.length - 1];
+}
+
+function getThreadTimestamp(thread: GmailThread, mailbox: GmailMailbox): number {
+  const listMessage = getThreadListMessage(thread, mailbox);
+  return getDateTimestamp(listMessage?.date || thread.lastMessageDate);
+}
+
+function sortThreadsByLatest(threads: GmailThread[], mailbox: GmailMailbox): GmailThread[] {
+  return [...threads].sort(
+    (left, right) => getThreadTimestamp(right, mailbox) - getThreadTimestamp(left, mailbox),
+  );
 }
 
 function isGmailAuthError(status: number, details: unknown) {
@@ -249,10 +267,10 @@ function extractEmails(value?: string) {
     .filter(Boolean);
 }
 
-function getThreadExternalSenderEmail(thread: GmailThread, ownEmail?: string) {
-  const latestMessage = thread.messages[thread.messages.length - 1];
-  if (!latestMessage?.from) return '';
-  const senderEmail = normalizeEmailAddress(latestMessage.from);
+function getThreadExternalSenderEmail(thread: GmailThread, mailbox: GmailMailbox, ownEmail?: string) {
+  const listMessage = getThreadListMessage(thread, mailbox);
+  if (!listMessage?.from) return '';
+  const senderEmail = normalizeEmailAddress(listMessage.from);
   if (!senderEmail || senderEmail === normalizeEmailAddress(ownEmail)) return '';
   return senderEmail;
 }
@@ -560,6 +578,7 @@ export function GmailInbox({
       }
       return sortThreadsByLatest(
         current.map((thread) => thread.id === updatedThread.id ? updatedThread : thread),
+        mailbox,
       );
     });
   }, [auth?.email, mailbox, updatedThread]);
@@ -740,7 +759,10 @@ export function GmailInbox({
         const visibleBatch = parsedBatch.filter((thread) => shouldShowThreadInMailbox(thread, mailbox, category));
         if (fetchId !== latestFetchIdRef.current) return;
 
-        setThreads((current) => sortThreadsByLatest(index === 0 ? visibleBatch : [...current, ...visibleBatch]));
+        setThreads((current) => sortThreadsByLatest(
+          index === 0 ? visibleBatch : [...current, ...visibleBatch],
+          mailbox,
+        ));
       }
       setLastSyncedAt(new Date().toISOString());
     } catch (caughtError) {
@@ -793,7 +815,7 @@ export function GmailInbox({
         const threadEmails = threads
           .map((thread) => ({
             threadId: thread.id,
-            email: getThreadExternalSenderEmail(thread, auth?.email),
+            email: getThreadExternalSenderEmail(thread, mailbox, auth?.email),
           }))
           .filter((item) => item.email);
         if (!threadEmails.length) {
@@ -889,6 +911,7 @@ export function GmailInbox({
     };
   }, [
     auth?.email,
+    mailbox,
     settings.feishuFieldMapping,
     settings.feishuUrl,
     settings.youtubeDefaultLanguage,
@@ -1003,7 +1026,10 @@ export function GmailInbox({
         setThreads((current) => current.filter((item) => item.id !== thread.id));
       } else {
         setThreads((current) =>
-          sortThreadsByLatest(current.map((item) => item.id === thread.id ? nextThread : item)),
+          sortThreadsByLatest(
+            current.map((item) => item.id === thread.id ? nextThread : item),
+            mailbox,
+          ),
         );
       }
       onThreadUpdated?.(nextThread);
@@ -1047,7 +1073,10 @@ export function GmailInbox({
       nextThread = await modifyThread(nextThread, [], ['UNREAD']);
     } else {
       setThreads((current) =>
-        sortThreadsByLatest(current.map((item) => item.id === nextThread.id ? nextThread : item)),
+        sortThreadsByLatest(
+          current.map((item) => item.id === nextThread.id ? nextThread : item),
+          mailbox,
+        ),
       );
     }
     onSelectThread(nextThread);
@@ -1140,6 +1169,7 @@ export function GmailInbox({
         || thread.messages.some((message) => message.from.toLowerCase().includes(normalizedQuery));
       return matchesSearch && (!showUnreadOnly || thread.hasUnread);
     }),
+    mailbox,
   );
 
   useEffect(() => {
@@ -1314,7 +1344,8 @@ export function GmailInbox({
         ) : (
           filteredThreads.map((thread) => {
             const latestMessage = thread.messages[thread.messages.length - 1];
-            const sender = latestMessage?.from?.split('<')[0]?.replaceAll('"', '').trim()
+            const listMessage = getThreadListMessage(thread, mailbox);
+            const sender = listMessage?.from?.split('<')[0]?.replaceAll('"', '').trim()
               || '\u672a\u77e5\u53d1\u4ef6\u4eba';
             const hasReplied = Boolean(
               auth.email
@@ -1382,7 +1413,7 @@ export function GmailInbox({
                           <span className="min-w-0 truncate">{sender}</span>
                         </span>
                         <span className="shrink-0 text-xs text-muted-foreground">
-                          {formatDate(thread.lastMessageDate)}
+                          {formatDate(listMessage?.date || thread.lastMessageDate)}
                         </span>
                       </div>
                       <p
@@ -1391,7 +1422,9 @@ export function GmailInbox({
                       >
                         {displaySubject}
                       </p>
-                      <p className="mt-0.5 truncate text-xs text-muted-foreground">{thread.snippet}</p>
+                      <p className="mt-0.5 truncate text-xs text-muted-foreground">
+                        {listMessage?.snippet || thread.snippet}
+                      </p>
                     </div>
                   ) : (
                     <div className="grid min-w-0 flex-1 grid-cols-[minmax(150px,240px)_minmax(0,1fr)_72px] items-center gap-4">
@@ -1415,12 +1448,14 @@ export function GmailInbox({
                         >
                           {displaySubject}
                         </span>
-                        {thread.snippet && (
-                          <span className="text-muted-foreground"> - {thread.snippet}</span>
+                        {(listMessage?.snippet || thread.snippet) && (
+                          <span className="text-muted-foreground">
+                            {' - '}{listMessage?.snippet || thread.snippet}
+                          </span>
                         )}
                       </div>
                       <span className="shrink-0 text-right text-xs text-muted-foreground">
-                        {formatDate(thread.lastMessageDate)}
+                        {formatDate(listMessage?.date || thread.lastMessageDate)}
                       </span>
                     </div>
                   )}
