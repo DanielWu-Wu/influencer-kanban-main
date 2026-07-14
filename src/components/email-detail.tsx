@@ -19,6 +19,10 @@ import { YouTubeChannelAvatar } from './youtube-channel-avatar';
 import { textToEmailHtml } from '@/lib/email-content';
 import { repairTextEncoding, splitEmailForTranslation } from '@/lib/email-text';
 import type { FeishuFieldKey, FeishuFieldMapping } from '@/lib/feishu-mapping';
+import {
+  fetchFeishuRecordsCached,
+  type CachedFeishuRecord as FeishuRecord,
+} from '@/lib/feishu-record-cache';
 import { normalizeEmail, type RecordAssistantLog } from '@/lib/record-assistant';
 import {
   buildChannelAvatarLookup,
@@ -33,11 +37,6 @@ interface EmailDetailProps {
   onBack: () => void;
   onThreadUpdated?: (thread: GmailThread) => void;
 }
-
-type FeishuRecord = {
-  record_id: string;
-  fields: Record<string, unknown>;
-};
 
 type FeishuCreatorProfile = {
   recordId: string;
@@ -184,33 +183,6 @@ function getMessageTimestamp(message: GmailMessage): number {
 
 function sortMessagesNewestFirst(messages: GmailMessage[]) {
   return [...messages].sort((left, right) => getMessageTimestamp(right) - getMessageTimestamp(left));
-}
-
-async function fetchFeishuRecords(url: string) {
-  const records: FeishuRecord[] = [];
-  let pageToken: string | undefined;
-
-  for (let page = 0; page < 10; page += 1) {
-    const response = await fetch('/api/feishu/records', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        action: 'list',
-        url,
-        pageSize: 500,
-        pageToken,
-      }),
-    });
-    const result = await response.json();
-    if (!response.ok || !result.success) {
-      throw new Error(result.error || '读取飞书红人资料失败。');
-    }
-    records.push(...(result.data?.items || []));
-    if (!result.data?.has_more || !result.data?.page_token) break;
-    pageToken = result.data.page_token;
-  }
-
-  return records;
 }
 
 export function EmailDetail({ thread, onBack, onThreadUpdated }: EmailDetailProps) {
@@ -397,7 +369,7 @@ export function EmailDetail({ thread, onBack, onThreadUpdated }: EmailDetailProp
       setCreatorProfileError('');
 
       try {
-        const records = await fetchFeishuRecords(activeFeishuUrl);
+        const records = await fetchFeishuRecordsCached(activeFeishuUrl);
         const matched = records
           .map((record) => {
             const emailValue = stringifyFeishuValue(record.fields[activeEmailField]);

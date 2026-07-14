@@ -26,6 +26,10 @@ import { useGmailAuth, useSettings } from '@/lib/data';
 import { repairTextEncoding } from '@/lib/email-text';
 import type { FeishuFieldMapping } from '@/lib/feishu-mapping';
 import {
+  fetchFeishuRecordsCached,
+  type CachedFeishuRecord as FeishuRecord,
+} from '@/lib/feishu-record-cache';
+import {
   GmailAttachment,
   GmailCategory,
   GmailMailbox,
@@ -318,11 +322,6 @@ type GmailThreadListResult = {
   resultSizeEstimate?: number;
 };
 
-type FeishuRecord = {
-  record_id: string;
-  fields: Record<string, unknown>;
-};
-
 type CreatorAvatarProfile = {
   channelName: string;
   channelUrl: string;
@@ -479,33 +478,6 @@ async function fetchWithTimeout(
   } finally {
     window.clearTimeout(timeout);
   }
-}
-
-async function fetchFeishuRecords(url: string) {
-  const records: FeishuRecord[] = [];
-  let pageToken: string | undefined;
-
-  for (let page = 0; page < 10; page += 1) {
-    const response = await fetch('/api/feishu/records', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        action: 'list',
-        url,
-        pageSize: 500,
-        pageToken,
-      }),
-    });
-    const result = await response.json();
-    if (!response.ok || !result.success) {
-      throw new Error(result.error || '读取飞书红人资料失败。');
-    }
-    records.push(...(result.data?.items || []));
-    if (!result.data?.has_more || !result.data?.page_token) break;
-    pageToken = result.data.page_token;
-  }
-
-  return records;
 }
 
 async function runWithConcurrency<T>(
@@ -826,7 +798,7 @@ export function GmailInbox({
         const targetEmails = new Set(threadEmails.map((item) => item.email));
 
         try {
-          const records = await fetchFeishuRecords(settings.feishuUrl);
+          const records = await fetchFeishuRecordsCached(settings.feishuUrl);
           if (runId !== avatarPrefetchRunRef.current) return;
 
           const profileByEmail = new Map<string, CreatorAvatarProfile>();

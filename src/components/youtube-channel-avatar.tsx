@@ -1,5 +1,6 @@
 'use client';
 
+import { useEffect, useState } from 'react';
 import { Loader2, UserRound } from 'lucide-react';
 import type { ChannelAvatarState } from '@/lib/youtube-channel-avatar';
 
@@ -16,20 +17,27 @@ export function YouTubeChannelAvatar({
   size?: 'xs' | 'sm' | 'md';
   clickable?: boolean;
 }) {
+  const [imageFailed, setImageFailed] = useState(false);
   const sizeClass = size === 'xs' ? 'h-7 w-7' : size === 'sm' ? 'h-9 w-9' : 'h-10 w-10';
   const iconClass = size === 'xs' ? 'h-3.5 w-3.5' : 'h-4 w-4';
   const canOpen = clickable && avatar.status === 'ready' && Boolean(avatar.channelUrl);
   const fallbackText = fallback?.trim().charAt(0).toUpperCase();
+
+  useEffect(() => {
+    setImageFailed(false);
+  }, [avatar.avatarUrl]);
+
   const content = (
     <>
       {avatar.status === 'loading' ? (
         <Loader2 className={`${iconClass} animate-spin text-primary`} />
-      ) : avatar.status === 'ready' && avatar.avatarUrl ? (
+      ) : avatar.status === 'ready' && avatar.avatarUrl && !imageFailed ? (
         <img
           src={avatar.avatarUrl}
           alt={label}
           className="h-full w-full rounded-full object-cover"
           referrerPolicy="no-referrer"
+          onError={() => setImageFailed(true)}
         />
       ) : fallbackText ? (
         <span className="text-xs font-medium text-primary">{fallbackText}</span>
