@@ -1,6 +1,6 @@
 'use client';
 
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { FilePenLine, FileText, Inbox, Mail, MailOpen, Send, Settings, Star } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { GmailCategory, GmailMailbox, GmailThread } from '@/lib/types';
@@ -21,13 +21,17 @@ const MAILBOXES: Array<{
   { id: 'drafts', label: '\u8349\u7a3f', icon: FileText },
 ];
 
-export function GmailPage() {
+export function GmailPage({ active = true }: { active?: boolean }) {
   const [selectedThread, setSelectedThread] = useState<GmailThread | null>(null);
   const [mailbox, setMailbox] = useState<GmailMailbox>('inbox');
   const [category, setCategory] = useState<GmailCategory>('primary');
   const [showSettings, setShowSettings] = useState(false);
   const [showNewEmail, setShowNewEmail] = useState(false);
   const [mailboxRefreshKey, setMailboxRefreshKey] = useState(0);
+
+  useEffect(() => {
+    if (!active) setShowNewEmail(false);
+  }, [active]);
 
   const handleMailboxChange = (nextMailbox: GmailMailbox) => {
     setMailbox(nextMailbox);
@@ -121,6 +125,7 @@ export function GmailPage() {
           </Button>
         </div>
         <GmailInbox
+          active={active}
           onSelectThread={setSelectedThread}
           selectedThreadId={selectedThread?.id}
           mailbox={mailbox}

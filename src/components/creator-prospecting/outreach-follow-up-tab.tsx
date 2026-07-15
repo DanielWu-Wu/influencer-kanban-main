@@ -29,7 +29,12 @@ import { Avatar, AvatarFallback, AvatarImage } from '@/components/ui/avatar';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { Textarea } from '@/components/ui/textarea';
-import { appendEmailSignature, textToEmailHtml } from '@/lib/email-content';
+import {
+  appendEmailSignature,
+  applyPlainTextEmailSignature,
+  stripConfiguredEmailSignature,
+  textToEmailHtml,
+} from '@/lib/email-content';
 import type { AppSettings } from '@/lib/data';
 import type { FeishuFieldKey, FeishuFieldMapping } from '@/lib/feishu-mapping';
 import type { GmailAuth } from '@/lib/types';
@@ -302,13 +307,6 @@ function StatusCell({ record }: { record: FollowUpRecord }) {
       {record.check?.deliveryFailure ? <p className="text-xs text-red-700">检测到退信，请核对邮箱</p> : null}
     </div>
   );
-}
-
-function appendPlainTextSignature(body: string, signature?: string) {
-  const trimmedBody = body.trim();
-  const trimmedSignature = signature?.trim();
-  if (!trimmedSignature || trimmedBody.endsWith(trimmedSignature)) return trimmedBody;
-  return `${trimmedBody}\n\n${trimmedSignature}`;
 }
 
 export function OutreachFollowUpTab({ settings, auth, onAuthRefresh }: Props) {
@@ -655,12 +653,16 @@ export function OutreachFollowUpTab({ settings, auth, onAuthRefresh }: Props) {
       });
       const result = await response.json();
       if (!response.ok || !result.success) throw new Error(String(result.error || '生成跟进邮件失败。'));
+      const cleanBody = stripConfiguredEmailSignature(
+        String(result.data?.body || '').trim(),
+        settings.emailSignature,
+      );
       setDrafts((current) => ({
         ...current,
         [record.recordId]: {
           stage,
           status: 'ready',
-          body: String(result.data?.body || '').trim(),
+          body: cleanBody,
           translatedBody: String(result.data?.translatedBody || '').trim(),
           language: String(result.data?.language || record.language || '').trim(),
         },
@@ -684,7 +686,8 @@ export function OutreachFollowUpTab({ settings, auth, onAuthRefresh }: Props) {
       .filter(Boolean)
       .join(' ');
     const subject = /^re:/i.test(initialEmail.subject) ? initialEmail.subject : `Re: ${initialEmail.subject}`;
-    const bodyHtml = appendEmailSignature(textToEmailHtml(draft.body), settings.emailSignature);
+    const cleanBody = stripConfiguredEmailSignature(draft.body, settings.emailSignature);
+    const bodyHtml = appendEmailSignature(textToEmailHtml(cleanBody), settings.emailSignature);
     const response = await fetch('/api/gmail', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
@@ -693,7 +696,7 @@ export function OutreachFollowUpTab({ settings, auth, onAuthRefresh }: Props) {
         accessToken,
         to: record.email,
         subject,
-        body: appendPlainTextSignature(draft.body, settings.emailSignature),
+        body: applyPlainTextEmailSignature(cleanBody, settings.emailSignature),
         bodyHtml,
         threadId: latestOutbound.threadId,
         inReplyTo: latestOutbound.rfcMessageId,

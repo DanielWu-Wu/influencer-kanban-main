@@ -9,6 +9,7 @@ import {
   ChevronUp,
   Copy,
   Globe,
+  Languages,
   Loader2,
   Minimize2,
   Paperclip,
@@ -29,6 +30,7 @@ import {
   buildRichRawEmail,
   emailHtmlToText,
   isEmailContentEmpty,
+  stripConfiguredEmailSignature,
   toBase64Url,
 } from '@/lib/email-content';
 import { GmailThread } from '@/lib/types';
@@ -69,6 +71,10 @@ type AISuggestion = {
   translatedReply: string;
   tone: 'formal' | 'casual' | 'friendly';
   keyPoints: string[];
+};
+
+type TranslatedDraftResult = {
+  suggestedReply: string;
 };
 
 type ReplyTone = AISuggestion['tone'];
@@ -193,6 +199,10 @@ export function EmailComposer({
   const [attachmentError, setAttachmentError] = useState('');
   const [analysisExpanded, setAnalysisExpanded] = useState(false);
   const [translationExpanded, setTranslationExpanded] = useState(false);
+  const [translationEditing, setTranslationEditing] = useState(false);
+  const [editedChineseReply, setEditedChineseReply] = useState('');
+  const [translatingEditedReply, setTranslatingEditedReply] = useState(false);
+  const [translationUpdated, setTranslationUpdated] = useState(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
 
   const threadMessages = useMemo(() => buildThreadMessages(thread), [thread]);
@@ -299,13 +309,21 @@ export function EmailComposer({
         targetLangName,
         replyTone,
       }, historyMessages) as AISuggestion;
-      setSuggestion(result);
-      setReplyContent(result.suggestedReply);
+      const cleanSuggestedReply = stripConfiguredEmailSignature(
+        result.suggestedReply,
+        settings.emailSignature,
+      );
+      const cleanSuggestion = { ...result, suggestedReply: cleanSuggestedReply };
+      setSuggestion(cleanSuggestion);
+      setReplyContent(cleanSuggestedReply);
+      setEditedChineseReply(result.translatedReply);
+      setTranslationEditing(false);
+      setTranslationUpdated(false);
       setGeneratedLangName(targetLangName);
       addSuggestion({
         threadId: thread.id,
         messageId: externalMessage.id,
-        suggestedReply: result.suggestedReply,
+        suggestedReply: cleanSuggestedReply,
         translatedReply: result.translatedReply,
         tone: result.tone || 'friendly',
         keyPoints: result.keyPoints || [],
@@ -315,6 +333,42 @@ export function EmailComposer({
       setAiError(error instanceof Error ? error.message : 'AI 生成失败，请稍后重试');
     } finally {
       setAiLoading(false);
+    }
+  };
+
+  const updateDraftFromChinese = async () => {
+    const confirmedChineseReply = editedChineseReply.trim();
+    if (!confirmedChineseReply || !suggestion) return;
+    setTranslatingEditedReply(true);
+    setAiError('');
+    setTranslationUpdated(false);
+
+    try {
+      const result = await invokeAI({
+        action: 'translateEditedReply',
+        editedChineseReply: confirmedChineseReply,
+        targetLang,
+        targetLangName,
+      }, []) as TranslatedDraftResult;
+      const cleanSuggestedReply = stripConfiguredEmailSignature(
+        result.suggestedReply,
+        settings.emailSignature,
+      );
+      setReplyContent(cleanSuggestedReply);
+      setSuggestion((current) => current ? {
+        ...current,
+        suggestedReply: cleanSuggestedReply,
+        translatedReply: confirmedChineseReply,
+        keyPoints: [],
+      } : current);
+      setEditedChineseReply(confirmedChineseReply);
+      setGeneratedLangName(targetLangName);
+      setTranslationEditing(false);
+      setTranslationUpdated(true);
+    } catch (error) {
+      setAiError(error instanceof Error ? error.message : '根据中文更新外文草稿失败，请稍后重试');
+    } finally {
+      setTranslatingEditedReply(false);
     }
   };
 
@@ -591,11 +645,12 @@ export function EmailComposer({
         <select
           value={targetLang}
           className="h-9 min-w-36 rounded-md border border-gray-300 bg-white px-3 text-sm font-normal text-gray-900 outline-none transition hover:border-gray-400 focus:border-primary focus:ring-2 focus:ring-primary/15 disabled:cursor-not-allowed disabled:opacity-50"
-          disabled={aiLoading}
+          disabled={aiLoading || translatingEditedReply}
           onChange={(event) => {
             const language = LANGUAGE_OPTIONS.find(([code]) => code === event.target.value);
             setTargetLang(event.target.value);
             setTargetLangName(language?.[1] || event.target.value);
+            setTranslationUpdated(false);
           }}
         >
           {LANGUAGE_OPTIONS.map(([code, name]) => (
@@ -610,7 +665,7 @@ export function EmailComposer({
         <select
           value={replyTone}
           className="h-9 min-w-28 rounded-md border border-gray-300 bg-white px-3 text-sm font-normal text-gray-900 outline-none transition hover:border-gray-400 focus:border-primary focus:ring-2 focus:ring-primary/15 disabled:cursor-not-allowed disabled:opacity-50"
-          disabled={aiLoading}
+          disabled={aiLoading || translatingEditedReply}
           onChange={(event) => setReplyTone(event.target.value as ReplyTone)}
         >
           {REPLY_TONE_OPTIONS.map((option) => (
@@ -779,7 +834,10 @@ export function EmailComposer({
             />
             <RichEmailEditor
               value={replyContent}
-              onChange={setReplyContent}
+              onChange={(value) => {
+                setReplyContent(value);
+                setTranslationUpdated(false);
+              }}
               placeholder="编辑 AI 起草的邮件..."
               minHeight="13rem"
               className="rounded-none border-0 bg-white shadow-none focus-within:ring-2 focus-within:ring-inset focus-within:ring-primary/20"
@@ -793,9 +851,82 @@ export function EmailComposer({
               </Button>
             </CollapsibleTrigger>
             <CollapsibleContent>
-              <div className="whitespace-pre-wrap border-t border-gray-100 bg-gray-50 px-4 py-3 text-sm leading-6 text-gray-700">
-                {suggestion.translatedReply}
-              </div>
+              {translationEditing ? (
+                <div className="border-t border-gray-100 bg-white">
+                  <div className="flex flex-wrap items-start justify-between gap-3 border-b border-gray-100 px-4 py-3">
+                    <div>
+                      <p className="text-sm font-medium text-gray-900">编辑中文邮件</p>
+                      <p className="mt-0.5 text-xs text-gray-500">修改完成后，AI 将只翻译这份中文，不会重新分析或改写你的商务决定。</p>
+                    </div>
+                    <Badge variant="outline" className="border-gray-200 font-normal text-gray-500">待确认</Badge>
+                  </div>
+                  <Textarea
+                    value={editedChineseReply}
+                    onChange={(event) => {
+                      setEditedChineseReply(event.target.value);
+                      setTranslationUpdated(false);
+                    }}
+                    placeholder="修改中文邮件正文..."
+                    className="min-h-56 resize-y rounded-none border-0 bg-white px-4 py-3 text-sm leading-6 shadow-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-primary/20"
+                    disabled={translatingEditedReply}
+                  />
+                  <div className="flex flex-wrap items-center justify-between gap-3 border-t border-gray-100 bg-gray-50/70 px-4 py-3">
+                    <p className="text-xs text-gray-500">将翻译为：{targetLangName}</p>
+                    <div className="flex items-center gap-2">
+                      <Button
+                        type="button"
+                        variant="ghost"
+                        size="sm"
+                        disabled={translatingEditedReply}
+                        onClick={() => {
+                          setEditedChineseReply(suggestion.translatedReply);
+                          setTranslationEditing(false);
+                          setAiError('');
+                        }}
+                      >
+                        取消
+                      </Button>
+                      <Button
+                        type="button"
+                        size="sm"
+                        disabled={!editedChineseReply.trim() || translatingEditedReply}
+                        onClick={updateDraftFromChinese}
+                      >
+                        {translatingEditedReply
+                          ? <Loader2 className="animate-spin" data-icon="inline-start" />
+                          : <Languages data-icon="inline-start" />}
+                        {translatingEditedReply ? '正在翻译...' : '根据中文更新外文'}
+                      </Button>
+                    </div>
+                  </div>
+                </div>
+              ) : (
+                <div className="border-t border-gray-100 bg-gray-50">
+                  <div className="flex items-center justify-between gap-3 border-b border-gray-100 px-4 py-2.5">
+                    <p className={`text-xs ${translationUpdated ? 'text-emerald-700' : 'text-gray-500'}`}>
+                      {translationUpdated ? '外文草稿已按这份中文更新' : '可修改中文版本，再生成对应语言的外文草稿。'}
+                    </p>
+                    <Button
+                      type="button"
+                      variant="outline"
+                      size="sm"
+                      className="h-8 shrink-0 bg-white"
+                      disabled={translatingEditedReply}
+                      onClick={() => {
+                        setEditedChineseReply(suggestion.translatedReply);
+                        setTranslationEditing(true);
+                        setTranslationUpdated(false);
+                        setAiError('');
+                      }}
+                    >
+                      编辑中文
+                    </Button>
+                  </div>
+                  <div className="whitespace-pre-wrap px-4 py-3 text-sm leading-6 text-gray-700">
+                    {suggestion.translatedReply}
+                  </div>
+                </div>
+              )}
             </CollapsibleContent>
           </Collapsible>
           {aiError && <ErrorMessage message={aiError} />}
@@ -825,9 +956,11 @@ export function EmailComposer({
                 <Button
                   variant="ghost"
                   className="text-gray-600 hover:bg-gray-100 hover:text-gray-900"
-                  disabled={aiLoading || sending || savingDraft}
+                  disabled={aiLoading || translatingEditedReply || translationEditing || sending || savingDraft}
                   onClick={() => {
                     setSuggestion(null);
+                    setTranslationEditing(false);
+                    setTranslationUpdated(false);
                     setAiError('');
                   }}
                 >
@@ -836,7 +969,7 @@ export function EmailComposer({
                 <Button
                   variant="outline"
                   onClick={generateReply}
-                  disabled={!userIdeas.trim() || aiLoading || sending || savingDraft}
+                  disabled={!userIdeas.trim() || aiLoading || translatingEditedReply || translationEditing || sending || savingDraft}
                 >
                   {aiLoading ? <Loader2 className="animate-spin" data-icon="inline-start" /> : <RefreshCw data-icon="inline-start" />}
                   {aiLoading ? '重新生成中...' : '重新生成'}
@@ -844,12 +977,12 @@ export function EmailComposer({
                 <Button
                   variant="outline"
                   onClick={sendEmail}
-                  disabled={aiLoading || sending || savingDraft || isEmailContentEmpty(replyContent)}
+                  disabled={aiLoading || translatingEditedReply || translationEditing || sending || savingDraft || isEmailContentEmpty(replyContent)}
                 >
                   {sending ? <Loader2 className="animate-spin" data-icon="inline-start" /> : <Send data-icon="inline-start" />}
                   直接发送
                 </Button>
-                <Button onClick={saveToGmailDrafts} disabled={aiLoading || savingDraft || sending || isEmailContentEmpty(replyContent)}>
+                <Button onClick={saveToGmailDrafts} disabled={aiLoading || translatingEditedReply || translationEditing || savingDraft || sending || isEmailContentEmpty(replyContent)}>
                   {savingDraft ? <Loader2 className="animate-spin" data-icon="inline-start" /> : <Save data-icon="inline-start" />}
                   保存 Gmail 草稿
                 </Button>

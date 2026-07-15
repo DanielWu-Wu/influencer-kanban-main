@@ -31,7 +31,11 @@ import {
 import { Textarea } from '@/components/ui/textarea';
 import { generateId, useGmailAuth, useProducts, useSettings, type AppSettings } from '@/lib/data';
 import { DEFAULT_OUTREACH_PROMPT } from '@/lib/ai-prompts';
-import { appendEmailSignature } from '@/lib/email-content';
+import {
+  appendEmailSignature,
+  applyPlainTextEmailSignature,
+  stripConfiguredEmailSignature,
+} from '@/lib/email-content';
 import { sanitizeOutreachEmailBody } from '@/lib/outreach-draft-sanitizer';
 import {
   buildOutreachEmailHtml,
@@ -202,13 +206,6 @@ function isGmailAuthError(error: unknown) {
     'autherror',
     '401',
   ].some((keyword) => message.toLowerCase().includes(keyword));
-}
-
-function appendPlainTextSignature(body: string, signature?: string) {
-  const content = body.trimEnd();
-  const signatureText = signature?.trim();
-  if (!signatureText || content.endsWith(signatureText)) return content;
-  return `${content}\n\n${signatureText}`;
 }
 
 function putMappedField(
@@ -1732,7 +1729,10 @@ export function CreatorProspectingPage() {
           const text = event.data.text || '';
           if (!text) return;
           streamedBody += text;
-          const cleanStreamingBody = sanitizeOutreachEmailBody(streamedBody);
+          const cleanStreamingBody = stripConfiguredEmailSignature(
+            sanitizeOutreachEmailBody(streamedBody),
+            settings.emailSignature,
+          );
           updateProspect(prospect.id, {
             streamingBody: cleanStreamingBody,
             outreachGenerationStage: 'streaming_body',
@@ -1772,7 +1772,10 @@ export function CreatorProspectingPage() {
 
       const draft: OutreachDraft = {
         ...completedDraft,
-        body: sanitizeOutreachEmailBody(completedDraft.body || streamedBody),
+        body: stripConfiguredEmailSignature(
+          sanitizeOutreachEmailBody(completedDraft.body || streamedBody),
+          settings.emailSignature,
+        ),
       };
       updateProspect(prospect.id, {
         aiDraft: draft,
@@ -1790,7 +1793,10 @@ export function CreatorProspectingPage() {
         const generatedDraft = await generateOneShot();
         const draft: OutreachDraft = {
           ...generatedDraft,
-          body: sanitizeOutreachEmailBody(generatedDraft.body),
+          body: stripConfiguredEmailSignature(
+            sanitizeOutreachEmailBody(generatedDraft.body),
+            settings.emailSignature,
+          ),
         };
         updateProspect(prospect.id, {
           aiDraft: draft,
@@ -1902,7 +1908,10 @@ export function CreatorProspectingPage() {
       toast.error('请先生成并确认开发信内容。');
       return;
     }
-    const sanitizedBody = sanitizeOutreachEmailBody(prospect.aiDraft.body);
+    const sanitizedBody = stripConfiguredEmailSignature(
+      sanitizeOutreachEmailBody(prospect.aiDraft.body),
+      settings.emailSignature,
+    );
     const draft: OutreachDraft = {
       ...prospect.aiDraft,
       body: sanitizedBody,
@@ -1932,7 +1941,7 @@ export function CreatorProspectingPage() {
             accessToken,
             to: prospect.publicEmail,
             subject: draft.subject,
-            body: appendPlainTextSignature(draft.body, settings.emailSignature),
+            body: applyPlainTextEmailSignature(draft.body, settings.emailSignature),
             bodyHtml: appendEmailSignature(renderedBodyHtml, settings.emailSignature),
             inlineImages: inlineProductImage ? [inlineProductImage] : [],
           }),

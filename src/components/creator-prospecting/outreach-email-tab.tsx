@@ -40,7 +40,7 @@ import {
   type Prospect,
   WORKFLOW_META,
 } from '@/lib/creator-prospecting';
-import { appendEmailSignature } from '@/lib/email-content';
+import { appendEmailSignature, stripConfiguredEmailSignature } from '@/lib/email-content';
 import { outreachLanguageLabel } from '@/lib/outreach-languages';
 import { sanitizeOutreachEmailBody } from '@/lib/outreach-draft-sanitizer';
 import {
@@ -167,7 +167,10 @@ function MailPreview({
   emailSignature?: string;
   onPatch: (id: string, patch: Partial<Prospect>) => void;
 }) {
-  const body = prospect.aiDraft?.body || '';
+  const body = stripConfiguredEmailSignature(
+    prospect.aiDraft?.body || '',
+    emailSignature,
+  );
   const paragraphs = splitEmailParagraphs(body);
   const hasImage = Boolean(product?.mainImage?.dataUrl);
   const includeImage = hasImage && prospect.aiDraft?.productImageIncluded !== false;

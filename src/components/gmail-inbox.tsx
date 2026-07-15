@@ -47,10 +47,12 @@ import { YouTubeChannelAvatar } from './youtube-channel-avatar';
 const GMAIL_PAGE_SIZE = 50;
 const GMAIL_DETAIL_BATCH_SIZE = 16;
 const GMAIL_AUTO_REFRESH_MS = 60_000;
+const GMAIL_CACHE_STALE_MS = 60_000;
 const SUBJECT_TRANSLATION_BATCH_SIZE = 12;
 const CHANNEL_AVATAR_PREFETCH_CONCURRENCY = 3;
 
 interface GmailInboxProps {
+  active?: boolean;
   onSelectThread: (thread: GmailThread) => void;
   onThreadUpdated?: (thread: GmailThread) => void;
   onCategoryChange: (category: GmailCategory) => void;
@@ -491,6 +493,7 @@ async function runWithConcurrency<T>(
 }
 
 export function GmailInbox({
+  active = true,
   onSelectThread,
   onThreadUpdated,
   onCategoryChange,
@@ -504,6 +507,7 @@ export function GmailInbox({
   const { auth, connect, disconnect } = useGmailAuth();
   const { settings } = useSettings();
   const latestFetchIdRef = useRef(0);
+  const wasActiveRef = useRef(active);
   const subjectTranslationRunRef = useRef(0);
   const avatarPrefetchRunRef = useRef(0);
   const manuallyPreservedUnreadThreadIdsRef = useRef<Set<string>>(new Set());
@@ -762,7 +766,34 @@ export function GmailInbox({
   }, [auth?.isConnected, auth?.accessToken, fetchThreads, refreshKey]);
 
   useEffect(() => {
-    if (!auth?.isConnected || !auth.accessToken) return undefined;
+    const becameActive = active && !wasActiveRef.current;
+    wasActiveRef.current = active;
+    if (
+      !becameActive
+      || !auth?.isConnected
+      || !auth.accessToken
+      || loading
+      || actionThreadId
+      || openingThreadId
+    ) return;
+
+    const lastSyncTimestamp = Date.parse(lastSyncedAt || '');
+    const cacheIsFresh = Number.isFinite(lastSyncTimestamp)
+      && Date.now() - lastSyncTimestamp < GMAIL_CACHE_STALE_MS;
+    if (!cacheIsFresh) void fetchThreads();
+  }, [
+    actionThreadId,
+    active,
+    auth?.accessToken,
+    auth?.isConnected,
+    fetchThreads,
+    lastSyncedAt,
+    loading,
+    openingThreadId,
+  ]);
+
+  useEffect(() => {
+    if (!active || !auth?.isConnected || !auth.accessToken) return undefined;
     const timer = window.setInterval(() => {
       if (document.visibilityState === 'visible' && !loading && !actionThreadId && !openingThreadId) {
         void fetchThreads();
@@ -770,7 +801,7 @@ export function GmailInbox({
     }, GMAIL_AUTO_REFRESH_MS);
 
     return () => window.clearInterval(timer);
-  }, [actionThreadId, auth?.accessToken, auth?.isConnected, fetchThreads, loading, openingThreadId]);
+  }, [active, actionThreadId, auth?.accessToken, auth?.isConnected, fetchThreads, loading, openingThreadId]);
 
   useEffect(() => {
     const runId = avatarPrefetchRunRef.current + 1;
@@ -892,7 +923,7 @@ export function GmailInbox({
   ]);
 
   useEffect(() => {
-    if (!auth?.isConnected || !auth.accessToken) return undefined;
+    if (!active || !auth?.isConnected || !auth.accessToken) return undefined;
 
     const refreshWhenActive = () => {
       if (document.visibilityState === 'visible' && !loading && !actionThreadId && !openingThreadId) {
@@ -907,7 +938,7 @@ export function GmailInbox({
       window.removeEventListener('focus', refreshWhenActive);
       document.removeEventListener('visibilitychange', refreshWhenActive);
     };
-  }, [actionThreadId, auth?.accessToken, auth?.isConnected, fetchThreads, loading, openingThreadId]);
+  }, [active, actionThreadId, auth?.accessToken, auth?.isConnected, fetchThreads, loading, openingThreadId]);
 
   const goToPreviousPage = () => {
     if (loading || pageIndex === 0) return;

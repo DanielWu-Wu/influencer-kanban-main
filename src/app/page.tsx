@@ -101,6 +101,7 @@ export default function DashboardPage() {
   const router = useRouter();
   const { user, loading: authLoading, configured, signOut } = useAuth();
   const [currentView, setCurrentView] = useState<View>('todo');
+  const [gmailHasMounted, setGmailHasMounted] = useState(false);
   const [showAddDialog, setShowAddDialog] = useState(false);
   const [editingInfluencer, setEditingInfluencer] = useState<Influencer | null>(null);
   const [searchQuery, setSearchQuery] = useState('');
@@ -128,6 +129,10 @@ export default function DashboardPage() {
       setCurrentView('settings');
     }
   }, [authLoading, configured, router, user]);
+
+  useEffect(() => {
+    if (currentView === 'gmail') setGmailHasMounted(true);
+  }, [currentView]);
 
   useEffect(() => {
     setSidebarCollapsed(window.localStorage.getItem(SIDEBAR_COLLAPSED_STORAGE_KEY) === 'true');
@@ -553,9 +558,13 @@ export default function DashboardPage() {
             </div>
           )}
 
-          {currentView === 'gmail' && (
-            <div className="min-h-0 flex-1 overflow-hidden rounded-lg">
-              <GmailPage />
+          {(gmailHasMounted || currentView === 'gmail') && (
+            <div
+              className={currentView === 'gmail'
+                ? 'min-h-0 flex-1 overflow-hidden rounded-lg'
+                : 'hidden'}
+            >
+              <GmailPage active={currentView === 'gmail'} />
             </div>
           )}
         </main>

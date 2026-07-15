@@ -308,7 +308,7 @@ confidence 使用 0 到 100 的整数。
   ? '二次跟进应礼貌提醒对方查看上一封邮件，简要重申合作兴趣，并邀请对方回复。正文控制在约 55-110 个单词。'
   : '三次跟进应更克制、低压力，说明这是一次简短的最后跟进，并允许对方在当前不合适时简单告知。正文控制在约 45-90 个单词。'}
 4. 只能使用输入中明确出现的人名、产品和合作信息，不得编造价格、寄样、时间、折扣或合作承诺。
-5. 不写完整签名块，不输出主题，不使用 Markdown，不解释写作过程。
+5. 不添加发件人姓名、职位、品牌名、官网链接、签名块或签名占位符；签名只由 Gmail 设置统一追加。
 6. 同时给出完整中文对照，便于人工审核。
 
 只返回严格 JSON：
@@ -464,6 +464,46 @@ ${String(body.userPreference || '').trim() || '无'}
       return NextResponse.json({ success: true, data: result });
     }
 
+    if (action === 'translateEditedReply') {
+      const editedChineseReply = String(body.editedChineseReply || '').trim();
+      const targetLang = String(body.targetLang || '').trim();
+      const targetLangName = String(body.targetLangName || targetLang).trim();
+
+      if (!editedChineseReply || !targetLang || !targetLangName) {
+        return NextResponse.json(
+          { error: '缺少修改后的中文邮件或目标语言。' },
+          { status: 400 },
+        );
+      }
+
+      const systemPrompt = `你是一位严谨的跨境商务邮件翻译助手。
+
+请把用户已经确认的中文邮件完整翻译为${targetLangName}（语言代码：${targetLang}）。
+
+规则：
+1. 忠实保留原文事实、语气、段落、数字、价格、币种、日期、产品型号、人名和链接，不得自行补充、删除或改写商务条件。
+2. 使用自然、专业、符合母语习惯的商务邮件表达，但不要重新策划邮件内容。
+3. 不要输出主题、中文说明、Markdown、分析过程或任何额外文字。
+4. 不要添加发件人姓名、职位、品牌名、官网链接、签名块或签名占位符；如果中文末尾已有单独的发件人署名或职位，只保留自然结束语，不翻译署名块。签名由 Gmail 设置统一追加。
+5. 只返回以下 JSON：
+{
+  "suggestedReply": "翻译后的完整邮件正文"
+}`;
+
+      const result = parseJson(await invokeOpenAICompatibleApi(
+        [
+          { role: 'system', content: systemPrompt },
+          { role: 'user', content: editedChineseReply },
+        ],
+        getModelOptions(body, 0.2),
+      )) as Record<string, unknown>;
+      const suggestedReply = String(result.suggestedReply || '').trim();
+      if (!suggestedReply) {
+        return NextResponse.json({ error: 'AI 没有返回可用的翻译正文。' }, { status: 502 });
+      }
+      return NextResponse.json({ success: true, data: { suggestedReply } });
+    }
+
     if (action === 'analyze') {
       if (threadMessages.length === 0) {
         return NextResponse.json({ error: '缺少邮件历史，无法进行合作分析。' }, { status: 400 });
@@ -537,9 +577,10 @@ ${buildConversation(threadMessages)}`;
 
 目标语言：${targetLangName}
 目标语气：${replyToneName}
+签名规则：只生成邮件正文和自然结束语，不得包含发件人姓名、职位、品牌名、网站链接、签名块或签名占位符。签名由系统根据 Gmail 设置统一追加。
 只返回以下 JSON，不要添加其他文字：
 {
-  "suggestedReply": "使用目标语言撰写的完整回复邮件",
+  "suggestedReply": "使用目标语言撰写的不含签名的完整邮件正文",
   "translatedReply": "中文对照",
   "tone": "friendly",
   "keyPoints": ["本次回复落实的要点"]
