@@ -61,6 +61,8 @@ export interface AppSettings {
   feishuFieldMapping?: FeishuFieldMapping;
   feishuProspectingUrl?: string;
   feishuProspectingFieldMapping?: FeishuFieldMapping;
+  feishuCooperationUrl?: string;
+  feishuCooperationFieldMapping?: FeishuFieldMapping;
   recordAssistantSettings?: RecordAssistantSettings;
   brandName?: string;
   senderName?: string;

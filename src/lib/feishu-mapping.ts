@@ -34,7 +34,28 @@ export type FeishuFieldKey =
   | 'expectedPublishDate'
   | 'discountCode'
   | 'collaborationProgress'
-  | 'parentRecord';
+  | 'parentRecord'
+  | 'month'
+  | 'promotionOwner'
+  | 'cooperationDate'
+  | 'cooperationProduct'
+  | 'cooperationSite'
+  | 'operator'
+  | 'promotionPlatform'
+  | 'cooperationCount'
+  | 'tiktokUrl'
+  | 'sampleProvided'
+  | 'originalCurrencyCost'
+  | 'cnyCost'
+  | 'shippingAddress'
+  | 'shippingDate'
+  | 'arrivalDate'
+  | 'shippingTracking'
+  | 'actualPublishDate'
+  | 'publishedVideoUrl'
+  | 'exposureCount'
+  | 'commentCount'
+  | 'likeCount';
 
 export type FeishuFieldMapping = Partial<Record<FeishuFieldKey, string>>;
 
@@ -81,7 +102,7 @@ export const FEISHU_FIELD_TARGETS: Array<{
     key: 'channelUrl',
     label: '频道链接',
     description: '用于打开 YouTube 频道和后续接 YouTube API',
-    keywords: ['频道链接', '频道地址', 'youtube', 'url', 'link'],
+    keywords: ['频道链接', '频道地址', '红人频道主页链接', 'youtube主页链接', 'youtube', 'url', 'link'],
     required: true,
   },
   {
@@ -124,7 +145,7 @@ export const FEISHU_FIELD_TARGETS: Array<{
     key: 'contentType',
     label: '内容类型',
     description: '用于判断频道内容是否适合当前产品',
-    keywords: ['内容类型', '类目', '品类', 'category', 'content type'],
+    keywords: ['内容类型', '红人类型', '类目', '品类', 'category', 'content type'],
   },
   {
     key: 'engagementRate',
@@ -191,7 +212,7 @@ export const FEISHU_FIELD_TARGETS: Array<{
     key: 'cooperationType',
     label: '合作形式',
     description: '送样、付费、联盟或长期合作等邀约形式',
-    keywords: ['合作形式', '合作方式', 'cooperation type'],
+    keywords: ['合作形式', '合作类型', '合作方式', 'cooperation type'],
   },
   {
     key: 'cooperationIdea',
@@ -264,6 +285,134 @@ export const FEISHU_FIELD_TARGETS: Array<{
     label: '父记录',
     description: '用于表格内部关联关系',
     keywords: ['父记录', 'parent'],
+  },
+  {
+    key: 'month',
+    label: '月份',
+    description: '用于按月份汇总合作项目',
+    keywords: ['月份', '合作月份', 'month'],
+  },
+  {
+    key: 'promotionOwner',
+    label: '推广负责人',
+    description: '负责推进本次合作的人员',
+    keywords: ['推广负责人', '项目负责人', '负责人', 'owner'],
+  },
+  {
+    key: 'cooperationDate',
+    label: '合作日期',
+    description: '正式确认本次合作的日期',
+    keywords: ['合作日期', '确认合作日期', 'cooperation date'],
+    required: true,
+  },
+  {
+    key: 'cooperationProduct',
+    label: '合作产品',
+    description: '本次合作推广的产品',
+    keywords: ['合作产品', '目标产品', '推广产品', 'product'],
+    required: true,
+  },
+  {
+    key: 'cooperationSite',
+    label: '合作站点',
+    description: '本次合作对应的品牌或销售站点',
+    keywords: ['合作站点', '推广站点', '站点', 'site'],
+  },
+  {
+    key: 'operator',
+    label: '运营',
+    description: '负责产品或站点运营的人员',
+    keywords: ['运营', '运营负责人', 'operator'],
+  },
+  {
+    key: 'promotionPlatform',
+    label: '推广平台',
+    description: 'YouTube、TikTok 等内容发布平台',
+    keywords: ['推广平台', '发布平台', '平台', 'platform'],
+  },
+  {
+    key: 'cooperationCount',
+    label: '第几次合作次数',
+    description: '记录与该红人的历史合作次数',
+    keywords: ['第几次合作次数', '合作次数', '第几次合作'],
+  },
+  {
+    key: 'tiktokUrl',
+    label: 'TikTok 主页链接',
+    description: '红人的 TikTok 主页地址',
+    keywords: ['tiktok主页链接', 'tiktok链接', 'tiktok url'],
+  },
+  {
+    key: 'sampleProvided',
+    label: '是否提供样品',
+    description: '记录本次合作是否需要寄送样品',
+    keywords: ['是否提供样品', '是否寄样', '提供样品', 'sample'],
+  },
+  {
+    key: 'originalCurrencyCost',
+    label: '合作费用（原币）',
+    description: '记录合作费用的原始币种金额',
+    keywords: ['合作费用（原币）', '合作费用原币', '原币费用', 'original cost'],
+  },
+  {
+    key: 'cnyCost',
+    label: '合作费用（人民币）',
+    description: '记录或换算后的人民币合作费用',
+    keywords: ['合作费用（人民币）', '合作费用人民币', '人民币费用', 'cny cost'],
+  },
+  {
+    key: 'shippingAddress',
+    label: '发货地址',
+    description: '寄送合作样品的收货地址',
+    keywords: ['发货地址', '收货地址', '寄送地址', 'shipping address'],
+  },
+  {
+    key: 'shippingDate',
+    label: '发货时间',
+    description: '样品实际发出的日期',
+    keywords: ['发货时间', '发货日期', 'shipping date'],
+  },
+  {
+    key: 'arrivalDate',
+    label: '到货时间',
+    description: '样品实际签收或到货的日期',
+    keywords: ['到货时间', '到货日期', '签收日期', 'arrival date'],
+  },
+  {
+    key: 'shippingTracking',
+    label: '运输追踪信息',
+    description: '物流公司、单号或查询链接',
+    keywords: ['运输追踪信息', '物流追踪信息', '物流单号', 'tracking'],
+  },
+  {
+    key: 'actualPublishDate',
+    label: '实际上线日期',
+    description: '合作内容实际公开发布的日期',
+    keywords: ['实际上线日期', '实际发布日期', '上线日期', 'actual publish date'],
+  },
+  {
+    key: 'publishedVideoUrl',
+    label: '视频上线链接',
+    description: '合作视频正式发布后的链接',
+    keywords: ['视频上线链接', '视频发布链接', '上线链接', 'published video url'],
+  },
+  {
+    key: 'exposureCount',
+    label: '曝光量',
+    description: '合作内容发布后的曝光或播放数据',
+    keywords: ['曝光量', '播放量', 'views', 'impressions'],
+  },
+  {
+    key: 'commentCount',
+    label: '评论量',
+    description: '合作内容发布后的评论数量',
+    keywords: ['评论量', '评论数', 'comments'],
+  },
+  {
+    key: 'likeCount',
+    label: '点赞量',
+    description: '合作内容发布后的点赞数量',
+    keywords: ['点赞量', '点赞数', 'likes'],
   },
 ];
 

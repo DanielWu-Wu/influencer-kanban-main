@@ -48,7 +48,7 @@ type Inspection = {
   sampleRecords: Array<{ record_id: string; fields: Record<string, unknown> }>;
 };
 
-type TableRole = 'resource' | 'development';
+type TableRole = 'resource' | 'development' | 'cooperation';
 
 const ROLE_CONFIG: Record<TableRole, {
   title: string;
@@ -100,6 +100,41 @@ const ROLE_CONFIG: Record<TableRole, {
       'notes',
     ],
   },
+  cooperation: {
+    title: '详细合作记录表',
+    description: '连接“详细合作记录表”，用于跟踪已确认合作的费用、寄样、上线进度和发布数据。',
+    placeholder: '粘贴“详细合作记录表”的完整网址，需包含 table=tbl...',
+    mappingKeys: [
+      'month',
+      'promotionOwner',
+      'cooperationDate',
+      'cooperationProduct',
+      'cooperationSite',
+      'region',
+      'operator',
+      'promotionPlatform',
+      'channelName',
+      'cooperationCount',
+      'channelUrl',
+      'tiktokUrl',
+      'contentType',
+      'followers',
+      'expectedPublishDate',
+      'sampleProvided',
+      'originalCurrencyCost',
+      'cnyCost',
+      'cooperationType',
+      'shippingAddress',
+      'shippingDate',
+      'arrivalDate',
+      'shippingTracking',
+      'actualPublishDate',
+      'publishedVideoUrl',
+      'exposureCount',
+      'commentCount',
+      'likeCount',
+    ],
+  },
 };
 
 export function FeishuSettings({
@@ -130,7 +165,7 @@ export function FeishuSettings({
       };
       setMessage(messages[error] || `飞书连接失败：${error}`);
     } else if (params.get('feishu_connected')) {
-      setMessage('飞书账号已连接。请分别配置资源库和开发记录表。');
+      setMessage('飞书账号已连接。请分别配置资源库、开发记录表和详细合作记录表。');
     }
   }, []);
 
@@ -176,7 +211,7 @@ export function FeishuSettings({
               <div className="min-w-0">
                 <CardTitle className="text-base">飞书多维表格</CardTitle>
                 <CardDescription className="mt-0.5 text-xs">
-                  分别连接红人资源库和开发记录表，避免查重与开发进度混写
+                  分别连接红人资源库、开发记录表和详细合作记录表，保持各阶段数据独立
                 </CardDescription>
               </div>
             </div>
@@ -195,7 +230,7 @@ export function FeishuSettings({
           {connection.loading ? (
             <StatusBox icon={<LoaderCircle className="h-4 w-4 animate-spin" />} text="正在检查飞书连接状态..." />
           ) : !connection.configured ? (
-            <StatusBox tone="warning" text="当前本地环境尚未配置飞书 App ID 和 App Secret。你可以先填写并暂存两个子表网址，配置凭证后再授权和检查字段。" />
+            <StatusBox tone="warning" text="当前本地环境尚未配置飞书 App ID 和 App Secret。你可以先填写并暂存三个子表网址，配置凭证后再授权和检查字段。" />
           ) : connection.connected ? (
             <div className="flex items-center justify-between gap-4 rounded-lg border border-emerald-200/80 bg-emerald-50/80 p-3">
               <div className="min-w-0">
@@ -249,6 +284,19 @@ export function FeishuSettings({
                   feishuProspectingFieldMapping: mapping,
                 })}
               />
+              <div className="xl:col-span-2">
+                <TableConfiguration
+                  role="cooperation"
+                  canInspect={connection.connected}
+                  initialUrl={settings.feishuCooperationUrl || ''}
+                  initialMapping={settings.feishuCooperationFieldMapping || {}}
+                  onSaveUrl={(url) => updateSettings({ feishuCooperationUrl: url })}
+                  onSave={(url, mapping) => updateSettings({
+                    feishuCooperationUrl: url,
+                    feishuCooperationFieldMapping: mapping,
+                  })}
+                />
+              </div>
             </div>
           )}
         </CardContent>
