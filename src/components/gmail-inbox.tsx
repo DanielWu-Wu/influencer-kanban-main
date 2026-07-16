@@ -510,6 +510,7 @@ export function GmailInbox({
   const wasActiveRef = useRef(active);
   const subjectTranslationRunRef = useRef(0);
   const avatarPrefetchRunRef = useRef(0);
+  const openingThreadRef = useRef<string | null>(null);
   const manuallyPreservedUnreadThreadIdsRef = useRef<Set<string>>(new Set());
   const [threads, setThreads] = useState<GmailThread[]>([]);
   const [loading, setLoading] = useState(false);
@@ -1046,7 +1047,8 @@ export function GmailInbox({
   };
 
   const handleOpenThread = async (thread: GmailThread) => {
-    if (openingThreadId === thread.id) return;
+    if (openingThreadRef.current) return;
+    openingThreadRef.current = thread.id;
     setOpeningThreadId(thread.id);
     let nextThread = thread;
 
@@ -1063,6 +1065,7 @@ export function GmailInbox({
     } catch {
       // The lightweight list data is still usable if full content loading fails.
     } finally {
+      openingThreadRef.current = null;
       setOpeningThreadId(null);
     }
 
@@ -1359,6 +1362,7 @@ export function GmailInbox({
               ? subjectTranslations[thread.id]
               : thread.subject;
             const actionLoading = actionThreadId === thread.id;
+            const threadOpening = openingThreadId === thread.id;
             const avatar = threadAvatars[thread.id] || { status: 'idle' as const };
 
             return (
@@ -1366,9 +1370,10 @@ export function GmailInbox({
                 key={thread.id}
                 role="button"
                 tabIndex={0}
+                aria-busy={threadOpening}
                 className={`glass-list-row group cursor-pointer border-b border-white/55 px-3 py-2.5 outline-none transition-all duration-200 ease-out hover:bg-white/72 hover:shadow-sm active:bg-white/85 focus-visible:ring-2 focus-visible:ring-ring/40 motion-reduce:transition-none ${
                   selectedThreadId === thread.id ? 'bg-white/85 shadow-[inset_3px_0_0_var(--primary)]' : ''
-                } ${thread.hasUnread ? 'bg-primary/[0.055]' : ''}`}
+                } ${thread.hasUnread ? 'bg-primary/[0.055]' : ''} ${threadOpening ? 'cursor-wait bg-white/85' : ''}`}
                 onClick={() => handleOpenThread(thread)}
                 onKeyDown={(event) => {
                   if (event.key === 'Enter') handleOpenThread(thread);
@@ -1468,7 +1473,7 @@ export function GmailInbox({
                     size="icon"
                     className="h-8 w-8 shrink-0 rounded-lg opacity-70 hover:bg-white/70 group-hover:opacity-100"
                     title={thread.hasUnread ? '\u6807\u8bb0\u4e3a\u5df2\u8bfb' : '\u6807\u8bb0\u4e3a\u672a\u8bfb'}
-                    disabled={actionLoading}
+                    disabled={actionLoading || Boolean(openingThreadId)}
                     onClick={(event) => {
                       event.stopPropagation();
                       modifyThread(
@@ -1478,7 +1483,7 @@ export function GmailInbox({
                       );
                     }}
                   >
-                    {actionLoading ? (
+                    {actionLoading || threadOpening ? (
                       <Loader2 className="h-4 w-4 animate-spin" />
                     ) : thread.hasUnread ? (
                       <MailOpen className="h-4 w-4" />

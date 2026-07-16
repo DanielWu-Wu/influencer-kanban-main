@@ -67,10 +67,30 @@ type YouTubeChannelItem = {
     hiddenSubscriberCount?: boolean;
     videoCount?: string;
   };
+  contentDetails?: {
+    relatedPlaylists?: {
+      uploads?: string;
+    };
+  };
 };
 
 type YouTubeChannelsResponse = YouTubeErrorResponse & {
   items?: YouTubeChannelItem[];
+};
+
+type YouTubePlaylistItem = {
+  snippet?: {
+    title?: string;
+    description?: string;
+    publishedAt?: string;
+    thumbnails?: YouTubeThumbnails;
+    resourceId?: { videoId?: string };
+  };
+  contentDetails?: { videoId?: string };
+};
+
+type YouTubePlaylistResponse = YouTubeErrorResponse & {
+  items?: YouTubePlaylistItem[];
 };
 
 type ResolvedInput = {
@@ -99,6 +119,66 @@ function buildYouTubeUrl(path: string, params: Record<string, string>) {
     if (value) url.searchParams.set(key, value);
   }
   return url;
+}
+
+const YOUTUBE_REQUEST_TIMEOUT_MS = 12_000;
+const YOUTUBE_MAX_ATTEMPTS = 2;
+
+function youtubeErrorMessage(label: string, status: number, rawMessage: string) {
+  const normalized = rawMessage.toLowerCase();
+  if (normalized.includes('quota') || normalized.includes('daily limit')) {
+    return `${label}失败：YouTube API 当日配额已用完，请在配额重置后重试。`;
+  }
+  if (status === 429 || normalized.includes('rate limit')) {
+    return `${label}失败：YouTube API 请求过于频繁，请稍后重试。`;
+  }
+  if (status === 403 && normalized.includes('key')) {
+    return `${label}失败：YouTube API Key 无效或未获授权，请检查设置。`;
+  }
+  if (status === 404) return `${label}失败：频道或视频不存在，可能已删除或设为私密。`;
+  if (status >= 500) return `${label}失败：YouTube 服务暂时不可用。`;
+  return `${label}失败${status ? ` (${status})` : ''}${rawMessage ? `：${rawMessage}` : '。'}`;
+}
+
+function isRetryableYouTubeError(status: number, rawMessage: string) {
+  const normalized = rawMessage.toLowerCase();
+  if (normalized.includes('quota') || normalized.includes('daily limit')) return false;
+  return status === 408 || status === 429 || status >= 500;
+}
+
+async function fetchYouTubeJson<T extends YouTubeErrorResponse>(url: URL, label: string): Promise<T> {
+  let lastError = '';
+  for (let attempt = 1; attempt <= YOUTUBE_MAX_ATTEMPTS; attempt += 1) {
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), YOUTUBE_REQUEST_TIMEOUT_MS);
+    try {
+      const response = await fetch(url, {
+        cache: 'no-store',
+        signal: controller.signal,
+      });
+      const data = await response.json().catch(() => ({})) as T;
+      if (response.ok && !data.error) return data;
+
+      const rawMessage = data.error?.message || '';
+      lastError = youtubeErrorMessage(label, response.status, rawMessage);
+      if (!isRetryableYouTubeError(response.status, rawMessage) || attempt === YOUTUBE_MAX_ATTEMPTS) {
+        throw new Error(attempt > 1 ? `${lastError}（已自动重试 1 次）` : lastError);
+      }
+    } catch (error) {
+      if (error instanceof Error && error.message === lastError) throw error;
+      const isTimeout = error instanceof Error && error.name === 'AbortError';
+      lastError = isTimeout
+        ? `${label}超时（${YOUTUBE_REQUEST_TIMEOUT_MS / 1000} 秒）`
+        : `${label}失败：网络连接异常`;
+      if (attempt === YOUTUBE_MAX_ATTEMPTS) {
+        throw new Error(`${lastError}（已自动重试 1 次）`);
+      }
+    } finally {
+      clearTimeout(timeout);
+    }
+    await new Promise((resolve) => setTimeout(resolve, 450));
+  }
+  throw new Error(lastError || `${label}失败。`);
 }
 
 function bestThumbnail(thumbnails?: YouTubeThumbnails) {
@@ -258,9 +338,8 @@ async function fetchChannelIdByHandle(apiKey: string, handle: string) {
       key: apiKey,
     });
 
-    const response = await fetch(url, { cache: 'no-store' });
-    const data = await response.json() as YouTubeChannelsResponse;
-    if (response.ok && !data.error && data.items?.[0]?.id) {
+    const data = await fetchYouTubeJson<YouTubeChannelsResponse>(url, 'YouTube 频道 Handle 解析');
+    if (data.items?.[0]?.id) {
       return data.items[0].id;
     }
   }
@@ -278,9 +357,7 @@ async function fetchChannelIdByUsername(apiKey: string, username: string) {
     key: apiKey,
   });
 
-  const response = await fetch(url, { cache: 'no-store' });
-  const data = await response.json() as YouTubeChannelsResponse;
-  if (!response.ok || data.error) return '';
+  const data = await fetchYouTubeJson<YouTubeChannelsResponse>(url, 'YouTube 用户名解析');
   return data.items?.[0]?.id || '';
 }
 
@@ -292,11 +369,7 @@ async function fetchVideoChannelId(apiKey: string, videoId: string) {
     key: apiKey,
   });
 
-  const response = await fetch(url, { cache: 'no-store' });
-  const data = await response.json() as YouTubeVideosResponse;
-  if (!response.ok || data.error) {
-    throw new Error(data.error?.message || `YouTube 视频读取失败 (${response.status})`);
-  }
+  const data = await fetchYouTubeJson<YouTubeVideosResponse>(url, 'YouTube 视频来源频道读取');
   return data.items?.[0]?.snippet?.channelId || '';
 }
 
@@ -311,11 +384,7 @@ async function searchChannelId(apiKey: string, query: string, regionCode: string
     key: apiKey,
   });
 
-  const response = await fetch(searchUrl, { cache: 'no-store' });
-  const data = await response.json() as YouTubeSearchResponse;
-  if (!response.ok || data.error) {
-    throw new Error(data.error?.message || `YouTube 频道搜索失败 (${response.status})`);
-  }
+  const data = await fetchYouTubeJson<YouTubeSearchResponse>(searchUrl, 'YouTube 频道搜索');
   return data.items?.[0]?.id?.channelId || '';
 }
 
@@ -347,61 +416,48 @@ async function resolveChannelId(apiKey: string, item: ResolvedInput, regionCode:
 async function fetchChannels(apiKey: string, channelIds: string[]) {
   if (!channelIds.length) return [];
   const url = buildYouTubeUrl('channels', {
-    part: 'snippet,statistics',
+    part: 'snippet,statistics,contentDetails',
     id: channelIds.join(','),
     key: apiKey,
   });
 
-  const response = await fetch(url, { cache: 'no-store' });
-  const data = await response.json() as YouTubeChannelsResponse;
-  if (!response.ok || data.error) {
-    throw new Error(data.error?.message || `YouTube 频道详情读取失败 (${response.status})`);
-  }
+  const data = await fetchYouTubeJson<YouTubeChannelsResponse>(url, 'YouTube 频道详情读取');
   return data.items || [];
 }
 
-async function fetchRecentVideos(apiKey: string, channelId: string, maxVideos: number) {
-  const url = buildYouTubeUrl('search', {
-    part: 'snippet',
-    channelId,
-    type: 'video',
-    order: 'date',
+async function fetchRecentVideos(apiKey: string, uploadsPlaylistId: string, maxVideos: number) {
+  if (!uploadsPlaylistId) throw new Error('未找到频道上传播放列表，无法读取最近视频。');
+  const url = buildYouTubeUrl('playlistItems', {
+    part: 'snippet,contentDetails',
+    playlistId: uploadsPlaylistId,
     maxResults: '50',
     key: apiKey,
   });
 
-  const response = await fetch(url, { cache: 'no-store' });
-  const data = await response.json() as YouTubeSearchResponse;
-  if (!response.ok || data.error) {
-    throw new Error(data.error?.message || `YouTube 最近视频读取失败 (${response.status})`);
-  }
+  const data = await fetchYouTubeJson<YouTubePlaylistResponse>(url, 'YouTube 最近视频列表读取');
 
   const videos = (data.items || [])
-    .filter((item) => item.id?.videoId)
+    .filter((item) => item.contentDetails?.videoId || item.snippet?.resourceId?.videoId)
     .map((item) => ({
-      videoId: item.id?.videoId || '',
+      videoId: item.contentDetails?.videoId || item.snippet?.resourceId?.videoId || '',
       title: item.snippet?.title || '',
       description: item.snippet?.description || '',
       publishedAt: item.snippet?.publishedAt || '',
       thumbnail: bestThumbnail(item.snippet?.thumbnails),
-      url: `https://www.youtube.com/watch?v=${item.id?.videoId}`,
+      url: `https://www.youtube.com/watch?v=${item.contentDetails?.videoId || item.snippet?.resourceId?.videoId}`,
     }));
   const videoIds = videos.map((item) => item.videoId).filter(Boolean);
-  if (!videoIds.length) return videos;
+  if (!videoIds.length) return { videos: [], warning: '频道目前没有可读取的公开视频。' };
 
   const statisticsUrl = buildYouTubeUrl('videos', {
     part: 'statistics,contentDetails',
     id: videoIds.join(','),
     key: apiKey,
   });
-  const statisticsResponse = await fetch(statisticsUrl, { cache: 'no-store' });
-  const statisticsData = await statisticsResponse.json() as YouTubeVideosResponse;
-  if (!statisticsResponse.ok || statisticsData.error) {
-    throw new Error(
-      statisticsData.error?.message
-      || `YouTube 视频时长和互动数据读取失败 (${statisticsResponse.status})`,
-    );
-  }
+  const statisticsData = await fetchYouTubeJson<YouTubeVideosResponse>(
+    statisticsUrl,
+    'YouTube 视频播放量和时长读取',
+  );
   const statisticsById = new Map(
     (statisticsData.items || []).map((item) => [
       item.id || '',
@@ -417,16 +473,21 @@ async function fetchRecentVideos(apiKey: string, channelId: string, maxVideos: n
       },
     ]),
   );
-  return videos
-    .map((item) => ({
+  const enrichedVideos = videos.map((item) => ({
       ...item,
       viewCount: statisticsById.get(item.videoId)?.viewCount ?? null,
       likeCount: statisticsById.get(item.videoId)?.likeCount ?? null,
       commentCount: statisticsById.get(item.videoId)?.commentCount ?? null,
       durationSeconds: statisticsById.get(item.videoId)?.durationSeconds ?? null,
-    }))
-    .filter((item) => typeof item.durationSeconds === 'number' && item.durationSeconds > 180)
-    .slice(0, maxVideos);
+    }));
+  const longFormVideos = enrichedVideos.filter(
+    (item) => typeof item.durationSeconds === 'number' && item.durationSeconds > 180,
+  );
+  if (longFormVideos.length) return { videos: longFormVideos.slice(0, maxVideos) };
+  return {
+    videos: enrichedVideos.slice(0, maxVideos),
+    warning: '近期公开视频以 Shorts 或短视频为主，当前显示最新短视频。',
+  };
 }
 
 export async function POST(request: NextRequest) {
@@ -492,11 +553,24 @@ export async function POST(request: NextRequest) {
     const results = await Promise.all(
       channels.map(async (channel) => {
         const source = inputByChannelId.get(channel.id);
-        let recentVideos: Awaited<ReturnType<typeof fetchRecentVideos>> = [];
+        let recentVideos: Awaited<ReturnType<typeof fetchRecentVideos>>['videos'] = [];
+        let recentVideosStatus: 'ready' | 'empty' | 'error' = 'empty';
+        const youtubeDataWarnings: string[] = [];
         if (includeRecentVideos) {
           try {
-            recentVideos = await fetchRecentVideos(apiKey, channel.id, maxVideos);
+            const recentVideoResult = await fetchRecentVideos(
+              apiKey,
+              channel.contentDetails?.relatedPlaylists?.uploads || '',
+              maxVideos,
+            );
+            recentVideos = recentVideoResult.videos;
+            recentVideosStatus = recentVideos.length ? 'ready' : 'empty';
+            if (recentVideoResult.warning) youtubeDataWarnings.push(recentVideoResult.warning);
           } catch (error) {
+            recentVideosStatus = 'error';
+            youtubeDataWarnings.push(
+              error instanceof Error ? error.message : '最近视频读取失败。',
+            );
             errors.push({
               sourceUrl: source?.sourceUrl || `https://www.youtube.com/channel/${channel.id}`,
               error: error instanceof Error ? error.message : '最近视频读取失败。',
@@ -522,6 +596,11 @@ export async function POST(request: NextRequest) {
           url: `https://www.youtube.com/channel/${channel.id}`,
           publicEmail: extractPublicEmail(description),
           recentVideos,
+          youtubeDataStatus: recentVideosStatus === 'error' ? 'partial' : 'complete',
+          youtubeDataWarnings,
+          youtubeLastFetchedAt: new Date().toISOString(),
+          recentVideosStatus,
+          descriptionStatus: description ? 'ready' : 'empty',
           resolution: source?.resolution || 'direct',
           confidence: source?.resolution === 'search' ? 'medium' : 'high',
         };

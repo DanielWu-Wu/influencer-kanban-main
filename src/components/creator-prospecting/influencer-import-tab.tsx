@@ -4,6 +4,7 @@ import { useMemo, useState } from 'react';
 import {
   AlertTriangle,
   CheckCircle2,
+  Copy,
   Database,
   ExternalLink,
   Loader2,
@@ -14,6 +15,7 @@ import {
   UserPlus,
   Youtube,
 } from 'lucide-react';
+import { toast } from 'sonner';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { Checkbox } from '@/components/ui/checkbox';
@@ -66,12 +68,64 @@ type Props = {
   onClearInput: () => void;
 };
 
-function FieldLine({ label, value }: { label: string; value?: string | number | null }) {
+function normalizeExternalUrl(value: string): string | null {
+  const trimmed = value.trim();
+  if (/^https?:\/\//i.test(trimmed)) return trimmed;
+  if (/^www\./i.test(trimmed)) return `https://${trimmed}`;
+  return null;
+}
+
+async function copyChannelUrl(url: string) {
+  try {
+    if (navigator.clipboard?.writeText) {
+      await navigator.clipboard.writeText(url);
+    } else {
+      const textarea = document.createElement('textarea');
+      textarea.value = url;
+      textarea.style.position = 'fixed';
+      textarea.style.opacity = '0';
+      document.body.appendChild(textarea);
+      textarea.select();
+      const copied = document.execCommand('copy');
+      textarea.remove();
+      if (!copied) throw new Error('copy failed');
+    }
+    toast.success('频道链接已复制');
+  } catch {
+    toast.error('复制失败，请稍后重试');
+  }
+}
+
+function FieldLine({
+  label,
+  value,
+  link = false,
+}: {
+  label: string;
+  value?: string | number | null;
+  link?: boolean;
+}) {
   const text = value === null || value === undefined || value === '' ? '未填写' : String(value);
+  const href = link ? normalizeExternalUrl(text) : null;
   return (
     <div className="min-w-0">
       <p className="text-[11px] text-muted-foreground">{label}</p>
-      <p className="truncate text-sm text-slate-800" title={text}>{text}</p>
+      {href ? (
+        <a
+          href={href}
+          target="_blank"
+          rel="noopener noreferrer"
+          className="flex min-w-0 items-center gap-1 text-sm text-primary underline-offset-2 hover:underline focus-visible:rounded-sm focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/40"
+          title={`${text}（在新标签页打开）`}
+          aria-label={`${label}：${text}，在新标签页打开`}
+          onClick={(event) => event.stopPropagation()}
+        >
+          <span className="truncate">{text}</span>
+          <ExternalLink className="h-3 w-3 shrink-0" />
+        </a>
+      ) : (
+        <p className="truncate text-sm text-slate-800" title={text}>{text}</p>
+      )}
     </div>
   );
 }
@@ -112,14 +166,14 @@ function ResourceStatusText({
             <div className="space-y-2 rounded-md border bg-white/80 p-3">
               <p className="text-xs font-medium text-slate-900">当前识别频道</p>
               <FieldLine label="频道名" value={prospect.title} />
-              <FieldLine label="频道链接" value={prospect.url || prospect.sourceUrl || prospect.inputUrl} />
+              <FieldLine label="频道链接" value={prospect.url || prospect.sourceUrl || prospect.inputUrl} link />
               <FieldLine label="邮箱" value={prospect.publicEmail} />
               <FieldLine label="地区" value={prospect.country ? countryLabel(prospect.country) : ''} />
             </div>
             <div className="space-y-2 rounded-md border bg-white/80 p-3">
               <p className="text-xs font-medium text-slate-900">飞书资源库记录</p>
               <FieldLine label="频道名" value={preview.channelName} />
-              <FieldLine label="频道链接" value={preview.channelUrl} />
+              <FieldLine label="频道链接" value={preview.channelUrl} link />
               <FieldLine label="邮箱" value={preview.email} />
               <FieldLine label="地区 / 平台" value={[preview.region, preview.platform].filter(Boolean).join(' / ')} />
               <FieldLine label="备注" value={preview.notes} />
@@ -279,6 +333,7 @@ export function InfluencerImportTab({
               const resourceStatus = RESOURCE_STATUS_META[prospect.resourceStatus];
               const developmentStatus = DEVELOPMENT_STATUS_META[prospect.developmentStatus];
               const channelUrl = prospect.url || prospect.sourceUrl || prospect.inputUrl;
+              const clickableChannelUrl = normalizeExternalUrl(channelUrl);
               return (
                 <TableRow key={prospect.id} className="align-middle">
                   <TableCell>
@@ -300,16 +355,35 @@ export function InfluencerImportTab({
                   </TableCell>
                   <TableCell>
                     <div className="max-w-64">
-                      <p className="truncate font-medium">{prospect.title || prospect.inputUrl}</p>
-                      <a
-                        href={channelUrl}
-                        target="_blank"
-                        rel="noreferrer"
-                        className="mt-0.5 inline-flex max-w-full items-center gap-1 truncate text-xs text-primary hover:underline"
-                      >
-                        <span className="truncate">{prospect.customUrl || prospect.channelId || '打开频道'}</span>
-                        <ExternalLink className="h-3 w-3 shrink-0" />
-                      </a>
+                      <div className="flex min-w-0 items-center gap-1">
+                        {clickableChannelUrl ? (
+                          <a
+                            href={clickableChannelUrl}
+                            target="_blank"
+                            rel="noopener noreferrer"
+                            className="min-w-0 truncate font-medium text-foreground underline-offset-2 hover:text-primary hover:underline focus-visible:rounded-sm focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/40"
+                            title={`${prospect.title || prospect.inputUrl}（在新标签页打开）`}
+                          >
+                            {prospect.title || prospect.inputUrl}
+                          </a>
+                        ) : (
+                          <p className="min-w-0 truncate font-medium">{prospect.title || prospect.inputUrl}</p>
+                        )}
+                        <Button
+                          type="button"
+                          variant="ghost"
+                          size="icon"
+                          className="h-6 w-6 shrink-0 text-muted-foreground hover:text-primary"
+                          title="复制频道链接"
+                          aria-label={`复制 ${prospect.title || prospect.inputUrl} 的频道链接`}
+                          onClick={() => void copyChannelUrl(clickableChannelUrl || channelUrl)}
+                        >
+                          <Copy className="h-3.5 w-3.5" />
+                        </Button>
+                      </div>
+                      <p className="mt-0.5 truncate text-xs text-primary">
+                        {prospect.customUrl || prospect.channelId || '频道链接'}
+                      </p>
                     </div>
                   </TableCell>
                   <TableCell>

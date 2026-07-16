@@ -99,6 +99,11 @@ export type Prospect = {
   url?: string;
   publicEmail?: string;
   recentVideos?: RecentVideo[];
+  youtubeDataStatus?: 'complete' | 'partial' | 'error';
+  youtubeDataWarnings?: string[];
+  youtubeLastFetchedAt?: string;
+  recentVideosStatus?: 'ready' | 'empty' | 'error';
+  descriptionStatus?: 'ready' | 'empty';
   workflowStatus: ProspectWorkflowStatus;
   emailStatus: ProspectEmailStatus;
   dedupeStatus: ProspectDedupeStatus;

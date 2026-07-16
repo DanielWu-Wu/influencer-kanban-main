@@ -920,7 +920,14 @@ export function EmailDetail({ thread, onBack, onThreadUpdated }: EmailDetailProp
       {/* 头部 */}
       <div className="flex items-center justify-between border-b border-white/55 bg-white/68 px-4 py-3 backdrop-blur-xl">
         <div className="flex items-center gap-3">
-          <Button variant="ghost" size="icon" onClick={onBack} className="h-9 w-9 rounded-lg hover:bg-white/70">
+          <Button
+            variant="ghost"
+            size="icon"
+            onClick={onBack}
+            className="h-9 w-9 rounded-lg hover:bg-white/70"
+            aria-label="返回邮件目录"
+            title="返回邮件目录"
+          >
             <ArrowLeft className="w-4 h-4" />
           </Button>
           <div className="min-w-0">

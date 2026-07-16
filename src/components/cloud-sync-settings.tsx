@@ -6,7 +6,11 @@ import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
 import { useAuth } from '@/components/auth-provider';
-import { STORAGE_KEYS } from '@/lib/data';
+import {
+  PRODUCTS_CLOUD_UPDATED_EVENT,
+  PRODUCTS_UPDATED_EVENT,
+  STORAGE_KEYS,
+} from '@/lib/data';
 import type { Product } from '@/lib/types';
 import { getSupabaseBrowserClient } from '@/lib/supabase/client';
 
@@ -47,6 +51,45 @@ export function CloudSyncSettings() {
     };
 
     void check();
+  }, [user]);
+
+  useEffect(() => {
+    const updateLocalCount = (products?: Product[]) => {
+      const nextProducts = products || readLocal<Product[]>(STORAGE_KEYS.PRODUCTS, []);
+      setLocalProductCount(nextProducts.length);
+    };
+
+    const handleProductsUpdated = (event: Event) => {
+      updateLocalCount((event as CustomEvent<Product[]>).detail);
+    };
+
+    const handleStorage = (event: StorageEvent) => {
+      if (event.key === STORAGE_KEYS.PRODUCTS) updateLocalCount();
+    };
+
+    const refreshCloudCount = async () => {
+      const supabase = getSupabaseBrowserClient();
+      if (!supabase || !user) return;
+      const { count, error } = await supabase
+        .from('products')
+        .select('*', { count: 'exact', head: true })
+        .eq('user_id', user.id);
+      if (!error) setCloudProductCount(count || 0);
+    };
+
+    const handleCloudProductsUpdated = () => {
+      void refreshCloudCount();
+    };
+
+    window.addEventListener(PRODUCTS_UPDATED_EVENT, handleProductsUpdated);
+    window.addEventListener(PRODUCTS_CLOUD_UPDATED_EVENT, handleCloudProductsUpdated);
+    window.addEventListener('storage', handleStorage);
+
+    return () => {
+      window.removeEventListener(PRODUCTS_UPDATED_EVENT, handleProductsUpdated);
+      window.removeEventListener(PRODUCTS_CLOUD_UPDATED_EVENT, handleCloudProductsUpdated);
+      window.removeEventListener('storage', handleStorage);
+    };
   }, [user]);
 
   const uploadLocalData = async () => {

@@ -65,6 +65,7 @@ type Props = {
   outreachPrompt: string;
   getOutreachContext: (prospect: Prospect) => OutreachAiContext;
   translatingVideoTitleIds: string[];
+  refreshingYouTubeIds: string[];
   inferringContactNameIds: string[];
   inferringOutreachLanguageIds: string[];
   checkingHistoryId: string | null;
@@ -74,6 +75,7 @@ type Props = {
   onBack: (prospect: Prospect) => void;
   onSkip: (prospect: Prospect) => void;
   onCheckHistory: (prospect: Prospect) => void;
+  onRefreshYouTubeData: (prospect: Prospect) => Promise<void>;
   onInferContactName: (prospect: Prospect, force?: boolean) => Promise<void>;
   onInferOutreachLanguage: (prospect: Prospect, force?: boolean) => Promise<void>;
 };
@@ -327,6 +329,7 @@ export function InvitationConfirmTab({
   outreachPrompt,
   getOutreachContext,
   translatingVideoTitleIds,
+  refreshingYouTubeIds,
   inferringContactNameIds,
   inferringOutreachLanguageIds,
   checkingHistoryId,
@@ -336,6 +339,7 @@ export function InvitationConfirmTab({
   onBack,
   onSkip,
   onCheckHistory,
+  onRefreshYouTubeData,
   onInferContactName,
   onInferOutreachLanguage,
 }: Props) {
@@ -450,7 +454,21 @@ export function InvitationConfirmTab({
                 </p>
               </div>
             </div>
-            <a
+            <div className="flex items-center gap-2">
+              <Button
+                type="button"
+                variant="outline"
+                size="sm"
+                onClick={() => void onRefreshYouTubeData(selected)}
+                disabled={refreshingYouTubeIds.includes(selected.id)}
+              >
+                <RefreshCw className={cn(
+                  'mr-1 h-4 w-4',
+                  refreshingYouTubeIds.includes(selected.id) && 'animate-spin',
+                )} />
+                {refreshingYouTubeIds.includes(selected.id) ? '正在重新抓取' : '重新抓取频道资料'}
+              </Button>
+              <a
               href={selected.url || selected.sourceUrl || selected.inputUrl}
               target="_blank"
               rel="noreferrer"
@@ -458,7 +476,8 @@ export function InvitationConfirmTab({
             >
               打开频道
               <ExternalLink className="h-4 w-4" />
-            </a>
+              </a>
+            </div>
           </div>
 
           <div className="grid gap-4 py-4 xl:grid-cols-[minmax(0,1fr)_360px]">
@@ -502,10 +521,34 @@ export function InvitationConfirmTab({
                     </a>
                   ))}
                 </div>
+                {!selected.recentVideos?.length && (
+                  <div className={cn(
+                    'mt-2 rounded-md border px-3 py-2 text-sm',
+                    selected.recentVideosStatus === 'error'
+                      ? 'border-amber-200 bg-amber-50 text-amber-800'
+                      : 'border-slate-200 bg-slate-50 text-muted-foreground',
+                  )}>
+                    {selected.recentVideosStatus === 'error'
+                      ? '最近视频抓取失败。系统已经自动重试一次，你可以点击右上方“重新抓取频道资料”再次尝试。'
+                      : '该频道目前没有可读取的公开视频，或近期内容均不可公开访问。'}
+                  </div>
+                )}
+                {!!selected.youtubeDataWarnings?.length && (
+                  <div className="mt-2 rounded-md border border-amber-200 bg-amber-50 px-3 py-2 text-xs text-amber-800">
+                    {selected.youtubeDataWarnings.map((warning) => (
+                      <p key={warning}>{warning}</p>
+                    ))}
+                  </div>
+                )}
               </div>
 
               <div>
                 <p className="text-sm font-semibold">频道简介摘要</p>
+                {selected.descriptionStatus === 'empty' && (
+                  <p className="mt-2 rounded-md border border-slate-200 bg-slate-50 px-3 py-2 text-xs text-muted-foreground">
+                    YouTube 返回的频道简介为空，通常表示频道主没有填写公开简介，并非抓取失败。
+                  </p>
+                )}
                 <p className="mt-2 whitespace-pre-wrap rounded-md bg-slate-50/80 p-3 text-sm leading-6 text-muted-foreground">
                   {selected.description?.slice(0, 900) || '暂无频道简介。'}
                 </p>

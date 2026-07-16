@@ -4,6 +4,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   AlertTriangle,
   CheckCircle2,
+  ChevronDown,
   ClipboardCheck,
   Database,
   Loader2,
@@ -19,7 +20,15 @@ import { OutreachEmailTab } from '@/components/creator-prospecting/outreach-emai
 import { OutreachFollowUpTab } from '@/components/creator-prospecting/outreach-follow-up-tab';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
-import { Input } from '@/components/ui/input';
+import {
+  Command,
+  CommandEmpty,
+  CommandGroup,
+  CommandInput,
+  CommandItem,
+  CommandList,
+} from '@/components/ui/command';
+import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover';
 import {
   Dialog,
   DialogContent,
@@ -85,6 +94,11 @@ type YouTubeResolveChannel = {
   url?: string;
   publicEmail?: string;
   recentVideos?: RecentVideo[];
+  youtubeDataStatus?: 'complete' | 'partial' | 'error';
+  youtubeDataWarnings?: string[];
+  youtubeLastFetchedAt?: string;
+  recentVideosStatus?: 'ready' | 'empty' | 'error';
+  descriptionStatus?: 'ready' | 'empty';
 };
 
 type YouTubeResolveResponse = {
@@ -515,6 +529,77 @@ function splitContentTypeInput(value: string) {
     .filter(Boolean);
 }
 
+function FeishuOptionMultiSelect({
+  options,
+  value,
+  onChange,
+}: {
+  options: string[];
+  value: unknown;
+  onChange: (value: string[]) => void;
+}) {
+  const [open, setOpen] = useState(false);
+  const selected = Array.isArray(value)
+    ? value.map((item) => String(item).trim()).filter(Boolean)
+    : splitContentTypeInput(formatPreviewValue(value));
+  const selectedSet = new Set(selected);
+
+  const toggleOption = (option: string) => {
+    onChange(
+      selectedSet.has(option)
+        ? selected.filter((item) => item !== option)
+        : [...selected, option],
+    );
+  };
+
+  return (
+    <Popover open={open} onOpenChange={setOpen}>
+      <PopoverTrigger asChild>
+        <Button
+          type="button"
+          variant="outline"
+          role="combobox"
+          aria-expanded={open}
+          disabled={options.length === 0}
+          className="h-auto min-h-9 w-full justify-between gap-2 bg-white px-3 py-2 text-left font-normal"
+        >
+          <span className={`min-w-0 flex-1 truncate ${selected.length ? 'text-foreground' : 'text-muted-foreground'}`}>
+            {selected.length ? selected.join('、') : options.length ? '请选择内容类型' : '未读取到飞书选项'}
+          </span>
+          <ChevronDown className="h-4 w-4 shrink-0 text-muted-foreground" />
+        </Button>
+      </PopoverTrigger>
+      <PopoverContent
+        align="start"
+        className="w-[var(--radix-popover-trigger-width)] min-w-64 p-0"
+      >
+        <Command>
+          <CommandInput placeholder="搜索飞书内容类型" />
+          <CommandList>
+            <CommandEmpty>没有匹配的飞书选项</CommandEmpty>
+            <CommandGroup>
+              {options.map((option) => {
+                const checked = selectedSet.has(option);
+                return (
+                  <CommandItem
+                    key={option}
+                    value={option}
+                    onSelect={() => toggleOption(option)}
+                    className="gap-2"
+                  >
+                    <CheckCircle2 className={`h-4 w-4 ${checked ? 'text-primary opacity-100' : 'opacity-20'}`} />
+                    <span className="min-w-0 flex-1 truncate">{option}</span>
+                  </CommandItem>
+                );
+              })}
+            </CommandGroup>
+          </CommandList>
+        </Command>
+      </PopoverContent>
+    </Popover>
+  );
+}
+
 function prospectContentText(prospect: Prospect) {
   return [
     prospect.title,
@@ -673,6 +758,7 @@ export function CreatorProspectingPage() {
   const [cloudAvailable, setCloudAvailable] = useState(true);
   const videoTranslationAttemptsRef = useRef(new Set<string>());
   const [translatingVideoTitleIds, setTranslatingVideoTitleIds] = useState<string[]>([]);
+  const [refreshingYouTubeIds, setRefreshingYouTubeIds] = useState<string[]>([]);
   const [inferringContactNameIds, setInferringContactNameIds] = useState<string[]>([]);
   const [inferringOutreachLanguageIds, setInferringOutreachLanguageIds] = useState<string[]>([]);
   const [resolving, setResolving] = useState(false);
@@ -684,6 +770,7 @@ export function CreatorProspectingPage() {
   const [savingDraftId, setSavingDraftId] = useState<string | null>(null);
   const [checkingHistoryId, setCheckingHistoryId] = useState<string | null>(null);
   const [previewItems, setPreviewItems] = useState<FeishuWritePreview[]>([]);
+  const [resourceContentTypeOptions, setResourceContentTypeOptions] = useState<string[]>([]);
 
   useEffect(() => {
     const deletedIds = new Set(loadDeletedProspectIds());
@@ -781,6 +868,75 @@ export function CreatorProspectingPage() {
     setProspects((current) => current.map((item) => (
       item.id === id ? { ...item, ...patch, updatedAt: new Date().toISOString() } : item
     )));
+  };
+
+  const handleRefreshYouTubeData = async (prospect: Prospect) => {
+    if (refreshingYouTubeIds.includes(prospect.id)) return;
+    setRefreshingYouTubeIds((current) => [...current, prospect.id]);
+    toast.info(`正在重新抓取 ${prospect.title || '该频道'} 的频道资料。`);
+    try {
+      const response = await fetch('/api/youtube/resolve', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          links: [firstValue(prospect.url, prospect.sourceUrl, prospect.inputUrl)],
+          regionCode: settings.youtubeDefaultRegion || '',
+          relevanceLanguage: settings.youtubeDefaultLanguage || '',
+          maxVideos: 8,
+        }),
+      });
+      const result = await response.json() as YouTubeResolveResponse;
+      const channel = result.channels?.[0];
+      if (!response.ok || !result.success || !channel) {
+        throw new Error(result.error || result.errors?.[0]?.error || '频道资料重新抓取失败。');
+      }
+
+      const recentVideos = channel.recentVideos || [];
+      const inferredLanguage = inferLanguage({ ...channel, recentVideos });
+      updateProspect(prospect.id, {
+        sourceUrl: channel.sourceUrl || prospect.sourceUrl,
+        channelId: channel.channelId || prospect.channelId,
+        title: channel.title || prospect.title,
+        description: channel.description || '',
+        customUrl: channel.customUrl || prospect.customUrl,
+        country: channel.country || prospect.country,
+        avatarUrl: channel.avatarUrl || prospect.avatarUrl,
+        subscriberCount: channel.subscriberCount,
+        viewCount: channel.viewCount,
+        videoCount: channel.videoCount,
+        url: channel.url || prospect.url,
+        publicEmail: channel.publicEmail || prospect.publicEmail,
+        recentVideos,
+        recentAverageViews: calculateRecentAverageViews(recentVideos),
+        language: prospect.languageSource === 'manual'
+          ? prospect.language
+          : inferredLanguage || prospect.language,
+        languageSource: prospect.languageSource === 'manual'
+          ? 'manual'
+          : inferredLanguage ? 'inferred' : prospect.languageSource,
+        youtubeDataStatus: channel.youtubeDataStatus || 'complete',
+        youtubeDataWarnings: channel.youtubeDataWarnings || [],
+        youtubeLastFetchedAt: channel.youtubeLastFetchedAt || new Date().toISOString(),
+        recentVideosStatus: channel.recentVideosStatus || (recentVideos.length ? 'ready' : 'empty'),
+        descriptionStatus: channel.descriptionStatus || (channel.description ? 'ready' : 'empty'),
+      });
+
+      if (channel.youtubeDataWarnings?.length) {
+        toast.warning(`频道资料已更新，但有提示：${channel.youtubeDataWarnings.join('；')}`);
+      } else {
+        toast.success('频道简介和最近视频已更新。');
+      }
+    } catch (error) {
+      const message = error instanceof Error ? error.message : '频道资料重新抓取失败。';
+      updateProspect(prospect.id, {
+        youtubeDataStatus: 'error',
+        youtubeDataWarnings: [message],
+        youtubeLastFetchedAt: new Date().toISOString(),
+      });
+      toast.error(message);
+    } finally {
+      setRefreshingYouTubeIds((current) => current.filter((id) => id !== prospect.id));
+    }
   };
 
   const handleInferContactName = async (prospect: Prospect, force = false) => {
@@ -1454,10 +1610,12 @@ export function CreatorProspectingPage() {
     }
     const mapping = settings.feishuFieldMapping || {};
     let contentTypeOptions: string[] = [];
+    setResourceContentTypeOptions([]);
     try {
       contentTypeOptions = await loadContentTypeOptions(mapping.contentType);
+      setResourceContentTypeOptions(contentTypeOptions);
     } catch (error) {
-      toast.warning(error instanceof Error ? error.message : '内容类型选项读取失败，本次可手动填写。');
+      toast.warning(error instanceof Error ? error.message : '内容类型选项读取失败，请检查飞书字段配置。');
     }
     const previews = targets
       .map((prospect) => ({
@@ -1559,6 +1717,7 @@ export function CreatorProspectingPage() {
         : item;
     }));
     setPreviewItems([]);
+    setResourceContentTypeOptions([]);
     setWritingFeishu(false);
     if (failures.length) {
       toast.error(`已创建 ${successes.length} 个，失败 ${failures.length} 个。${failures[0]}`);
@@ -1585,6 +1744,11 @@ export function CreatorProspectingPage() {
           }
         : item
     )));
+  };
+
+  const closeWritePreview = () => {
+    setPreviewItems([]);
+    setResourceContentTypeOptions([]);
   };
 
   const handleConfirmInvitation = async (items: Prospect[]) => {
@@ -2163,6 +2327,7 @@ export function CreatorProspectingPage() {
             outreachPrompt={settings.aiOutreachPrompt || DEFAULT_OUTREACH_PROMPT}
             getOutreachContext={getOutreachContext}
             translatingVideoTitleIds={translatingVideoTitleIds}
+            refreshingYouTubeIds={refreshingYouTubeIds}
             inferringContactNameIds={inferringContactNameIds}
             inferringOutreachLanguageIds={inferringOutreachLanguageIds}
             checkingHistoryId={checkingHistoryId}
@@ -2172,6 +2337,7 @@ export function CreatorProspectingPage() {
             onBack={handleBackToImport}
             onSkip={handleSkip}
             onCheckHistory={handleCheckHistory}
+            onRefreshYouTubeData={handleRefreshYouTubeData}
             onInferContactName={handleInferContactName}
             onInferOutreachLanguage={handleInferOutreachLanguage}
           />
@@ -2201,7 +2367,7 @@ export function CreatorProspectingPage() {
         )}
       </main>
 
-      <Dialog open={previewItems.length > 0} onOpenChange={(open) => !open && setPreviewItems([])}>
+      <Dialog open={previewItems.length > 0} onOpenChange={(open) => !open && closeWritePreview()}>
         <DialogContent className="flex max-h-[82vh] max-w-3xl flex-col overflow-hidden p-0">
           <DialogHeader className="px-6 pt-6">
             <DialogTitle>
@@ -2237,18 +2403,19 @@ export function CreatorProspectingPage() {
                         <dt className="text-xs text-muted-foreground">{key}</dt>
                         {isEditableResourceContentType ? (
                           <dd className="mt-1">
-                            <Input
-                              value={formatPreviewValue(value)}
-                              onChange={(event) => updatePreviewField(
+                            <FeishuOptionMultiSelect
+                              options={resourceContentTypeOptions}
+                              value={value}
+                              onChange={(nextValue) => updatePreviewField(
                                 item.prospect.id,
                                 key,
-                                splitContentTypeInput(event.target.value),
+                                nextValue,
                               )}
-                              placeholder="例如：房车RV，Camper, Off Grid"
-                              className="h-9 bg-white"
                             />
                             <p className="mt-1 text-xs text-muted-foreground">
-                              会按飞书内容类型标签写入，多个标签用逗号分隔。
+                              {resourceContentTypeOptions.length
+                                ? '选项实时读取自飞书“内容类型”字段，可多选。'
+                                : '未读取到飞书选项，请检查内容类型字段映射和飞书表格配置。'}
                             </p>
                           </dd>
                         ) : isEditableResourceNote ? (
@@ -2325,7 +2492,7 @@ export function CreatorProspectingPage() {
             ))}
           </div>
           <DialogFooter className="border-t bg-white/95 px-6 py-4">
-            <Button variant="outline" onClick={() => setPreviewItems([])} disabled={writingFeishu}>取消</Button>
+            <Button variant="outline" onClick={closeWritePreview} disabled={writingFeishu}>取消</Button>
             <Button onClick={confirmWriteFeishu} disabled={writingFeishu || hasPendingResourceEmailSync}>
               {writingFeishu || hasPendingResourceEmailSync ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <Database className="mr-2 h-4 w-4" />}
               {hasPendingResourceEmailSync ? '正在检查邮箱同步…' : `确认新建 ${previewItems.length} 条`}

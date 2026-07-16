@@ -1,6 +1,6 @@
 'use client';
 
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { FilePenLine, FileText, Inbox, Mail, MailOpen, Send, Settings, Star } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { GmailCategory, GmailMailbox, GmailThread } from '@/lib/types';
@@ -21,6 +21,8 @@ const MAILBOXES: Array<{
   { id: 'drafts', label: '\u8349\u7a3f', icon: FileText },
 ];
 
+const DETAIL_TRANSITION_MS = 240;
+
 export function GmailPage({ active = true }: { active?: boolean }) {
   const [selectedThread, setSelectedThread] = useState<GmailThread | null>(null);
   const [mailbox, setMailbox] = useState<GmailMailbox>('inbox');
@@ -28,20 +30,62 @@ export function GmailPage({ active = true }: { active?: boolean }) {
   const [showSettings, setShowSettings] = useState(false);
   const [showNewEmail, setShowNewEmail] = useState(false);
   const [mailboxRefreshKey, setMailboxRefreshKey] = useState(0);
+  const [detailExpanded, setDetailExpanded] = useState(false);
+  const closeDetailTimerRef = useRef<number | null>(null);
 
   useEffect(() => {
     if (!active) setShowNewEmail(false);
   }, [active]);
 
+  useEffect(() => () => {
+    if (closeDetailTimerRef.current !== null) {
+      window.clearTimeout(closeDetailTimerRef.current);
+    }
+  }, []);
+
+  useEffect(() => {
+    if (
+      !selectedThread
+      || showSettings
+      || detailExpanded
+      || closeDetailTimerRef.current !== null
+    ) return undefined;
+    const frame = window.requestAnimationFrame(() => setDetailExpanded(true));
+    return () => window.cancelAnimationFrame(frame);
+  }, [detailExpanded, selectedThread, showSettings]);
+
+  const handleSelectThread = (thread: GmailThread) => {
+    if (closeDetailTimerRef.current !== null) {
+      window.clearTimeout(closeDetailTimerRef.current);
+      closeDetailTimerRef.current = null;
+    }
+    setSelectedThread(thread);
+    setShowSettings(false);
+  };
+
+  const handleCloseThread = () => {
+    if (!selectedThread || closeDetailTimerRef.current !== null) return;
+    setDetailExpanded(false);
+    closeDetailTimerRef.current = window.setTimeout(() => {
+      setSelectedThread(null);
+      closeDetailTimerRef.current = null;
+    }, DETAIL_TRANSITION_MS);
+  };
+
   const handleMailboxChange = (nextMailbox: GmailMailbox) => {
     setMailbox(nextMailbox);
+    setDetailExpanded(false);
     setSelectedThread(null);
     setShowSettings(false);
   };
 
   return (
     <div className="glass-panel-strong flex h-full min-h-0 overflow-hidden rounded-lg">
-      <aside className={`${selectedThread ? 'hidden xl:flex' : 'hidden md:flex'} w-44 shrink-0 flex-col border-r border-white/55 bg-white/45 px-3 py-3 backdrop-blur-xl`}>
+      <aside className={`hidden shrink-0 flex-col overflow-hidden bg-white/45 py-3 backdrop-blur-xl transition-[width,opacity,padding,border-color] duration-[240ms] ease-out motion-reduce:transition-none md:flex ${
+        detailExpanded
+          ? 'w-0 border-r-0 border-transparent px-0 opacity-0 xl:w-44 xl:border-r xl:border-white/55 xl:px-3 xl:opacity-100'
+          : 'w-44 border-r border-white/55 px-3 opacity-100'
+      }`}>
         <div className="mb-3 flex items-center gap-2 px-2 text-sm font-semibold">
           <span className="flex h-8 w-8 items-center justify-center rounded-lg bg-red-50 text-red-600">
             <Mail className="h-4 w-4" />
@@ -78,6 +122,7 @@ export function GmailPage({ active = true }: { active?: boolean }) {
           }`}
           onClick={() => {
             setShowSettings(true);
+            setDetailExpanded(false);
             setSelectedThread(null);
           }}
         >
@@ -88,7 +133,11 @@ export function GmailPage({ active = true }: { active?: boolean }) {
 
       {!showSettings && (
       <div
-        className={`${selectedThread ? 'hidden lg:flex lg:w-[420px] xl:w-[460px] lg:flex-none' : 'flex flex-1'} min-h-0 flex-col overflow-hidden border-r border-white/55 bg-white/50 transition-[width,opacity] duration-300 ease-out`}
+        className={`flex min-h-0 min-w-0 flex-col overflow-hidden border-r border-white/55 bg-white/50 transition-[flex-grow,flex-basis,opacity] duration-[240ms] ease-out motion-reduce:transition-none ${
+          detailExpanded
+            ? 'pointer-events-none flex-[0_1_0%] opacity-0 lg:pointer-events-auto lg:flex-[0_0_420px] lg:opacity-100 xl:flex-[0_0_460px]'
+            : 'flex-[1_1_0%] opacity-100'
+        }`}
       >
         <div className="flex shrink-0 gap-1 overflow-x-auto border-b border-white/55 bg-white/55 p-2 md:hidden">
           <Button
@@ -117,6 +166,7 @@ export function GmailPage({ active = true }: { active?: boolean }) {
             className="shrink-0 gap-2 rounded-lg"
             onClick={() => {
               setShowSettings(true);
+              setDetailExpanded(false);
               setSelectedThread(null);
             }}
           >
@@ -126,12 +176,12 @@ export function GmailPage({ active = true }: { active?: boolean }) {
         </div>
         <GmailInbox
           active={active}
-          onSelectThread={setSelectedThread}
+          onSelectThread={handleSelectThread}
           selectedThreadId={selectedThread?.id}
           mailbox={mailbox}
           category={category}
           refreshKey={mailboxRefreshKey}
-          compact={Boolean(selectedThread)}
+          compact={detailExpanded}
           onCategoryChange={setCategory}
           updatedThread={selectedThread}
           onThreadUpdated={(thread) => {
@@ -141,14 +191,24 @@ export function GmailPage({ active = true }: { active?: boolean }) {
       </div>
       )}
 
-      <div className={`min-h-0 min-w-0 flex-1 ${selectedThread || showSettings ? 'flex' : 'hidden'} flex-col overflow-hidden bg-white/35`}>
+      <div className={`min-h-0 min-w-0 flex-col overflow-hidden bg-white/35 ${
+        showSettings
+          ? 'flex flex-[1_1_0%]'
+          : selectedThread
+            ? `flex transition-[flex-grow,flex-basis,opacity,transform] duration-[240ms] ease-out motion-reduce:transition-none ${
+                detailExpanded
+                  ? 'flex-[1_1_0%] translate-x-0 opacity-100'
+                  : 'pointer-events-none flex-[0_1_0%] translate-x-5 opacity-0'
+              }`
+            : 'hidden'
+      }`}>
         {showSettings ? (
           <GmailSignatureSettings onBack={() => setShowSettings(false)} />
         ) : selectedThread ? (
           <EmailDetail
             key={selectedThread.id}
             thread={selectedThread}
-            onBack={() => setSelectedThread(null)}
+            onBack={handleCloseThread}
             onThreadUpdated={setSelectedThread}
           />
         ) : (
@@ -168,6 +228,7 @@ export function GmailPage({ active = true }: { active?: boolean }) {
         onOpenChange={setShowNewEmail}
         onDraftSaved={() => {
           setMailbox('drafts');
+          setDetailExpanded(false);
           setSelectedThread(null);
           setShowSettings(false);
           setMailboxRefreshKey((current) => current + 1);

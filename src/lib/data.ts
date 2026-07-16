@@ -34,6 +34,19 @@ export const STORAGE_KEYS = {
   SETTINGS: 'influencer-board-settings',
 };
 
+export const PRODUCTS_UPDATED_EVENT = 'products-updated';
+export const PRODUCTS_CLOUD_UPDATED_EVENT = 'products-cloud-updated';
+
+function notifyProductsUpdated(products: Product[]): void {
+  if (typeof window === 'undefined') return;
+  window.dispatchEvent(new CustomEvent<Product[]>(PRODUCTS_UPDATED_EVENT, { detail: products }));
+}
+
+function notifyCloudProductsUpdated(): void {
+  if (typeof window === 'undefined') return;
+  window.dispatchEvent(new Event(PRODUCTS_CLOUD_UPDATED_EVENT));
+}
+
 const GMAIL_STORAGE_KEYS = {
   AUTH: 'gmail-auth',
   THREADS: 'gmail-threads',
@@ -407,7 +420,12 @@ export function useProducts() {
       }
     };
 
+    const handleProductsUpdated = (event: Event) => {
+      setProducts((event as CustomEvent<Product[]>).detail);
+    };
+
     window.addEventListener('storage', handleStorage);
+    window.addEventListener(PRODUCTS_UPDATED_EVENT, handleProductsUpdated);
 
     const loadCloudProducts = async () => {
       const supabase = getSupabaseBrowserClient();
@@ -445,12 +463,16 @@ export function useProducts() {
         }));
         setProducts(cloudProducts);
         saveData(STORAGE_KEYS.PRODUCTS, cloudProducts);
+        notifyProductsUpdated(cloudProducts);
       }
       setLoading(false);
     };
 
     void loadCloudProducts();
-    return () => window.removeEventListener('storage', handleStorage);
+    return () => {
+      window.removeEventListener('storage', handleStorage);
+      window.removeEventListener(PRODUCTS_UPDATED_EVENT, handleProductsUpdated);
+    };
   }, []);
 
   const saveProductToCloud = useCallback(async (product: Product) => {
@@ -474,12 +496,17 @@ export function useProducts() {
       created_at: product.createdAt,
       updated_at: product.updatedAt,
     });
-    if (error) console.error('云端产品保存失败:', error);
+    if (error) {
+      console.error('云端产品保存失败:', error);
+    } else {
+      notifyCloudProductsUpdated();
+    }
   }, []);
 
   const saveProducts = useCallback((newData: Product[]) => {
     setProducts(newData);
     saveData(STORAGE_KEYS.PRODUCTS, newData);
+    notifyProductsUpdated(newData);
   }, []);
 
   const addProduct = useCallback(
@@ -518,7 +545,11 @@ export function useProducts() {
       const supabase = getSupabaseBrowserClient();
       if (supabase) {
         void supabase.from('products').delete().eq('id', id).then(({ error }) => {
-          if (error) console.error('云端产品删除失败:', error);
+          if (error) {
+            console.error('云端产品删除失败:', error);
+          } else {
+            notifyCloudProductsUpdated();
+          }
         });
       }
     },
