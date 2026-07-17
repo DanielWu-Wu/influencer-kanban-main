@@ -51,8 +51,12 @@ async function loadFeishuRecords(url: string) {
   return records;
 }
 
-export function fetchFeishuRecordsCached(url: string) {
+export function fetchFeishuRecordsCached(
+  url: string,
+  options: { force?: boolean } = {},
+) {
   const cacheKey = url.trim();
+  if (options.force) recordCache.delete(cacheKey);
   const cached = recordCache.get(cacheKey);
   if (cached && cached.expiresAt > Date.now()) return Promise.resolve(cached.records);
 

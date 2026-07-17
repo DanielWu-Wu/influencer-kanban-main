@@ -537,7 +537,7 @@ export function OutreachEmailTab({
                                       <div className="min-w-0">
                                         <p className="break-words text-sm font-medium">{option.subject}</p>
                                         <p className="mt-1 break-words text-xs text-muted-foreground">
-                                          中文：{option.translatedSubject || 'AI 未返回中文翻译'}
+                                          {option.translatedSubject || 'AI 未返回中文翻译'}
                                         </p>
                                       </div>
                                     </div>

@@ -50,7 +50,10 @@ export type FeishuFieldKey =
   | 'shippingAddress'
   | 'shippingDate'
   | 'arrivalDate'
+  | 'filmingCompleteDate'
   | 'shippingTracking'
+  | 'logisticsNotified'
+  | 'discountNotified'
   | 'actualPublishDate'
   | 'publishedVideoUrl'
   | 'exposureCount'
@@ -379,10 +382,28 @@ export const FEISHU_FIELD_TARGETS: Array<{
     keywords: ['到货时间', '到货日期', '签收日期', 'arrival date'],
   },
   {
+    key: 'filmingCompleteDate',
+    label: '视频拍摄完成时间',
+    description: '红人确认视频拍摄完成的日期',
+    keywords: ['视频拍摄完成时间', '视频拍摄完成日期', '拍摄完成时间', 'filming complete date'],
+  },
+  {
     key: 'shippingTracking',
     label: '运输追踪信息',
     description: '物流公司、单号或查询链接',
     keywords: ['运输追踪信息', '物流追踪信息', '物流单号', 'tracking'],
+  },
+  {
+    key: 'logisticsNotified',
+    label: '物流信息已告知',
+    description: '确认物流单号或查询信息已经告知红人',
+    keywords: ['物流信息已告知', '已告知物流信息', '物流已告知', 'logistics notified'],
+  },
+  {
+    key: 'discountNotified',
+    label: '折扣信息已告知',
+    description: '确认折扣码或联盟信息已经告知红人',
+    keywords: ['折扣信息已告知', '已告知折扣信息', '折扣已告知', 'discount notified'],
   },
   {
     key: 'actualPublishDate',
@@ -419,7 +440,7 @@ export const FEISHU_FIELD_TARGETS: Array<{
 function normalizeFieldName(value: string) {
   return value
     .toLowerCase()
-    .replace(/[（(].*?[）)]/g, '')
+    .replace(/[（）()]/g, '')
     .replace(/[\s_\-:：/、，,。·.]/g, '');
 }
 

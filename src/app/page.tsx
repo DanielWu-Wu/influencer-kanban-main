@@ -3,7 +3,6 @@
 import { useEffect, useState } from 'react';
 import { useRouter } from 'next/navigation';
 import { Button } from '@/components/ui/button';
-import { Input } from '@/components/ui/input';
 import { Sheet, SheetContent } from '@/components/ui/sheet';
 import { useSettings } from '@/lib/data';
 import {
@@ -13,7 +12,6 @@ import {
   Bell,
   Settings,
   Plus,
-  Search,
   CalendarDays,
   CheckSquare,
   ExternalLink,
@@ -37,9 +35,9 @@ import {
   useGmailThreads,
 } from '@/lib/data';
 import PromptManager from '@/components/prompt-manager';
-import { Influencer, COUNTRY_OPTIONS, STATUS_LABELS } from '@/lib/types';
+import { Influencer } from '@/lib/types';
 import { InfluencerForm } from '@/components/influencer-form';
-import { KanbanBoard } from '@/components/kanban-board';
+import { CooperationProjectsPage } from '@/components/cooperation-projects-page';
 import { EmailTemplateManager } from '@/components/email-template-manager';
 import { ReminderPanel } from '@/components/reminder-panel';
 import { SettingsPanel } from '@/components/settings-panel';
@@ -48,7 +46,6 @@ import { WorkCalendar } from '@/components/work-calendar';
 import { GmailPage } from '@/components/gmail-page';
 import { CreatorProspectingPage } from '@/components/creator-prospecting-page';
 import { useAuth } from '@/components/auth-provider';
-import { useRecordAssistant } from '@/components/record-assistant-provider';
 
 type View = 'kanban' | 'list' | 'email' | 'reminders' | 'settings' | 'todo' | 'calendar' | 'prospecting' | 'gmail' | 'prompts';
 
@@ -62,7 +59,7 @@ const label = {
   calendar: '\u5de5\u4f5c\u65e5\u5386',
   prospecting: '\u7ea2\u4eba\u5f00\u53d1\u53f0',
   gmail: 'Gmail \u90ae\u4ef6',
-  kanban: '\u5408\u4f5c\u770b\u677f',
+  kanban: '\u5408\u4f5c\u9879\u76ee',
   list: '\u7ea2\u4eba\u5217\u8868',
   emailTemplates: '\u90ae\u4ef6\u6a21\u677f',
   reminders: '\u8ddf\u8fdb\u63d0\u9192',
@@ -104,8 +101,6 @@ export default function DashboardPage() {
   const [gmailHasMounted, setGmailHasMounted] = useState(false);
   const [showAddDialog, setShowAddDialog] = useState(false);
   const [editingInfluencer, setEditingInfluencer] = useState<Influencer | null>(null);
-  const [searchQuery, setSearchQuery] = useState('');
-  const [filterCountry, setFilterCountry] = useState<string>('all');
   const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
 
@@ -138,22 +133,13 @@ export default function DashboardPage() {
     setSidebarCollapsed(window.localStorage.getItem(SIDEBAR_COLLAPSED_STORAGE_KEY) === 'true');
   }, []);
 
-  const { influencers, addInfluencer, updateInfluencer, deleteInfluencer, updateStatus } = useInfluencers();
+  const { influencers, addInfluencer, updateInfluencer } = useInfluencers();
   const { templates } = useEmailTemplates();
   const { reminders, pendingReminders, addReminder, completeReminder, skipReminder } = useReminders();
   const { todos, todayTodos, addTodo, toggleTodo, deleteTodo, updateTodo } = useTodos();
   const { events, addEvent, deleteEvent } = useCalendarEvents();
   const { settings } = useSettings();
   const { unreadCount } = useGmailThreads();
-  const { captureEvent } = useRecordAssistant();
-
-  const filteredInfluencers = influencers.filter((influencer) => {
-    const query = searchQuery.toLowerCase();
-    const matchesSearch =
-      influencer.channelName.toLowerCase().includes(query) || influencer.email.toLowerCase().includes(query);
-    const matchesCountry = filterCountry === 'all' || influencer.country === filterCountry;
-    return matchesSearch && matchesCountry;
-  });
 
   const stats = {
     total: influencers.length,
@@ -193,28 +179,6 @@ export default function DashboardPage() {
     if (!editingInfluencer) return;
     updateInfluencer(editingInfluencer.id, data);
     setEditingInfluencer(null);
-  };
-
-  const handleUpdateStatus = (id: string, status: Influencer['status']) => {
-    const influencer = influencers.find((item) => item.id === id);
-    updateStatus(id, status);
-
-    if (!influencer || influencer.status === status) return;
-    captureEvent({
-      type: 'status_changed',
-      source: 'kanban',
-      title: `${influencer.channelName} 状态变更`,
-      summary: `从「${STATUS_LABELS[influencer.status]}」更新为「${STATUS_LABELS[status]}」`,
-      influencer: {
-        id: influencer.id,
-        channelName: influencer.channelName,
-        email: influencer.email,
-        previousStatus: influencer.status,
-        previousStatusLabel: STATUS_LABELS[influencer.status],
-        newStatus: status,
-        statusLabel: STATUS_LABELS[status],
-      },
-    });
   };
 
   const toggleSidebar = () => {
@@ -430,38 +394,7 @@ export default function DashboardPage() {
           }`}
         >
           {currentView === 'kanban' && (
-            <div className="glass-panel-strong flex-1 overflow-auto rounded-lg p-4">
-              <div className="flex gap-3 mb-4 flex-shrink-0">
-                <div className="relative flex-1 max-w-md">
-                  <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-muted-foreground" />
-                  <Input
-                    placeholder={label.search}
-                    value={searchQuery}
-                    onChange={(event) => setSearchQuery(event.target.value)}
-                    className="glass-control h-10 border-0 pl-10"
-                  />
-                </div>
-                <select
-                  value={filterCountry}
-                  onChange={(event) => setFilterCountry(event.target.value)}
-                  className="glass-control h-10 rounded-lg px-3 text-sm"
-                >
-                  <option value="all">{label.allCountries}</option>
-                  {COUNTRY_OPTIONS.map((country) => (
-                    <option key={country} value={country}>
-                      {country}
-                    </option>
-                  ))}
-                </select>
-              </div>
-
-              <KanbanBoard
-                influencers={filteredInfluencers}
-                onUpdateStatus={handleUpdateStatus}
-                onEdit={(influencer) => setEditingInfluencer(influencer)}
-                onDelete={deleteInfluencer}
-              />
-            </div>
+            <CooperationProjectsPage onOpenSettings={() => setCurrentView('settings')} />
           )}
 
           {currentView === 'list' && (
