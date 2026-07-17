@@ -25,6 +25,7 @@ import { ScrollArea } from '@/components/ui/scroll-area';
 import { useGmailAuth, useSettings } from '@/lib/data';
 import { repairTextEncoding } from '@/lib/email-text';
 import type { FeishuFieldMapping } from '@/lib/feishu-mapping';
+import { getGmailThreadContact } from '@/lib/gmail-thread-contact';
 import {
   fetchFeishuRecordsCached,
   type CachedFeishuRecord as FeishuRecord,
@@ -271,14 +272,6 @@ function extractEmails(value?: string) {
     .split(',')
     .map((item) => normalizeEmailAddress(item))
     .filter(Boolean);
-}
-
-function getThreadExternalSenderEmail(thread: GmailThread, mailbox: GmailMailbox, ownEmail?: string) {
-  const listMessage = getThreadListMessage(thread, mailbox);
-  if (!listMessage?.from) return '';
-  const senderEmail = normalizeEmailAddress(listMessage.from);
-  if (!senderEmail || senderEmail === normalizeEmailAddress(ownEmail)) return '';
-  return senderEmail;
 }
 
 function isLatestMessageFromEmail(thread: GmailThread, email?: string): boolean {
@@ -816,18 +809,18 @@ export function GmailInbox({
           return;
         }
 
-        const threadEmails = threads
+        const threadContacts = threads
           .map((thread) => ({
             threadId: thread.id,
-            email: getThreadExternalSenderEmail(thread, mailbox, auth?.email),
+            emails: getGmailThreadContact(thread, auth?.email).emails,
           }))
-          .filter((item) => item.email);
-        if (!threadEmails.length) {
+          .filter((item) => item.emails.length);
+        if (!threadContacts.length) {
           setThreadAvatars({});
           return;
         }
 
-        const targetEmails = new Set(threadEmails.map((item) => item.email));
+        const targetEmails = new Set(threadContacts.flatMap((item) => item.emails));
 
         try {
           const records = await fetchFeishuRecordsCached(settings.feishuUrl);
@@ -836,12 +829,13 @@ export function GmailInbox({
           const profileByEmail = new Map<string, CreatorAvatarProfile>();
           records.forEach((record) => {
             const emails = extractEmails(stringifyFeishuValue(record.fields[emailField]));
-            const matchedEmail = emails.find((email) => targetEmails.has(email));
-            if (!matchedEmail) return;
-            profileByEmail.set(matchedEmail, {
-              channelName: getMappedFeishuValue(record, mapping, 'channelName'),
-              channelUrl: getMappedFeishuValue(record, mapping, 'channelUrl'),
-              channelId: getMappedFeishuValue(record, mapping, 'channelId'),
+            const matchedEmails = emails.filter((email) => targetEmails.has(email));
+            matchedEmails.forEach((matchedEmail) => {
+              profileByEmail.set(matchedEmail, {
+                channelName: getMappedFeishuValue(record, mapping, 'channelName'),
+                channelUrl: getMappedFeishuValue(record, mapping, 'channelUrl'),
+                channelId: getMappedFeishuValue(record, mapping, 'channelId'),
+              });
             });
           });
 
@@ -852,8 +846,9 @@ export function GmailInbox({
             title: string;
           }>();
 
-          threadEmails.forEach(({ threadId, email }) => {
-            const profile = profileByEmail.get(email);
+          threadContacts.forEach(({ threadId, emails }) => {
+            const matchedEmail = emails.find((email) => profileByEmail.has(email));
+            const profile = matchedEmail ? profileByEmail.get(matchedEmail) : undefined;
             if (!profile) return;
             const lookup = buildChannelAvatarLookup(profile);
             if (!lookup) return;
@@ -915,7 +910,6 @@ export function GmailInbox({
     };
   }, [
     auth?.email,
-    mailbox,
     settings.feishuFieldMapping,
     settings.feishuUrl,
     settings.youtubeDefaultLanguage,
@@ -1351,7 +1345,9 @@ export function GmailInbox({
           filteredThreads.map((thread) => {
             const latestMessage = thread.messages[thread.messages.length - 1];
             const listMessage = getThreadListMessage(thread, mailbox);
-            const sender = listMessage?.from?.split('<')[0]?.replaceAll('"', '').trim()
+            const contactMessage = getGmailThreadContact(thread, auth.email).message;
+            const senderMessage = contactMessage || listMessage;
+            const sender = senderMessage?.from?.split('<')[0]?.replaceAll('"', '').trim()
               || '\u672a\u77e5\u53d1\u4ef6\u4eba';
             const hasReplied = Boolean(
               auth.email

@@ -19,6 +19,7 @@ import { YouTubeChannelAvatar } from './youtube-channel-avatar';
 import { textToEmailHtml } from '@/lib/email-content';
 import { repairTextEncoding, splitEmailForTranslation } from '@/lib/email-text';
 import type { FeishuFieldKey, FeishuFieldMapping } from '@/lib/feishu-mapping';
+import { getGmailThreadContact } from '@/lib/gmail-thread-contact';
 import {
   fetchFeishuRecordsCached,
   type CachedFeishuRecord as FeishuRecord,
@@ -337,17 +338,9 @@ export function EmailDetail({ thread, onBack, onThreadUpdated }: EmailDetailProp
     setExpandedMessages(new Set(newestDisplayMessageId ? [newestDisplayMessageId] : []));
   }, [newestDisplayMessageId, thread.id]);
 
-  const profileContactEmail = useMemo(() => {
-    const ownEmail = normalizeEmail(auth?.email);
-    const candidates = [...thread.messages]
-      .reverse()
-      .flatMap((message) => [
-        ...extractEmails(message.from),
-        ...extractEmails(message.to),
-      ]);
-
-    return candidates.find((email) => email && email !== ownEmail) || candidates[0] || '';
-  }, [auth?.email, thread.messages]);
+  const profileContactEmails = useMemo(() => {
+    return getGmailThreadContact(thread, auth?.email).emails;
+  }, [auth?.email, thread]);
 
   useEffect(() => {
     let cancelled = false;
@@ -355,7 +348,7 @@ export function EmailDetail({ thread, onBack, onThreadUpdated }: EmailDetailProp
     const mapping = settings.feishuFieldMapping || {};
     const emailField = mapping.email;
 
-    if (!feishuUrl || !emailField || !profileContactEmail) {
+    if (!feishuUrl || !emailField || !profileContactEmails.length) {
       setCreatorProfile(null);
       setCreatorProfileError('');
       setCreatorProfileLoading(false);
@@ -374,10 +367,9 @@ export function EmailDetail({ thread, onBack, onThreadUpdated }: EmailDetailProp
           .map((record) => {
             const emailValue = stringifyFeishuValue(record.fields[activeEmailField]);
             const emails = extractEmails(emailValue);
-            const matchedEmail = emails.find((email) => email === profileContactEmail);
-            const fallbackMatched = !matchedEmail && emailValue.toLowerCase().includes(profileContactEmail);
-            return matchedEmail || fallbackMatched
-              ? { record, matchedEmail: matchedEmail || profileContactEmail }
+            const matchedEmail = profileContactEmails.find((email) => emails.includes(email));
+            return matchedEmail
+              ? { record, matchedEmail }
               : null;
           })
           .find(Boolean);
@@ -418,7 +410,7 @@ export function EmailDetail({ thread, onBack, onThreadUpdated }: EmailDetailProp
     return () => {
       cancelled = true;
     };
-  }, [profileContactEmail, settings.feishuFieldMapping, settings.feishuUrl]);
+  }, [profileContactEmails, settings.feishuFieldMapping, settings.feishuUrl]);
 
   useEffect(() => {
     let cancelled = false;
