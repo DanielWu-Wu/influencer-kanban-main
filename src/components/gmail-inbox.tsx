@@ -25,7 +25,10 @@ import { ScrollArea } from '@/components/ui/scroll-area';
 import { useGmailAuth, useSettings } from '@/lib/data';
 import { repairTextEncoding } from '@/lib/email-text';
 import type { FeishuFieldMapping } from '@/lib/feishu-mapping';
-import { getGmailThreadContact } from '@/lib/gmail-thread-contact';
+import {
+  getGmailThreadContact,
+  isIgnoredGmailThreadSender,
+} from '@/lib/gmail-thread-contact';
 import {
   fetchFeishuRecordsCached,
   type CachedFeishuRecord as FeishuRecord,
@@ -124,10 +127,14 @@ function usesLatestIncomingMessage(mailbox: GmailMailbox): boolean {
 
 function getThreadListMessage(thread: GmailThread, mailbox: GmailMailbox): GmailMessage | undefined {
   if (usesLatestIncomingMessage(mailbox)) {
+    let latestIncomingMessage: GmailMessage | undefined;
     for (let index = thread.messages.length - 1; index >= 0; index -= 1) {
       const message = thread.messages[index];
-      if (message.labels.includes('INBOX')) return message;
+      if (!message.labels.includes('INBOX')) continue;
+      latestIncomingMessage ??= message;
+      if (!isIgnoredGmailThreadSender(message.from)) return message;
     }
+    return latestIncomingMessage;
   }
 
   return thread.messages[thread.messages.length - 1];
@@ -140,7 +147,10 @@ function getThreadTimestamp(thread: GmailThread, mailbox: GmailMailbox): number 
 
 function sortThreadsByLatest(threads: GmailThread[], mailbox: GmailMailbox): GmailThread[] {
   return [...threads].sort(
-    (left, right) => getThreadTimestamp(right, mailbox) - getThreadTimestamp(left, mailbox),
+    (left, right) => {
+      const timestampDifference = getThreadTimestamp(right, mailbox) - getThreadTimestamp(left, mailbox);
+      return timestampDifference || left.id.localeCompare(right.id);
+    },
   );
 }
 
@@ -500,6 +510,7 @@ export function GmailInbox({
   const { auth, connect, disconnect } = useGmailAuth();
   const { settings } = useSettings();
   const latestFetchIdRef = useRef(0);
+  const activeFetchKeyRef = useRef<string | null>(null);
   const wasActiveRef = useRef(active);
   const subjectTranslationRunRef = useRef(0);
   const avatarPrefetchRunRef = useRef(0);
@@ -616,6 +627,9 @@ export function GmailInbox({
   const fetchThreads = useCallback(async () => {
     if (!auth?.accessToken) return;
     if (activePaginationKey !== paginationKey) return;
+    const fetchKey = `${paginationKey}:${pageIndex}`;
+    if (activeFetchKeyRef.current === fetchKey) return;
+    activeFetchKeyRef.current = fetchKey;
     const fetchId = latestFetchIdRef.current + 1;
     latestFetchIdRef.current = fetchId;
     setLoading(true);
@@ -703,6 +717,7 @@ export function GmailInbox({
         return;
       }
 
+      const nextThreads: GmailThread[] = [];
       for (let index = 0; index < threadRefs.length; index += GMAIL_DETAIL_BATCH_SIZE) {
         const batch = threadRefs.slice(index, index + GMAIL_DETAIL_BATCH_SIZE);
         const batchResults = await Promise.all(
@@ -728,18 +743,18 @@ export function GmailInbox({
         );
         const visibleBatch = parsedBatch.filter((thread) => shouldShowThreadInMailbox(thread, mailbox, category));
         if (fetchId !== latestFetchIdRef.current) return;
-
-        setThreads((current) => sortThreadsByLatest(
-          index === 0 ? visibleBatch : [...current, ...visibleBatch],
-          mailbox,
-        ));
+        nextThreads.push(...visibleBatch);
       }
+      setThreads(sortThreadsByLatest(nextThreads, mailbox));
       setLastSyncedAt(new Date().toISOString());
     } catch (caughtError) {
       if (fetchId === latestFetchIdRef.current) {
         setError((caughtError as Error).message);
       }
     } finally {
+      if (activeFetchKeyRef.current === fetchKey) {
+        activeFetchKeyRef.current = null;
+      }
       if (fetchId === latestFetchIdRef.current) {
         setLoading(false);
       }

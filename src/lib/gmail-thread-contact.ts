@@ -21,6 +21,11 @@ function extractThreadContactEmails(value?: string): string[] {
     .filter(Boolean);
 }
 
+export function isIgnoredGmailThreadSender(value?: string): boolean {
+  const emails = extractThreadContactEmails(value);
+  return emails.length > 0 && emails.every((email) => IGNORED_CONTACT_EMAILS.has(email));
+}
+
 function isEligibleContactEmail(email: string, ownEmail: string) {
   return Boolean(email && email !== ownEmail && !IGNORED_CONTACT_EMAILS.has(email));
 }
