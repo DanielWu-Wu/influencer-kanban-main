@@ -8,7 +8,6 @@ import { useSettings } from '@/lib/data';
 import {
   LayoutDashboard,
   Users,
-  Mail,
   Bell,
   Settings,
   Plus,
@@ -20,6 +19,7 @@ import {
   Sparkles,
   Inbox,
   MessageSquareText,
+  FilePenLine,
   LogOut,
   LoaderCircle,
   UserPlus,
@@ -47,7 +47,7 @@ import { GmailPage } from '@/components/gmail-page';
 import { CreatorProspectingPage } from '@/components/creator-prospecting-page';
 import { useAuth } from '@/components/auth-provider';
 
-type View = 'kanban' | 'list' | 'email' | 'reminders' | 'settings' | 'todo' | 'calendar' | 'prospecting' | 'gmail' | 'prompts';
+type View = 'kanban' | 'list' | 'email' | 'reminders' | 'settings' | 'todo' | 'calendar' | 'prospecting' | 'gmail' | 'prompts' | 'draft-prompts';
 
 const label = {
   appShort: '\u7ea2\u4eba\u63a8\u5e7f',
@@ -65,6 +65,7 @@ const label = {
   reminders: '\u8ddf\u8fdb\u63d0\u9192',
   settings: '\u8bbe\u7f6e',
   prompts: 'AI \u63d0\u793a\u8bcd',
+  draftPrompts: 'AI \u8d77\u8349\u90ae\u4ef6\u63d0\u793a\u8bcd',
   addInfluencer: '\u6dfb\u52a0\u7ea2\u4eba',
   search: '\u641c\u7d22\u9891\u9053\u540d\u79f0\u6216\u90ae\u7bb1...',
   allCountries: '\u5168\u90e8\u56fd\u5bb6',
@@ -86,10 +87,10 @@ const NAV_ITEMS = [
   { id: 'gmail', label: label.gmail, icon: Inbox, group: label.dailyWork },
   { id: 'kanban', label: label.kanban, icon: LayoutDashboard, group: label.influencerManage },
   { id: 'list', label: label.list, icon: Users, group: label.influencerManage },
-  { id: 'email', label: label.emailTemplates, icon: Mail, group: label.influencerManage },
   { id: 'reminders', label: label.reminders, icon: Bell, group: label.influencerManage },
   { id: 'settings', label: label.settings, icon: Settings, group: label.tools },
   { id: 'prompts', label: label.prompts, icon: MessageSquareText, group: label.tools },
+  { id: 'draft-prompts', label: label.draftPrompts, icon: FilePenLine, group: label.tools },
 ];
 
 const SIDEBAR_COLLAPSED_STORAGE_KEY = 'influencer-board-sidebar-collapsed';
@@ -469,7 +470,13 @@ export default function DashboardPage() {
 
           {currentView === 'prompts' && (
             <div className="glass-panel-strong flex min-h-0 flex-1 flex-col overflow-hidden rounded-lg p-4">
-              <PromptManager />
+              <PromptManager mode="general" />
+            </div>
+          )}
+
+          {currentView === 'draft-prompts' && (
+            <div className="glass-panel-strong flex min-h-0 flex-1 flex-col overflow-hidden rounded-lg p-4">
+              <PromptManager mode="drafting" />
             </div>
           )}
 

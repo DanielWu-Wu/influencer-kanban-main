@@ -35,6 +35,28 @@ import { generateId, useSettings } from '@/lib/data';
 
 type PromptValues = Record<PromptType, string>;
 
+type PromptManagerMode = 'general' | 'drafting';
+
+const PAGE_CONFIG: Record<PromptManagerMode, {
+  title: string;
+  description: string;
+  sectionTypes: PromptType[];
+  defaultExpanded: PromptType;
+}> = {
+  general: {
+    title: '提示词管理',
+    description: '设置邮件翻译和合作分析规则，并保存常用模板',
+    sectionTypes: ['translate', 'analysis'],
+    defaultExpanded: 'analysis',
+  },
+  drafting: {
+    title: 'AI 起草邮件提示词',
+    description: '设置邮件回复起草和个性化冷开发信生成规则，并保存常用模板',
+    sectionTypes: ['draft', 'outreach'],
+    defaultExpanded: 'draft',
+  },
+};
+
 const PROMPT_SECTIONS: Array<{
   type: PromptType;
   title: string;
@@ -84,7 +106,8 @@ const initialPrompts: PromptValues = {
   outreach: DEFAULT_OUTREACH_PROMPT,
 };
 
-export default function PromptManager() {
+export default function PromptManager({ mode = 'general' }: { mode?: PromptManagerMode }) {
+  const pageConfig = PAGE_CONFIG[mode];
   const { settings, updateSettings, loading } = useSettings();
   const [prompts, setPrompts] = useState<PromptValues>(initialPrompts);
   const [customTemplates, setCustomTemplates] = useState<PromptTemplate[]>([]);
@@ -100,7 +123,9 @@ export default function PromptManager() {
     draft: 'builtin-draft-business',
     outreach: 'builtin-outreach-youtube',
   });
-  const [expandedSection, setExpandedSection] = useState<PromptType | null>('analysis');
+  const [expandedSection, setExpandedSection] = useState<PromptType | null>(
+    pageConfig.defaultExpanded,
+  );
   const [saved, setSaved] = useState(false);
 
   useEffect(() => {
@@ -135,14 +160,20 @@ export default function PromptManager() {
   };
 
   const handleSaveAll = () => {
-    updateSettings({
-      translatePrompt: prompts.translate,
-      aiAnalysisPrompt: prompts.analysis,
-      aiDraftPrompt: prompts.draft,
-      aiEmailPrompt: prompts.draft,
-      aiOutreachPrompt: prompts.outreach,
-      promptTemplates: customTemplates,
-    });
+    if (mode === 'general') {
+      updateSettings({
+        translatePrompt: prompts.translate,
+        aiAnalysisPrompt: prompts.analysis,
+        promptTemplates: customTemplates,
+      });
+    } else {
+      updateSettings({
+        aiDraftPrompt: prompts.draft,
+        aiEmailPrompt: prompts.draft,
+        aiOutreachPrompt: prompts.outreach,
+        promptTemplates: customTemplates,
+      });
+    }
     setSaved(true);
     window.setTimeout(() => setSaved(false), 2000);
   };
@@ -203,10 +234,10 @@ export default function PromptManager() {
         <div>
           <h2 className="flex items-center gap-2 text-lg font-semibold">
             <Sparkles className="h-5 w-5" />
-            提示词管理
+            {pageConfig.title}
           </h2>
           <p className="mt-0.5 text-sm text-muted-foreground">
-            分别设置翻译、合作判断、邮件起草和冷开发信规则，并保存常用模板
+            {pageConfig.description}
           </p>
         </div>
         <Button onClick={handleSaveAll} size="sm" className="h-9 gap-1.5 rounded-lg shadow-apple">
@@ -218,7 +249,7 @@ export default function PromptManager() {
       <Separator className="mb-4 shrink-0 bg-white/60" />
 
       <div className="min-h-0 flex-1 space-y-4 overflow-y-auto pr-1">
-        {PROMPT_SECTIONS.map((section) => {
+        {PROMPT_SECTIONS.filter((section) => pageConfig.sectionTypes.includes(section.type)).map((section) => {
           const Icon = section.icon;
           const expanded = expandedSection === section.type;
           const templates = allTemplates.filter((template) => template.type === section.type);

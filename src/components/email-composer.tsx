@@ -317,6 +317,7 @@ export function EmailComposer({
       setSuggestion(cleanSuggestion);
       setReplyContent(cleanSuggestedReply);
       setEditedChineseReply(result.translatedReply);
+      setTranslationExpanded(true);
       setTranslationEditing(false);
       setTranslationUpdated(false);
       setGeneratedLangName(targetLangName);
