@@ -35,7 +35,12 @@ export function SettingsPanel() {
   const [testingModel, setTestingModel] = useState(false);
   const [modelTestResult, setModelTestResult] = useState<{ success: boolean; message: string } | null>(null);
   const [saved, setSaved] = useState(false);
-  const [expandedSection, setExpandedSection] = useState<string | null>('products');
+  const [expandedSection, setExpandedSection] = useState<string | null>(null);
+  const modelApiConnected = modelTestResult?.success === true || Boolean(
+    settings.customApiUrl?.trim()
+    && settings.customModelName?.trim()
+    && settings.customApiKeyConfigured,
+  );
 
   useEffect(() => {
     if (settingsLoading) return;
@@ -315,8 +320,10 @@ export function SettingsPanel() {
                   </div>
                 </div>
                 <div className="flex items-center gap-2">
-                  {modelProvider === 'custom' && (
-                    <Badge variant="secondary" className="rounded-md bg-white/80 text-xs">自定义</Badge>
+                  {modelApiConnected && (
+                    <Badge variant="secondary" className="rounded-md bg-emerald-50 text-xs text-emerald-700">
+                      已连接
+                    </Badge>
                   )}
                   {expandedSection === 'model' ? (
                     <ChevronUp className="w-4 h-4 text-muted-foreground" />

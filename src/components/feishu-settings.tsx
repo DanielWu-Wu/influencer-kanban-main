@@ -221,7 +221,11 @@ export function FeishuSettings({
               </div>
             </div>
             <div className="flex shrink-0 items-center gap-2">
-              {connection.connected && <Badge variant="secondary" className="rounded-md bg-white/75">已连接</Badge>}
+              {connection.connected && (
+                <Badge variant="secondary" className="rounded-md bg-emerald-50 text-xs text-emerald-700">
+                  已连接
+                </Badge>
+              )}
               {expanded
                 ? <ChevronUp className="h-4 w-4 text-muted-foreground" />
                 : <ChevronDown className="h-4 w-4 text-muted-foreground" />}

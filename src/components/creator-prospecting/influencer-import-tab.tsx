@@ -19,6 +19,17 @@ import { toast } from 'sonner';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { Checkbox } from '@/components/ui/checkbox';
+import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+  AlertDialogTrigger,
+} from '@/components/ui/alert-dialog';
 import { HoverCard, HoverCardContent, HoverCardTrigger } from '@/components/ui/hover-card';
 import { Input } from '@/components/ui/input';
 import {
@@ -51,6 +62,7 @@ type Props = {
   checkingDedupe: boolean;
   writingFeishu: boolean;
   preparingDevelopmentPreview: boolean;
+  deletingProspects: boolean;
   onInputChange: (value: string) => void;
   onPreferenceChange: (value: string) => void;
   onResolve: () => void;
@@ -65,6 +77,7 @@ type Props = {
   onUseExistingResource: (id: string) => void;
   onUseExisting: (id: string) => void;
   onRemove: (id: string) => void;
+  onRemoveMany: (ids: string[]) => Promise<void>;
   onClearInput: () => void;
 };
 
@@ -198,6 +211,7 @@ export function InfluencerImportTab({
   checkingDedupe,
   writingFeishu,
   preparingDevelopmentPreview,
+  deletingProspects,
   onInputChange,
   onPreferenceChange,
   onResolve,
@@ -212,6 +226,7 @@ export function InfluencerImportTab({
   onUseExistingResource,
   onUseExisting,
   onRemove,
+  onRemoveMany,
   onClearInput,
 }: Props) {
   const [query, setQuery] = useState('');
@@ -232,6 +247,8 @@ export function InfluencerImportTab({
   }, [prospects, query]);
   const allVisibleSelected = visibleProspects.length > 0
     && visibleProspects.every((item) => selectedIds.includes(item.id));
+  const allProspectsSelected = prospects.length > 0
+    && prospects.every((item) => selectedIds.includes(item.id));
   const canCheck = selected.some((item) => item.workflowStatus === 'resolved');
   const canCreate = selected.some(canCreateFeishuRecord);
   const canAddResource = selected.some((item) => item.resourceStatus === 'missing' && !item.resourceRecordId);
@@ -294,6 +311,47 @@ export function InfluencerImportTab({
         <Button variant="ghost" onClick={onClearInput} disabled={!input}>
           清空输入
         </Button>
+        {selected.length > 0 && (
+          <AlertDialog>
+            <AlertDialogTrigger asChild>
+              <Button
+                variant="outline"
+                disabled={deletingProspects}
+                className="border-destructive/35 text-destructive hover:border-destructive/55 hover:bg-destructive/5 hover:text-destructive"
+              >
+                {deletingProspects
+                  ? <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                  : <Trash2 className="mr-2 h-4 w-4" />}
+                {allProspectsSelected ? `删除全部（${selected.length}）` : `删除所选（${selected.length}）`}
+              </Button>
+            </AlertDialogTrigger>
+            <AlertDialogContent>
+              <AlertDialogHeader>
+                <AlertDialogTitle>
+                  {allProspectsSelected ? `确认删除全部 ${selected.length} 条线索？` : `确认删除所选 ${selected.length} 条线索？`}
+                </AlertDialogTitle>
+                <AlertDialogDescription className="space-y-2">
+                  <span className="block">这些记录将从红人开发台的导入队列中移除，且无法在页面内撤销。</span>
+                  <span className="block font-medium text-foreground">已经创建的飞书红人资源库或开发记录不会被删除。</span>
+                </AlertDialogDescription>
+              </AlertDialogHeader>
+              <AlertDialogFooter>
+                <AlertDialogCancel disabled={deletingProspects}>取消</AlertDialogCancel>
+                <AlertDialogAction
+                  disabled={deletingProspects}
+                  className="bg-destructive text-white hover:bg-destructive/90"
+                  onClick={(event) => {
+                    event.preventDefault();
+                    void onRemoveMany(selected.map((item) => item.id));
+                  }}
+                >
+                  {deletingProspects && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
+                  确认删除
+                </AlertDialogAction>
+              </AlertDialogFooter>
+            </AlertDialogContent>
+          </AlertDialog>
+        )}
         <div className="relative ml-auto min-w-56">
           <Search className="absolute left-2.5 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
           <Input

@@ -49,13 +49,11 @@ const PAGE_CONFIG: Record<PromptManagerMode, {
   title: string;
   description: string;
   sectionTypes: PromptType[];
-  defaultExpanded: PromptType;
 }> = {
   general: {
     title: '提示词管理',
     description: '设置邮件翻译和合作分析规则，并保存常用模板',
     sectionTypes: ['translate', 'analysis'],
-    defaultExpanded: 'analysis',
   },
   drafting: {
     title: 'AI 起草邮件提示词',
@@ -68,7 +66,6 @@ const PAGE_CONFIG: Record<PromptManagerMode, {
       'logisticsNotice',
       'discountNotice',
     ],
-    defaultExpanded: 'draft',
   },
 };
 
@@ -182,9 +179,7 @@ export default function PromptManager({ mode = 'general' }: { mode?: PromptManag
     logisticsNotice: 'builtin-logistics-notice',
     discountNotice: 'builtin-discount-notice',
   });
-  const [expandedSection, setExpandedSection] = useState<PromptType | null>(
-    pageConfig.defaultExpanded,
-  );
+  const [expandedSection, setExpandedSection] = useState<PromptType | null>(null);
   const [saved, setSaved] = useState(false);
 
   useEffect(() => {

@@ -147,18 +147,20 @@ export function YouTubeApiSettings({ expanded, onToggle }: YouTubeApiSettingsPro
                 <Youtube className="w-4 h-4 text-red-600" />
               </div>
               <div>
-                <CardTitle className="text-base flex items-center gap-2">
-                  YouTube API
-                  {settings.youtubeApiKeyConfigured && (
-                    <Badge variant="secondary" className="rounded-md bg-white/75 text-xs">已配置</Badge>
-                  )}
-                </CardTitle>
+                <CardTitle className="text-base">YouTube API</CardTitle>
                 <CardDescription className="text-xs mt-0.5">
                   预留创作者搜索、频道数据补全和红人筛选能力
                 </CardDescription>
               </div>
             </div>
-            {expanded ? <ChevronUp className="w-4 h-4 text-muted-foreground" /> : <ChevronDown className="w-4 h-4 text-muted-foreground" />}
+            <div className="flex shrink-0 items-center gap-2">
+              {settings.youtubeApiKeyConfigured && (
+                <Badge variant="secondary" className="rounded-md bg-emerald-50 text-xs text-emerald-700">
+                  已连接
+                </Badge>
+              )}
+              {expanded ? <ChevronUp className="w-4 h-4 text-muted-foreground" /> : <ChevronDown className="w-4 h-4 text-muted-foreground" />}
+            </div>
           </div>
         </CardHeader>
       </button>

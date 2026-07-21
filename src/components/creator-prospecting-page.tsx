@@ -741,7 +741,11 @@ function saveDeletedProspectIds(ids: string[]) {
 }
 
 function rememberDeletedProspect(id: string) {
-  saveDeletedProspectIds([...loadDeletedProspectIds(), id]);
+  rememberDeletedProspects([id]);
+}
+
+function rememberDeletedProspects(ids: string[]) {
+  saveDeletedProspectIds([...loadDeletedProspectIds(), ...ids]);
 }
 
 export function CreatorProspectingPage() {
@@ -765,6 +769,7 @@ export function CreatorProspectingPage() {
   const [checkingDedupe, setCheckingDedupe] = useState(false);
   const [writingFeishu, setWritingFeishu] = useState(false);
   const [preparingDevelopmentPreview, setPreparingDevelopmentPreview] = useState(false);
+  const [deletingProspects, setDeletingProspects] = useState(false);
   const [generatingId, setGeneratingId] = useState<string | null>(null);
   const [regeneratingDraftPart, setRegeneratingDraftPart] = useState<{ id: string; part: 'subject' | 'body' } | null>(null);
   const [savingDraftId, setSavingDraftId] = useState<string | null>(null);
@@ -2186,6 +2191,38 @@ export function CreatorProspectingPage() {
     );
   }
 
+  const handleRemoveProspects = async (ids: string[]) => {
+    if (deletingProspects) return;
+    const uniqueIds = Array.from(new Set(ids)).filter((id) => prospects.some((item) => item.id === id));
+    if (!uniqueIds.length) return;
+
+    setDeletingProspects(true);
+    rememberDeletedProspects(uniqueIds);
+    setProspects((current) => current.filter((item) => !uniqueIds.includes(item.id)));
+    setSelectedIds((current) => current.filter((item) => !uniqueIds.includes(item)));
+
+    try {
+      const supabase = getSupabaseBrowserClient();
+      if (supabase) {
+        const { data: authData } = await supabase.auth.getUser();
+        if (authData.user) {
+          const { error } = await supabase
+            .from('creator_prospects')
+            .delete()
+            .in('id', uniqueIds)
+            .eq('user_id', authData.user.id);
+          if (error) throw error;
+        }
+      }
+      toast.success(`已从开发台删除 ${uniqueIds.length} 条线索。`);
+    } catch (error) {
+      console.warn('云端红人线索批量删除失败:', error instanceof Error ? error.message : error);
+      toast.warning('已从当前列表删除；云端清理暂时失败，下次打开也会继续隐藏这些记录。');
+    } finally {
+      setDeletingProspects(false);
+    }
+  };
+
   return (
     <div className="flex h-full min-h-0 flex-col overflow-hidden">
       <Toaster richColors position="top-center" />
@@ -2238,6 +2275,7 @@ export function CreatorProspectingPage() {
             checkingDedupe={checkingDedupe}
             writingFeishu={writingFeishu}
             preparingDevelopmentPreview={preparingDevelopmentPreview}
+            deletingProspects={deletingProspects}
             onInputChange={setInput}
             onPreferenceChange={setUserPreference}
             onResolve={handleResolve}
@@ -2317,6 +2355,7 @@ export function CreatorProspectingPage() {
                 });
               }
             }}
+            onRemoveMany={handleRemoveProspects}
             onClearInput={() => setInput('')}
           />
         )}
