@@ -2,13 +2,17 @@
 
 import { useEffect, useMemo, useState } from 'react';
 import {
+  BadgePercent,
   BarChart3,
   CheckCircle2,
   ChevronDown,
   ChevronUp,
+  Clock3,
   FilePenLine,
   Languages,
+  MailCheck,
   MailPlus,
+  PackageCheck,
   Plus,
   RotateCcw,
   Save,
@@ -25,8 +29,12 @@ import { Textarea } from '@/components/ui/textarea';
 import {
   BUILT_IN_PROMPT_TEMPLATES,
   DEFAULT_ANALYSIS_PROMPT,
+  DEFAULT_DISCOUNT_NOTICE_PROMPT,
   DEFAULT_DRAFT_PROMPT,
+  DEFAULT_LOGISTICS_NOTICE_PROMPT,
   DEFAULT_OUTREACH_PROMPT,
+  DEFAULT_OUTREACH_FOLLOW_UP_1_PROMPT,
+  DEFAULT_OUTREACH_FOLLOW_UP_2_PROMPT,
   DEFAULT_TRANSLATE_PROMPT,
   type PromptTemplate,
   type PromptType,
@@ -51,8 +59,15 @@ const PAGE_CONFIG: Record<PromptManagerMode, {
   },
   drafting: {
     title: 'AI 起草邮件提示词',
-    description: '设置邮件回复起草和个性化冷开发信生成规则，并保存常用模板',
-    sectionTypes: ['draft', 'outreach'],
+    description: '统一管理邮件回复、开发信跟进、物流和折扣告知的起草规则',
+    sectionTypes: [
+      'draft',
+      'outreach',
+      'outreachFollowUp1',
+      'outreachFollowUp2',
+      'logisticsNotice',
+      'discountNotice',
+    ],
     defaultExpanded: 'draft',
   },
 };
@@ -97,6 +112,38 @@ const PROMPT_SECTIONS: Array<{
     defaultValue: DEFAULT_OUTREACH_PROMPT,
     rows: 13,
   },
+  {
+    type: 'outreachFollowUp1',
+    title: '开发信一次Follow Up提示词',
+    description: '控制 AI 如何在首次开发信未回复时进行第一次自然跟进',
+    icon: MailCheck,
+    defaultValue: DEFAULT_OUTREACH_FOLLOW_UP_1_PROMPT,
+    rows: 12,
+  },
+  {
+    type: 'outreachFollowUp2',
+    title: '开发信二次Follow Up提示词',
+    description: '控制 AI 如何在仍未回复时进行克制、礼貌的第二次跟进',
+    icon: Clock3,
+    defaultValue: DEFAULT_OUTREACH_FOLLOW_UP_2_PROMPT,
+    rows: 12,
+  },
+  {
+    type: 'logisticsNotice',
+    title: '红人包裹物流告知提示词',
+    description: '控制 AI 如何告知承运商、物流单号和预计送达信息',
+    icon: PackageCheck,
+    defaultValue: DEFAULT_LOGISTICS_NOTICE_PROMPT,
+    rows: 12,
+  },
+  {
+    type: 'discountNotice',
+    title: '红人折扣信息告知提示词',
+    description: '控制 AI 如何说明折扣码、适用范围和使用规则',
+    icon: BadgePercent,
+    defaultValue: DEFAULT_DISCOUNT_NOTICE_PROMPT,
+    rows: 12,
+  },
 ];
 
 const initialPrompts: PromptValues = {
@@ -104,6 +151,10 @@ const initialPrompts: PromptValues = {
   analysis: DEFAULT_ANALYSIS_PROMPT,
   draft: DEFAULT_DRAFT_PROMPT,
   outreach: DEFAULT_OUTREACH_PROMPT,
+  outreachFollowUp1: DEFAULT_OUTREACH_FOLLOW_UP_1_PROMPT,
+  outreachFollowUp2: DEFAULT_OUTREACH_FOLLOW_UP_2_PROMPT,
+  logisticsNotice: DEFAULT_LOGISTICS_NOTICE_PROMPT,
+  discountNotice: DEFAULT_DISCOUNT_NOTICE_PROMPT,
 };
 
 export default function PromptManager({ mode = 'general' }: { mode?: PromptManagerMode }) {
@@ -116,12 +167,20 @@ export default function PromptManager({ mode = 'general' }: { mode?: PromptManag
     analysis: '',
     draft: '',
     outreach: '',
+    outreachFollowUp1: '',
+    outreachFollowUp2: '',
+    logisticsNotice: '',
+    discountNotice: '',
   });
   const [selectedTemplates, setSelectedTemplates] = useState<Record<PromptType, string>>({
     translate: 'builtin-translate-standard',
     analysis: 'builtin-analysis-youtube',
     draft: 'builtin-draft-business',
     outreach: 'builtin-outreach-youtube',
+    outreachFollowUp1: 'builtin-outreach-follow-up-1',
+    outreachFollowUp2: 'builtin-outreach-follow-up-2',
+    logisticsNotice: 'builtin-logistics-notice',
+    discountNotice: 'builtin-discount-notice',
   });
   const [expandedSection, setExpandedSection] = useState<PromptType | null>(
     pageConfig.defaultExpanded,
@@ -135,13 +194,23 @@ export default function PromptManager({ mode = 'general' }: { mode?: PromptManag
       analysis: settings.aiAnalysisPrompt || DEFAULT_ANALYSIS_PROMPT,
       draft: settings.aiDraftPrompt || settings.aiEmailPrompt || DEFAULT_DRAFT_PROMPT,
       outreach: settings.aiOutreachPrompt || DEFAULT_OUTREACH_PROMPT,
+      outreachFollowUp1:
+        settings.aiOutreachFollowUp1Prompt || DEFAULT_OUTREACH_FOLLOW_UP_1_PROMPT,
+      outreachFollowUp2:
+        settings.aiOutreachFollowUp2Prompt || DEFAULT_OUTREACH_FOLLOW_UP_2_PROMPT,
+      logisticsNotice: settings.aiLogisticsNoticePrompt || DEFAULT_LOGISTICS_NOTICE_PROMPT,
+      discountNotice: settings.aiDiscountNoticePrompt || DEFAULT_DISCOUNT_NOTICE_PROMPT,
     });
   }, [
     loading,
     settings.aiAnalysisPrompt,
     settings.aiDraftPrompt,
+    settings.aiDiscountNoticePrompt,
     settings.aiEmailPrompt,
+    settings.aiLogisticsNoticePrompt,
     settings.aiOutreachPrompt,
+    settings.aiOutreachFollowUp1Prompt,
+    settings.aiOutreachFollowUp2Prompt,
     settings.translatePrompt,
   ]);
 
@@ -171,6 +240,10 @@ export default function PromptManager({ mode = 'general' }: { mode?: PromptManag
         aiDraftPrompt: prompts.draft,
         aiEmailPrompt: prompts.draft,
         aiOutreachPrompt: prompts.outreach,
+        aiOutreachFollowUp1Prompt: prompts.outreachFollowUp1,
+        aiOutreachFollowUp2Prompt: prompts.outreachFollowUp2,
+        aiLogisticsNoticePrompt: prompts.logisticsNotice,
+        aiDiscountNoticePrompt: prompts.discountNotice,
         promptTemplates: customTemplates,
       });
     }
@@ -230,7 +303,7 @@ export default function PromptManager({ mode = 'general' }: { mode?: PromptManag
   return (
     <div className="flex h-full flex-col overflow-hidden">
       <Toaster richColors position="top-center" />
-      <div className="mb-4 flex shrink-0 items-center justify-between rounded-lg border border-white/60 bg-white/45 px-4 py-3 shadow-apple backdrop-blur-xl">
+      <div className="material-toolbar mb-4 flex shrink-0 items-center justify-between rounded-xl border border-border/50 px-4 py-3 shadow-[var(--glass-shadow-soft)]">
         <div>
           <h2 className="flex items-center gap-2 text-lg font-semibold">
             <Sparkles className="h-5 w-5" />
@@ -259,7 +332,7 @@ export default function PromptManager({ mode = 'general' }: { mode?: PromptManag
           const modified = prompts[section.type] !== section.defaultValue;
 
           return (
-            <Card key={section.type} className="overflow-hidden rounded-lg border-white/65 bg-white/66 shadow-apple backdrop-blur-xl">
+            <Card key={section.type} className="overflow-hidden rounded-xl border-border/55 bg-white/84 shadow-[var(--glass-shadow-soft)] backdrop-blur-xl">
               <button
                 type="button"
                 className="w-full text-left"
@@ -290,7 +363,7 @@ export default function PromptManager({ mode = 'general' }: { mode?: PromptManag
 
               {expanded && (
                 <CardContent className="space-y-4 pt-0">
-                  <div className="rounded-lg border border-white/65 bg-white/55 p-3">
+                  <div className="rounded-lg border border-border/55 bg-white/64 p-3">
                     <div className="mb-2 flex items-center justify-between">
                       <label className="text-sm font-medium">提示词模板</label>
                       <Button

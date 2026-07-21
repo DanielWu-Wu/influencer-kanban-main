@@ -80,14 +80,14 @@ export function GmailPage({ active = true }: { active?: boolean }) {
   };
 
   return (
-    <div className="glass-panel-strong flex h-full min-h-0 overflow-hidden rounded-lg">
-      <aside className={`hidden shrink-0 flex-col overflow-hidden bg-white/45 py-3 backdrop-blur-xl transition-[width,opacity,padding,border-color] duration-[240ms] ease-out motion-reduce:transition-none md:flex ${
+    <div className="app-workbench flex h-full min-h-0 overflow-hidden rounded-xl">
+      <aside className={`material-navigation hidden shrink-0 flex-col overflow-hidden py-3 transition-[width,opacity,padding,border-color] duration-[240ms] ease-out motion-reduce:transition-none md:flex ${
         detailExpanded
           ? 'w-0 border-r-0 border-transparent px-0 opacity-0 xl:w-44 xl:border-r xl:border-white/55 xl:px-3 xl:opacity-100'
           : 'w-44 border-r border-white/55 px-3 opacity-100'
       }`}>
         <div className="mb-3 flex items-center gap-2 px-2 text-sm font-semibold">
-          <span className="flex h-8 w-8 items-center justify-center rounded-lg bg-red-50 text-red-600">
+          <span className="flex h-8 w-8 items-center justify-center rounded-lg border border-red-100/80 bg-red-50/85 text-red-600 shadow-sm">
             <Mail className="h-4 w-4" />
           </span>
           <span>Gmail</span>
@@ -105,7 +105,7 @@ export function GmailPage({ active = true }: { active?: boolean }) {
               key={id}
               variant={mailbox === id ? 'secondary' : 'ghost'}
               className={`h-10 w-full justify-start gap-3 rounded-lg px-3 font-normal ${
-                mailbox === id ? 'bg-white/80 shadow-sm' : 'hover:bg-white/70'
+                mailbox === id ? 'bg-primary/[0.08] text-primary shadow-[inset_2px_0_0_var(--primary)]' : 'hover:bg-white/72'
               }`}
               onClick={() => handleMailboxChange(id)}
             >
@@ -118,7 +118,7 @@ export function GmailPage({ active = true }: { active?: boolean }) {
         <Button
           variant={showSettings ? 'secondary' : 'ghost'}
           className={`h-10 w-full justify-start gap-3 rounded-lg px-3 font-normal ${
-            showSettings ? 'bg-white/80 shadow-sm' : 'hover:bg-white/70'
+            showSettings ? 'bg-primary/[0.08] text-primary shadow-[inset_2px_0_0_var(--primary)]' : 'hover:bg-white/72'
           }`}
           onClick={() => {
             setShowSettings(true);
@@ -133,13 +133,13 @@ export function GmailPage({ active = true }: { active?: boolean }) {
 
       {!showSettings && (
       <div
-        className={`flex min-h-0 min-w-0 flex-col overflow-hidden border-r border-white/55 bg-white/50 transition-[flex-grow,flex-basis,opacity] duration-[240ms] ease-out motion-reduce:transition-none ${
+        className={`material-content flex min-h-0 min-w-0 flex-col overflow-hidden border-r border-border/55 transition-[flex-grow,flex-basis,opacity] duration-[240ms] ease-out motion-reduce:transition-none ${
           detailExpanded
             ? 'pointer-events-none flex-[0_1_0%] opacity-0 lg:pointer-events-auto lg:flex-[0_0_420px] lg:opacity-100 xl:flex-[0_0_460px]'
             : 'flex-[1_1_0%] opacity-100'
         }`}
       >
-        <div className="flex shrink-0 gap-1 overflow-x-auto border-b border-white/55 bg-white/55 p-2 md:hidden">
+        <div className="material-toolbar flex shrink-0 gap-1 overflow-x-auto border-b border-border/55 p-2 md:hidden">
           <Button
             size="sm"
             className="shrink-0 gap-2 rounded-lg"
@@ -191,7 +191,7 @@ export function GmailPage({ active = true }: { active?: boolean }) {
       </div>
       )}
 
-      <div className={`min-h-0 min-w-0 flex-col overflow-hidden bg-white/35 ${
+      <div className={`material-reading min-h-0 min-w-0 flex-col overflow-hidden ${
         showSettings
           ? 'flex flex-[1_1_0%]'
           : selectedThread

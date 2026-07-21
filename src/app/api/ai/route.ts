@@ -1,8 +1,12 @@
 import { NextRequest, NextResponse } from 'next/server';
 import {
   DEFAULT_ANALYSIS_PROMPT,
+  DEFAULT_DISCOUNT_NOTICE_PROMPT,
   DEFAULT_DRAFT_PROMPT,
+  DEFAULT_LOGISTICS_NOTICE_PROMPT,
   DEFAULT_OUTREACH_PROMPT,
+  DEFAULT_OUTREACH_FOLLOW_UP_1_PROMPT,
+  DEFAULT_OUTREACH_FOLLOW_UP_2_PROMPT,
 } from '@/lib/ai-prompts';
 import { sanitizeOutreachEmailBody } from '@/lib/outreach-draft-sanitizer';
 import { getRequestUser } from '@/lib/supabase/server';
@@ -298,18 +302,15 @@ confidence 使用 0 到 100 的整数。
         );
       }
 
-      const systemPrompt = `你是海外红人推广专员的轻量跟进邮件助手。
-你的任务是根据已经发送的初次开发信，生成第 ${stage === 2 ? '二' : '三'} 次联系邮件。
+      const defaultFollowUpPrompt = stage === 2
+        ? DEFAULT_OUTREACH_FOLLOW_UP_1_PROMPT
+        : DEFAULT_OUTREACH_FOLLOW_UP_2_PROMPT;
+      const baseSystemPrompt = `${defaultFollowUpPrompt}
 
-写作规则：
-1. 使用初次开发信相同的语言。preferredLanguage 仅作为辅助，不能覆盖初次邮件的明确语言。
-2. 邮件必须简短、自然、像真人跟进，不要重新完整介绍品牌和产品。
-3. ${stage === 2
-  ? '二次跟进应礼貌提醒对方查看上一封邮件，简要重申合作兴趣，并邀请对方回复。正文控制在约 55-110 个单词。'
-  : '三次跟进应更克制、低压力，说明这是一次简短的最后跟进，并允许对方在当前不合适时简单告知。正文控制在约 45-90 个单词。'}
-4. 只能使用输入中明确出现的人名、产品和合作信息，不得编造价格、寄样、时间、折扣或合作承诺。
-5. 不添加发件人姓名、职位、品牌名、官网链接、签名块或签名占位符；签名只由 Gmail 设置统一追加。
-6. 同时给出完整中文对照，便于人工审核。
+本次任务是根据已经发送的初次开发信，生成${stage === 2 ? '一次 Follow Up（第 2 次联系）' : '二次 Follow Up（第 3 次联系）'}。
+必须沿用初次开发信的语言；preferredLanguage 仅作为辅助，不能覆盖初次邮件的明确语言。
+${stage === 2 ? '正文建议控制在约 55-110 个单词。' : '正文建议控制在约 45-90 个单词。'}
+同时给出完整中文对照，便于人工审核。
 
 只返回严格 JSON：
 {
@@ -317,6 +318,11 @@ confidence 使用 0 到 100 的整数。
   "translatedBody": "完整中文对照",
   "language": "实际使用的语言代码或语言名称"
 }`;
+      const systemPrompt = withCustomInstructions(
+        baseSystemPrompt,
+        body.followUpPrompt,
+        defaultFollowUpPrompt,
+      );
 
       const userPrompt = `红人和本次合作资料：
 ${JSON.stringify({
@@ -345,6 +351,77 @@ ${initialEmail.body}`;
       result.translatedBody = sanitizeOutreachEmailBody(result.translatedBody);
       if (!String(result.body || '').trim()) {
         return NextResponse.json({ error: 'AI 没有返回可用的跟进邮件正文。' }, { status: 502 });
+      }
+      return NextResponse.json({ success: true, data: result });
+    }
+
+    if (action === 'cooperationNotice') {
+      const noticeType = body.noticeType === 'discount' ? 'discount' : 'logistics';
+      const defaultPrompt = noticeType === 'logistics'
+        ? DEFAULT_LOGISTICS_NOTICE_PROMPT
+        : DEFAULT_DISCOUNT_NOTICE_PROMPT;
+      const noticeLabel = noticeType === 'logistics' ? '包裹物流告知' : '折扣信息告知';
+      const project = (body.project || {}) as Record<string, unknown>;
+      const historyMessages = safeArray(body.historyMessages)
+        .slice(-12)
+        .map((message) => {
+          const item = (message || {}) as Record<string, unknown>;
+          return {
+            subject: String(item.subject || ''),
+            from: String(item.from || ''),
+            to: String(item.to || ''),
+            date: String(item.date || ''),
+            body: String(item.body || '').slice(0, 5000),
+          };
+        });
+
+      const baseSystemPrompt = `${defaultPrompt}
+
+输出规则：
+1. 优先沿用最近有效邮件线程的沟通语言；没有历史邮件时，再参考地区或 preferredLanguage。
+2. 邮件主题和正文必须适合直接保存为 Gmail 草稿，但不得包含发件人签名。
+3. 中文对照只用于人工审核，不得混入外语正文。
+4. 必须区分已提供事实和缺失信息，不得补造物流、折扣或合作数据。
+5. 不使用 Markdown，不输出 JSON 以外的解释。
+
+只返回严格 JSON：
+{
+  "subject": "目标语言邮件主题",
+  "body": "目标语言邮件正文",
+  "translatedBody": "完整中文对照",
+  "language": "实际使用的语言代码或名称",
+  "riskNotes": ["保存草稿前需要人工确认的事实"],
+  "missingInfo": ["仍然缺少、但未被编造的信息"]
+}`;
+      const systemPrompt = withCustomInstructions(
+        baseSystemPrompt,
+        body.noticePrompt,
+        defaultPrompt,
+      );
+      const userPrompt = `请起草一封红人合作${noticeLabel}邮件。
+
+合作项目资料：
+${JSON.stringify(project, null, 2)}
+
+目标语言提示：${String(body.preferredLanguage || '未指定')}
+
+与该联系人的最近邮件历史：
+${historyMessages.length ? JSON.stringify(historyMessages, null, 2) : '没有找到历史邮件，请根据项目资料使用自然专业的英语或可确认的目标语言。'}`;
+
+      const result = parseJson(await invokeOpenAICompatibleApi(
+        [
+          { role: 'system', content: systemPrompt },
+          { role: 'user', content: userPrompt },
+        ],
+        getModelOptions(body, 0.35),
+      )) as Record<string, unknown>;
+      result.subject = String(result.subject || '').replace(/[\r\n]+/g, ' ').trim();
+      result.body = sanitizeOutreachEmailBody(result.body);
+      result.translatedBody = sanitizeOutreachEmailBody(result.translatedBody);
+      result.riskNotes = safeArray(result.riskNotes).map(String).filter(Boolean);
+      result.missingInfo = safeArray(result.missingInfo).map(String).filter(Boolean);
+      if (!String(result.subject || '').trim() || !String(result.body || '').trim()) {
+        return NextResponse.json({ error: 'AI 没有返回可用的邮件主题或正文。' }, { status: 502 });
       }
       return NextResponse.json({ success: true, data: result });
     }

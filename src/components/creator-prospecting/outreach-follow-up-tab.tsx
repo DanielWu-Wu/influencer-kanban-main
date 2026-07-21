@@ -209,7 +209,7 @@ function nextDueStage(record: FollowUpRecord): FollowUpStage | null {
 }
 
 function stageLabel(stage: FollowUpStage) {
-  return stage === 2 ? '二次跟进' : '三次跟进';
+  return stage === 2 ? '一次 Follow Up' : '二次 Follow Up';
 }
 
 function followUpStatus(record: FollowUpRecord) {
@@ -233,35 +233,35 @@ function followUpStatus(record: FollowUpRecord) {
   const elapsed = Math.floor((startOfToday() - record.developmentDate) / DAY_MS);
   if (sentCount >= 3) {
     return checkedWithoutReply
-      ? { tone: 'neutral', title: '已检查，暂无人工回复', detail: '三次跟进已完成，当前没有新的跟进计划' }
-      : { tone: 'neutral', title: '三次跟进完成，等待回复', detail: '当前没有新的跟进计划' };
+      ? { tone: 'neutral', title: '已检查，暂无人工回复', detail: '二次 Follow Up 已完成，当前没有新的跟进计划' }
+      : { tone: 'neutral', title: '二次 Follow Up 完成，等待回复', detail: '当前没有新的跟进计划' };
   }
   if (sentCount === 2) {
     const remaining = 7 - elapsed;
     if (remaining > 0) {
       return checkedWithoutReply
-        ? { tone: 'neutral', title: '已检查，暂无人工回复', detail: `下一步：${remaining} 天后进行三次跟进开发信` }
-        : { tone: 'neutral', title: `等待三次跟进，还剩 ${remaining} 天`, detail: '第 7 天进行三次跟进开发信' };
+        ? { tone: 'neutral', title: '已检查，暂无人工回复', detail: `下一步：${remaining} 天后进行二次 Follow Up` }
+        : { tone: 'neutral', title: `等待二次 Follow Up，还剩 ${remaining} 天`, detail: '第 7 天进行二次 Follow Up' };
     }
     return {
       tone: elapsed === 7 ? 'warning' : 'danger',
-      title: checkedWithoutReply ? '已检查，暂无人工回复' : elapsed === 7 ? '今天应三次跟进' : `三次跟进已逾期 ${elapsed - 7} 天`,
+      title: checkedWithoutReply ? '已检查，暂无人工回复' : elapsed === 7 ? '今天应二次 Follow Up' : `二次 Follow Up 已逾期 ${elapsed - 7} 天`,
       detail: checkedWithoutReply
-        ? (elapsed === 7 ? '今天可生成三次跟进草稿' : `三次跟进已逾期 ${elapsed - 7} 天，可生成跟进草稿`)
+        ? (elapsed === 7 ? '今天可生成二次 Follow Up 草稿' : `二次 Follow Up 已逾期 ${elapsed - 7} 天，可生成跟进草稿`)
         : '请先检查回复，再决定是否跟进',
     };
   }
   const remaining = 3 - elapsed;
   if (remaining > 0) {
     return checkedWithoutReply
-      ? { tone: 'neutral', title: '已检查，暂无人工回复', detail: `下一步：${remaining} 天后进行二次跟进开发信` }
-      : { tone: 'neutral', title: `等待二次跟进，还剩 ${remaining} 天`, detail: '第 3 天进行二次跟进开发信' };
+      ? { tone: 'neutral', title: '已检查，暂无人工回复', detail: `下一步：${remaining} 天后进行一次 Follow Up` }
+      : { tone: 'neutral', title: `等待一次 Follow Up，还剩 ${remaining} 天`, detail: '第 3 天进行一次 Follow Up' };
   }
   return {
     tone: elapsed === 3 ? 'warning' : 'danger',
-    title: checkedWithoutReply ? '已检查，暂无人工回复' : elapsed === 3 ? '今天应二次跟进' : `二次跟进已逾期 ${elapsed - 3} 天`,
+    title: checkedWithoutReply ? '已检查，暂无人工回复' : elapsed === 3 ? '今天应一次 Follow Up' : `一次 Follow Up 已逾期 ${elapsed - 3} 天`,
     detail: checkedWithoutReply
-      ? (elapsed === 3 ? '今天可生成二次跟进草稿' : `二次跟进已逾期 ${elapsed - 3} 天，可生成跟进草稿`)
+      ? (elapsed === 3 ? '今天可生成一次 Follow Up 草稿' : `一次 Follow Up 已逾期 ${elapsed - 3} 天，可生成跟进草稿`)
       : '请先检查回复，再决定是否跟进',
   };
 }
@@ -645,6 +645,9 @@ export function OutreachFollowUpTab({ settings, auth, onAuthRefresh }: Props) {
           cooperationType: record.cooperationType,
           cooperationIdea: record.cooperationIdea,
           initialEmail,
+          followUpPrompt: stage === 2
+            ? settings.aiOutreachFollowUp1Prompt
+            : settings.aiOutreachFollowUp2Prompt,
           modelProvider: settings.modelProvider,
           customApiUrl: settings.customApiUrl,
           customApiKey: settings.customApiKey,
@@ -754,12 +757,12 @@ export function OutreachFollowUpTab({ settings, auth, onAuthRefresh }: Props) {
     };
     append('firstOutreach', '初次开发信', '已发');
     if (record.check.outbound.length >= 2) {
-      append('secondOutreachDate', '二次跟进日期', new Date(record.check.outbound[1].date).getTime());
-      append('secondOutreach', '二次跟进开发信', '已发');
+      append('secondOutreachDate', '一次 Follow Up 日期', new Date(record.check.outbound[1].date).getTime());
+      append('secondOutreach', '一次 Follow Up', '已发');
     }
     if (record.check.outbound.length >= 3) {
-      append('thirdOutreachDate', '三次跟进日期', new Date(record.check.outbound[2].date).getTime());
-      append('thirdOutreach', '三次跟进开发信', '已发');
+      append('thirdOutreachDate', '二次 Follow Up 日期', new Date(record.check.outbound[2].date).getTime());
+      append('thirdOutreach', '二次 Follow Up', '已发');
     }
     append('hasReply', '是否回复', record.check.reply ? '已回复' : '未回复');
     if (!fields.length) {
@@ -855,7 +858,7 @@ export function OutreachFollowUpTab({ settings, auth, onAuthRefresh }: Props) {
         <div>
           <h2 className="text-base font-semibold">开发信跟进</h2>
           <p className="mt-1 text-sm text-muted-foreground">
-            第 3 天进行二次跟进，第 7 天进行三次跟进；草稿只保存到 Gmail，实际发送后再手动写回飞书。
+            第 3 天进行一次 Follow Up，第 7 天进行二次 Follow Up；草稿只保存到 Gmail，实际发送后再手动写回飞书。
           </p>
         </div>
         <div className="flex flex-wrap items-center gap-2">
@@ -907,8 +910,8 @@ export function OutreachFollowUpTab({ settings, auth, onAuthRefresh }: Props) {
               <tr className="border-b border-border/70">
                 <th className="px-4 py-3 font-medium">红人</th>
                 <th className="px-4 py-3 font-medium">初次开发信</th>
-                <th className="px-4 py-3 font-medium">二次跟进开发信</th>
-                <th className="px-4 py-3 font-medium">三次跟进开发信</th>
+                <th className="px-4 py-3 font-medium">一次 Follow Up</th>
+                <th className="px-4 py-3 font-medium">二次 Follow Up</th>
                 <th className="px-4 py-3 font-medium">回复情况</th>
                 <th className="px-4 py-3 font-medium">操作</th>
               </tr>
@@ -1043,8 +1046,8 @@ export function OutreachFollowUpTab({ settings, auth, onAuthRefresh }: Props) {
                                   />
                                 </div>
                                 {draft.translatedBody ? (
-                                  <details className="rounded-md border border-border/70 bg-slate-50 px-3 py-2">
-                                    <summary className="cursor-pointer text-xs font-medium text-foreground">查看中文对照</summary>
+                                  <details open className="rounded-md border border-border/70 bg-slate-50 px-3 py-2">
+                                    <summary className="cursor-pointer text-xs font-medium text-foreground">中文对照</summary>
                                     <p className="mt-2 whitespace-pre-wrap text-sm leading-6 text-muted-foreground">{draft.translatedBody}</p>
                                   </details>
                                 ) : null}

@@ -101,6 +101,7 @@ const FLOAT_STORAGE_KEY = 'record-assistant-floating-position';
 const AGENT_RECORD_LIMIT = 140;
 const FLOAT_BUTTON_SIZE = 56;
 const FLOAT_EDGE_GAP = 12;
+const FLOAT_TOP_SAFE_GAP = 76;
 const FLOAT_EDGE_TRIGGER = 28;
 const FLOAT_HIDDEN_OFFSET = 34;
 
@@ -133,8 +134,8 @@ function clampFloatingPosition(position: FloatingPosition, viewportWidth: number
       Math.max(FLOAT_EDGE_GAP, viewportWidth - FLOAT_BUTTON_SIZE - FLOAT_EDGE_GAP),
     ),
     y: Math.min(
-      Math.max(FLOAT_EDGE_GAP, position.y),
-      Math.max(FLOAT_EDGE_GAP, viewportHeight - FLOAT_BUTTON_SIZE - FLOAT_EDGE_GAP),
+      Math.max(FLOAT_TOP_SAFE_GAP, position.y),
+      Math.max(FLOAT_TOP_SAFE_GAP, viewportHeight - FLOAT_BUTTON_SIZE - FLOAT_EDGE_GAP),
     ),
   };
 }
@@ -179,8 +180,8 @@ function snapFloatingPosition(position: FloatingPosition) {
   if (clamped.x >= maxX - FLOAT_EDGE_TRIGGER) {
     return { ...clamped, x: maxX };
   }
-  if (clamped.y <= FLOAT_EDGE_GAP + FLOAT_EDGE_TRIGGER) {
-    return { ...clamped, y: FLOAT_EDGE_GAP };
+  if (clamped.y <= FLOAT_TOP_SAFE_GAP + FLOAT_EDGE_TRIGGER) {
+    return { ...clamped, y: FLOAT_TOP_SAFE_GAP };
   }
   if (clamped.y >= maxY - FLOAT_EDGE_TRIGGER) {
     return { ...clamped, y: maxY };

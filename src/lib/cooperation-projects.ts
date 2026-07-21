@@ -83,6 +83,7 @@ export type CooperationMilestone = {
 export type CooperationProject = {
   id: string;
   channelName: string;
+  email: string;
   channelUrl: string;
   platform: string;
   region: string;
@@ -103,6 +104,7 @@ export type CooperationProject = {
   actualPublishDate?: number;
   shippingAddress: string;
   shippingTracking: string;
+  discountCode: string;
   logisticsNotified: boolean;
   discountNotified: boolean;
   originalCurrencyCost: string;
@@ -124,6 +126,7 @@ const DAY_MS = 24 * 60 * 60 * 1000;
 
 const FIELD_ALIASES: Partial<Record<FeishuFieldKey, string[]>> = {
   channelName: ['红人频道名字', '红人频道名', '频道名称'],
+  email: ['联系邮箱', '邮箱', 'email'],
   channelUrl: ['红人频道主页链接', '频道链接', 'YouTube主页链接'],
   promotionPlatform: ['推广平台'],
   region: ['国家', '地区'],
@@ -142,6 +145,7 @@ const FIELD_ALIASES: Partial<Record<FeishuFieldKey, string[]>> = {
   arrivalDate: ['到货时间'],
   filmingCompleteDate: ['视频拍摄完成时间'],
   shippingTracking: ['运输追踪信息'],
+  discountCode: ['折扣码信息', '折扣码', '优惠码', 'discount'],
   logisticsNotified: ['物流信息已告知'],
   discountNotified: ['折扣信息已告知'],
   actualPublishDate: ['实际上线日期'],
@@ -476,6 +480,7 @@ export function mapFeishuCooperationRecord(
   return {
     id: record.record_id,
     channelName: channelName || '未命名红人',
+    email: mappedText(record, mapping, 'email').toLowerCase(),
     channelUrl: extractUrl(rawMappedValue(record, mapping, 'channelUrl')),
     platform: mappedText(record, mapping, 'promotionPlatform') || '未填写',
     region: mappedText(record, mapping, 'region') || '未填写',
@@ -496,6 +501,7 @@ export function mapFeishuCooperationRecord(
     actualPublishDate,
     shippingAddress: mappedText(record, mapping, 'shippingAddress'),
     shippingTracking,
+    discountCode: mappedText(record, mapping, 'discountCode'),
     logisticsNotified,
     discountNotified,
     originalCurrencyCost: mappedText(record, mapping, 'originalCurrencyCost'),

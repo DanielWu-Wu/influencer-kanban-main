@@ -162,7 +162,7 @@ export function SettingsPanel() {
   return (
     <div className="flex h-full flex-col overflow-hidden">
       {/* 顶部标题栏 - 固定不滚动 */}
-      <div className="mb-4 flex flex-shrink-0 items-center justify-between rounded-lg border border-white/60 bg-white/62 px-4 py-3 shadow-apple backdrop-blur-xl">
+      <div className="material-toolbar mb-4 flex flex-shrink-0 items-center justify-between rounded-xl border border-border/50 px-4 py-3 shadow-[var(--glass-shadow-soft)]">
         <div>
           <h2 className="flex items-center gap-2 text-lg font-semibold">
             <Settings className="w-5 h-5" />
@@ -207,7 +207,7 @@ export function SettingsPanel() {
         />
 
         {/* Gmail 邮件 */}
-        <Card className="overflow-hidden rounded-lg border-white/65 bg-white/66 shadow-apple backdrop-blur-xl">
+        <Card className="overflow-hidden rounded-xl border-border/55 bg-white/84 shadow-[var(--glass-shadow-soft)] backdrop-blur-xl">
           <button
             type="button"
             onClick={() => toggleSection('gmail')}
@@ -297,7 +297,7 @@ export function SettingsPanel() {
         </Card>
 
         {/* 模型 API 设置 */}
-        <Card className="overflow-hidden rounded-lg border-white/65 bg-white/66 shadow-apple backdrop-blur-xl">
+        <Card className="overflow-hidden rounded-xl border-border/55 bg-white/84 shadow-[var(--glass-shadow-soft)] backdrop-blur-xl">
           <button
             type="button"
             onClick={() => toggleSection('model')}
@@ -443,7 +443,7 @@ export function SettingsPanel() {
         </Card>
 
         {/* 品牌信息 */}
-        <Card className="overflow-hidden rounded-lg border-white/65 bg-white/66 shadow-apple backdrop-blur-xl">
+        <Card className="overflow-hidden rounded-xl border-border/55 bg-white/84 shadow-[var(--glass-shadow-soft)] backdrop-blur-xl">
           <button
             type="button"
             onClick={() => toggleSection('brand')}
@@ -508,7 +508,7 @@ export function SettingsPanel() {
         </Card>
 
         {/* 跟进规则 */}
-        <Card className="overflow-hidden rounded-lg border-white/65 bg-white/66 shadow-apple backdrop-blur-xl">
+        <Card className="overflow-hidden rounded-xl border-border/55 bg-white/84 shadow-[var(--glass-shadow-soft)] backdrop-blur-xl">
           <button
             type="button"
             onClick={() => toggleSection('followup')}
@@ -562,7 +562,7 @@ export function SettingsPanel() {
         </Card>
 
         {/* 关于 */}
-        <Card className="overflow-hidden rounded-lg border-white/65 bg-white/66 shadow-apple backdrop-blur-xl">
+        <Card className="overflow-hidden rounded-xl border-border/55 bg-white/84 shadow-[var(--glass-shadow-soft)] backdrop-blur-xl">
           <button
             type="button"
             onClick={() => toggleSection('about')}

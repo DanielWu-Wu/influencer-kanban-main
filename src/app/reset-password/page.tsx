@@ -31,9 +31,9 @@ export default function ResetPasswordPage() {
   };
 
   return (
-    <main className="flex min-h-screen items-center justify-center bg-muted/30 px-6">
-      <form onSubmit={handleSubmit} className="w-full max-w-sm rounded-lg border bg-background p-6 shadow-sm">
-        <div className="mb-6 flex h-10 w-10 items-center justify-center rounded-lg bg-primary/10">
+    <main className="workspace-shell flex min-h-screen items-center justify-center px-6">
+      <form onSubmit={handleSubmit} className="glass-panel-strong w-full max-w-sm rounded-xl border p-6 shadow-[var(--glass-shadow)]">
+        <div className="mb-6 flex h-10 w-10 items-center justify-center rounded-[10px] border border-primary/15 bg-primary/10">
           <LockKeyhole className="h-5 w-5 text-primary" />
         </div>
         <h1 className="text-xl font-semibold">设置新密码</h1>

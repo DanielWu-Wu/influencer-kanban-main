@@ -93,9 +93,9 @@ export function TodoBoard({ todos, onAdd, onToggle, onDelete, onUpdate }: TodoBo
   return (
     <div className="h-full flex flex-col">
       {/* 头部 */}
-      <div className="flex items-center justify-between mb-6">
+      <div className="material-toolbar -mx-1 mb-4 flex items-center justify-between rounded-xl border border-border/50 px-4 py-3 shadow-[var(--glass-shadow-soft)]">
         <div className="flex items-center gap-3">
-          <div className="w-10 h-10 rounded-2xl bg-blue-500 flex items-center justify-center shadow-lg shadow-blue-500/20">
+          <div className="flex h-10 w-10 items-center justify-center rounded-[10px] border border-primary/15 bg-primary shadow-[0_6px_16px_rgba(24,119,242,0.18)]">
             <Sparkles className="w-5 h-5 text-white" />
           </div>
           <div>
@@ -139,8 +139,8 @@ export function TodoBoard({ todos, onAdd, onToggle, onDelete, onUpdate }: TodoBo
             <Card 
               key={todo.id} 
               className={`
-                transition-all duration-200 cursor-pointer
-                hover:shadow-apple-hover hover:-translate-y-0.5
+                cursor-pointer transition-[background-color,border-color,box-shadow] duration-200
+                hover:shadow-apple-hover
                 ${todo.dueDate && isOverdue(todo.dueDate) ? 'border-red-200 bg-red-50/30' : ''}
               `}
               onClick={() => onToggle(todo.id)}

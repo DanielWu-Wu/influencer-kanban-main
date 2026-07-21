@@ -78,11 +78,11 @@ export default function LoginPage() {
   }
 
   return (
-    <main className="grid min-h-screen bg-background lg:grid-cols-[minmax(360px,480px)_1fr]">
-      <section className="flex items-center justify-center border-r px-6 py-10">
-        <div className="w-full max-w-sm">
+    <main className="workspace-shell grid min-h-screen p-3 lg:grid-cols-[minmax(380px,500px)_1fr] lg:p-5">
+      <section className="app-sidebar flex items-center justify-center rounded-xl px-6 py-10">
+        <div className="w-full max-w-sm rounded-xl border border-white/70 bg-white/48 p-6 shadow-[var(--glass-shadow-soft)]">
           <div className="mb-10 flex items-center gap-3">
-            <div className="flex h-10 w-10 items-center justify-center rounded-lg bg-blue-600">
+            <div className="flex h-10 w-10 items-center justify-center rounded-[10px] border border-primary/15 bg-primary shadow-[0_6px_16px_rgba(24,119,242,0.2)]">
               <Sparkles className="h-5 w-5 text-white" />
             </div>
             <div>
@@ -187,13 +187,13 @@ export default function LoginPage() {
         </div>
       </section>
 
-      <section className="hidden items-center justify-center bg-neutral-950 px-12 text-white lg:flex">
+      <section className="material-navigation ml-4 hidden items-center justify-center rounded-xl border border-white/70 px-12 text-foreground shadow-[var(--glass-shadow)] lg:flex">
         <div className="max-w-xl">
-          <p className="text-sm font-medium text-blue-300">一个账号，接着上次继续</p>
+          <p className="text-sm font-medium text-primary">一个账号，接着上次继续</p>
           <h2 className="mt-4 text-4xl font-semibold leading-tight">
             把执行工作留给系统，把时间留给判断和统筹。
           </h2>
-          <div className="mt-10 space-y-5 text-sm text-neutral-300">
+          <div className="mt-10 flex flex-col gap-5 text-sm text-muted-foreground">
             {[
               '产品资料、市场策略和设置自动保存到云端',
               '每个账号的数据通过数据库权限独立隔离',

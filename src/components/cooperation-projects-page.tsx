@@ -42,6 +42,7 @@ import {
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
+import { CooperationEmailActions } from '@/components/cooperation-email-actions';
 import {
   Select,
   SelectContent,
@@ -465,9 +466,11 @@ function ReadonlyCheck({ checked, label }: { checked: boolean; label: string }) 
   );
 }
 
-function ProjectDetail({ project, feishuUrl, onClose }: {
+function ProjectDetail({ project, settings, feishuUrl, onProjectUpdated, onClose }: {
   project: CooperationProject;
+  settings: ReturnType<typeof useSettings>['settings'];
   feishuUrl: string;
+  onProjectUpdated: () => Promise<void>;
   onClose: () => void;
 }) {
   return (
@@ -486,6 +489,7 @@ function ProjectDetail({ project, feishuUrl, onClose }: {
           <h3 className="mb-2 text-sm font-semibold text-slate-900">合作概况</h3>
           <dl>
             <DetailValue label="合作产品" value={project.product} />
+            <DetailValue label="联系邮箱" value={project.email} />
             <DetailValue label="负责人" value={project.owner} />
             <DetailValue label="合作站点" value={project.site} />
             <DetailValue label="合作类型" value={project.cooperationType} />
@@ -545,11 +549,18 @@ function ProjectDetail({ project, feishuUrl, onClose }: {
           <h3 className="mb-2 text-sm font-semibold text-slate-900">物流与发布</h3>
           <dl>
             <DetailValue label="物流信息" value={project.shippingTracking} />
+            <DetailValue label="折扣信息" value={project.discountCode} />
             <DetailValue label="发货地址" value={project.shippingAddress} />
             <DetailValue label="预计上线" value={formatCooperationDate(project.expectedPublishDate)} />
             <DetailValue label="视频链接" value={project.publishedVideoUrl} />
           </dl>
         </section>
+
+        <CooperationEmailActions
+          project={project}
+          settings={settings}
+          onProjectUpdated={onProjectUpdated}
+        />
 
         <section className="py-4">
           <h3 className="mb-2 text-sm font-semibold text-slate-900">下一步与风险</h3>
@@ -639,6 +650,7 @@ export function CooperationProjectsPage({ onOpenSettings }: { onOpenSettings: ()
       setRefreshing(false);
     }
   }, [url]);
+  const refreshProjects = useCallback(() => loadRecords(true), [loadRecords]);
 
   useEffect(() => {
     if (settingsLoading) return;
@@ -707,14 +719,14 @@ export function CooperationProjectsPage({ onOpenSettings }: { onOpenSettings: ()
   }
   if (!url) return <EmptyState onOpenSettings={onOpenSettings} />;
 
-  const missingNewMappings = ['filmingCompleteDate', 'logisticsNotified', 'discountNotified']
+  const missingNewMappings = ['email', 'discountCode', 'filmingCompleteDate', 'logisticsNotified', 'discountNotified']
     .filter((key) => !mapping[key as keyof typeof mapping]).length;
 
   return (
-    <div className="flex h-full min-h-0 overflow-hidden rounded-lg border border-slate-200 bg-white shadow-sm">
+    <div className="app-workbench flex h-full min-h-0 overflow-hidden rounded-xl">
       <div className="flex min-w-0 flex-1 flex-col overflow-hidden">
-        <header className="flex shrink-0 items-center justify-between gap-4 px-5 py-4">
-          <div>
+        <header className="material-toolbar flex shrink-0 flex-col items-stretch gap-3 border-b border-border/45 px-4 py-4 sm:flex-row sm:items-center sm:justify-between sm:gap-4 sm:px-5">
+          <div className="min-w-0">
             <div className="flex items-center gap-2">
               <h1 className="text-xl font-semibold text-slate-950">合作项目</h1>
               <Badge variant="outline" className="rounded-md border-slate-200 bg-slate-50 text-[10px] font-normal text-slate-500">只读</Badge>
@@ -724,7 +736,7 @@ export function CooperationProjectsPage({ onOpenSettings }: { onOpenSettings: ()
               {updatedAt ? ` · ${new Intl.DateTimeFormat('zh-CN', { hour: '2-digit', minute: '2-digit' }).format(updatedAt)} 更新` : ''}
             </p>
           </div>
-          <div className="flex items-center gap-2">
+          <div className="flex shrink-0 items-center gap-2">
             <Button variant="outline" size="sm" className="h-9" disabled={refreshing} onClick={() => void loadRecords(true)}>
               <RefreshCw className={`mr-1.5 h-3.5 w-3.5 ${refreshing ? 'animate-spin' : ''}`} />刷新数据
             </Button>
@@ -746,7 +758,7 @@ export function CooperationProjectsPage({ onOpenSettings }: { onOpenSettings: ()
           </div>
         ) : null}
 
-        <div className="shrink-0 border-b border-slate-200 px-4 py-3">
+        <div className="material-toolbar shrink-0 border-b border-border/55 px-4 py-3">
           <div className="flex flex-wrap items-center gap-2">
             <div className="relative min-w-[220px] flex-1 xl:max-w-[310px]">
               <Search className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-slate-400" />
@@ -822,14 +834,26 @@ export function CooperationProjectsPage({ onOpenSettings }: { onOpenSettings: ()
 
       {selectedProject ? (
         <aside className="hidden h-full w-[390px] shrink-0 border-l border-slate-200 xl:block">
-          <ProjectDetail project={selectedProject} feishuUrl={url} onClose={() => setSelectedProject(undefined)} />
+          <ProjectDetail
+            project={selectedProject}
+            settings={settings}
+            feishuUrl={url}
+            onProjectUpdated={refreshProjects}
+            onClose={() => setSelectedProject(undefined)}
+          />
         </aside>
       ) : null}
 
       {selectedProject ? (
         <div className="fixed inset-0 z-[70] bg-slate-950/20 xl:hidden" onMouseDown={() => setSelectedProject(undefined)}>
           <aside className="ml-auto h-full w-full max-w-[420px] shadow-xl" onMouseDown={(event) => event.stopPropagation()}>
-            <ProjectDetail project={selectedProject} feishuUrl={url} onClose={() => setSelectedProject(undefined)} />
+            <ProjectDetail
+              project={selectedProject}
+              settings={settings}
+              feishuUrl={url}
+              onProjectUpdated={refreshProjects}
+              onClose={() => setSelectedProject(undefined)}
+            />
           </aside>
         </div>
       ) : null}

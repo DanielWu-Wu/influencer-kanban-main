@@ -190,12 +190,12 @@ export default function DashboardPage() {
     });
   };
 
-  const renderNav = () => (
-    <nav className="flex flex-col gap-3">
+  const renderNav = (compact = false) => (
+    <nav className={`flex flex-col ${compact ? 'gap-2' : 'gap-3'}`} aria-label="工作台导航">
       {[label.dailyWork, label.influencerManage, label.tools].map((group, index) => (
-        <div key={group} className="space-y-1">
-          {index > 0 && <div className="mx-2 mb-3 h-px bg-border/70" />}
-          <p className="px-2 text-[11px] font-semibold text-muted-foreground">{group}</p>
+        <div key={group} className="flex flex-col gap-1">
+          {index > 0 && <div className={`${compact ? 'mx-1 mb-1' : 'mx-2 mb-2'} h-px bg-border/60`} />}
+          {!compact && <p className="px-2 text-[11px] font-semibold tracking-[0.025em] text-muted-foreground">{group}</p>}
           {NAV_ITEMS.filter((item) => item.group === group).map((item) => {
             const Icon = item.icon;
             const isActive = currentView === item.id;
@@ -214,26 +214,26 @@ export default function DashboardPage() {
               <button
                 key={item.id}
                 type="button"
+                title={compact ? item.label : undefined}
+                aria-label={compact ? item.label : undefined}
+                data-active={isActive}
                 onClick={() => {
                   setCurrentView(item.id as View);
                   setMobileMenuOpen(false);
                 }}
-                className={`flex h-11 w-full cursor-pointer items-center gap-3 rounded-lg px-3 text-sm font-medium transition-all duration-200 ease-out active:scale-[0.99] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring motion-reduce:transition-none motion-reduce:active:scale-100 ${
-                  isActive
-                    ? 'bg-primary text-primary-foreground shadow-apple hover:bg-primary/95 hover:shadow-apple-hover'
-                    : 'text-muted-foreground hover:bg-white/82 hover:text-foreground hover:shadow-sm'
-                }`}
+                className={`app-nav-item flex h-10 w-full cursor-pointer items-center rounded-lg text-sm font-medium active:scale-[0.985] focus-visible:ring-2 focus-visible:ring-ring/40 motion-reduce:transition-none motion-reduce:active:scale-100 ${compact ? 'justify-center px-0' : 'gap-3 px-3'}`}
               >
                 <Icon className="h-4 w-4 flex-shrink-0" />
-                <span className="flex-1 text-left truncate">{item.label}</span>
-                {badge > 0 && (
+                {!compact && <span className="flex-1 truncate text-left">{item.label}</span>}
+                {!compact && badge > 0 && (
                   <span
-                    className={`inline-flex h-5 min-w-5 items-center justify-center rounded-md px-1.5 text-[10px] font-semibold ${
-                      isActive ? 'bg-white/20 text-white' : 'bg-accent text-muted-foreground'
-                    }`}
+                    className={`inline-flex h-5 min-w-5 items-center justify-center rounded-md px-1.5 text-[10px] font-semibold ${isActive ? 'bg-primary/12 text-primary' : 'bg-white/72 text-muted-foreground'}`}
                   >
                     {badge}
                   </span>
+                )}
+                {compact && badge > 0 && (
+                  <span className="absolute right-1.5 top-1.5 h-1.5 w-1.5 rounded-full bg-primary ring-2 ring-white/80" />
                 )}
               </button>
             );
@@ -245,15 +245,15 @@ export default function DashboardPage() {
 
   return (
     <div className="workspace-shell min-h-screen">
-      <header className="sticky top-0 z-50 border-b border-white/50 bg-white/72 backdrop-blur-xl">
-        <div className="flex h-16 items-center justify-between px-4 md:px-5">
+      <header className="app-topbar sticky top-0 z-50">
+        <div className="flex h-15 items-center justify-between px-4 md:px-5">
           <div className="flex items-center gap-3">
             <Button variant="ghost" size="icon" className="md:hidden" onClick={() => setMobileMenuOpen(true)}>
               <Menu className="w-5 h-5" />
             </Button>
 
             <div className="flex items-center gap-2">
-              <div className="flex h-9 w-9 items-center justify-center rounded-lg bg-primary shadow-apple">
+              <div className="flex h-9 w-9 items-center justify-center rounded-[10px] border border-primary/15 bg-primary shadow-[0_6px_16px_rgba(24,119,242,0.2),inset_0_1px_0_rgba(255,255,255,0.24)]">
                 <Sparkles className="h-4 w-4 text-primary-foreground" />
               </div>
               <div className="hidden sm:block">
@@ -267,7 +267,7 @@ export default function DashboardPage() {
             {stats.todayTodos > 0 && (
               <button
                 onClick={() => setCurrentView('todo')}
-                className="glass-control hidden h-9 cursor-pointer items-center gap-2 rounded-lg px-3 text-sm font-medium text-primary transition-all duration-200 ease-out hover:bg-white/85 hover:shadow-sm active:scale-[0.98] motion-reduce:transition-none motion-reduce:active:scale-100 md:flex"
+                className="glass-control hidden h-9 cursor-pointer items-center gap-2 rounded-lg px-3 text-sm font-medium text-primary transition-[background-color,box-shadow,transform] duration-200 ease-out hover:bg-white/88 hover:shadow-sm active:scale-[0.985] motion-reduce:transition-none motion-reduce:active:scale-100 md:flex"
               >
                 <CheckSquare className="w-4 h-4" />
                 {stats.todayTodos} {label.todo}
@@ -276,7 +276,7 @@ export default function DashboardPage() {
             {stats.upcoming > 0 && (
               <button
                 onClick={() => setCurrentView('reminders')}
-                className="glass-control hidden h-9 cursor-pointer items-center gap-2 rounded-lg px-3 text-sm font-medium text-amber-700 transition-all duration-200 ease-out hover:bg-white/85 hover:shadow-sm active:scale-[0.98] motion-reduce:transition-none motion-reduce:active:scale-100 md:flex"
+                className="glass-control hidden h-9 cursor-pointer items-center gap-2 rounded-lg px-3 text-sm font-medium text-amber-700 transition-[background-color,box-shadow,transform] duration-200 ease-out hover:bg-white/88 hover:shadow-sm active:scale-[0.985] motion-reduce:transition-none motion-reduce:active:scale-100 md:flex"
               >
                 <Bell className="w-4 h-4" />
                 {stats.upcoming} {label.followUps}
@@ -315,17 +315,35 @@ export default function DashboardPage() {
         </div>
       </header>
 
-      <div className="flex p-3 pt-4 md:p-4">
+      <div className="flex p-2.5 pt-3 md:p-3">
         <aside
           id="desktop-sidebar"
-          aria-hidden={sidebarCollapsed}
-          className={`glass-panel-soft sticky top-20 hidden h-[calc(100vh-5rem)] shrink-0 flex-col overflow-hidden rounded-lg transition-[width,transform,opacity,padding] duration-200 ease-out motion-reduce:transition-none md:flex ${
+          className={`app-sidebar sticky top-[4.5rem] hidden h-[calc(100vh-4.75rem)] shrink-0 flex-col overflow-hidden rounded-xl transition-[width,padding] duration-200 ease-out motion-reduce:transition-none md:flex ${
             sidebarCollapsed
-              ? 'pointer-events-none w-0 -translate-x-4 p-0 opacity-0'
-              : 'relative w-60 translate-x-0 p-3 opacity-100'
+              ? 'relative w-13 p-1.5'
+              : 'relative w-56 p-3'
           }`}
         >
-          {!sidebarCollapsed && (
+          {sidebarCollapsed ? (
+            <>
+              <Button
+                type="button"
+                variant="ghost"
+                size="icon-sm"
+                onClick={toggleSidebar}
+                aria-label="展开菜单"
+                aria-controls="desktop-sidebar"
+                aria-expanded={false}
+                title="展开菜单"
+                className="mx-auto mb-2 rounded-lg text-muted-foreground"
+              >
+                <PanelLeftOpen className="h-4 w-4" />
+              </Button>
+              <div className="min-h-0 flex-1 overflow-y-auto overflow-x-hidden">
+                {renderNav(true)}
+              </div>
+            </>
+          ) : (
             <>
               <Button
                 type="button"
@@ -336,19 +354,19 @@ export default function DashboardPage() {
                 aria-controls="desktop-sidebar"
                 aria-expanded
                 title="收起菜单"
-                className="absolute right-2 top-2 z-10 hidden h-7 w-7 rounded-md bg-white/95 shadow-sm md:inline-flex"
+                className="absolute right-2 top-2 z-10 hidden h-7 w-7 rounded-md bg-white/82 shadow-sm md:inline-flex"
               >
                 <PanelLeftClose className="h-4 w-4" />
               </Button>
 
-              <div className="mb-3 rounded-lg border border-white/60 bg-white/55 p-3">
+              <div className="mb-3 rounded-lg border border-white/70 bg-white/52 p-3 shadow-[inset_0_1px_0_rgba(255,255,255,0.72)]">
                 <p className="text-xs font-medium text-muted-foreground">今日作战台</p>
                 <div className="mt-2 grid grid-cols-2 gap-2 text-xs">
-                  <div className="rounded-md bg-white/70 px-2 py-1.5">
+                  <div className="rounded-md bg-white/68 px-2 py-1.5">
                     <p className="text-muted-foreground">待办</p>
                     <p className="text-base font-semibold">{stats.todayTodos}</p>
                   </div>
-                  <div className="rounded-md bg-white/70 px-2 py-1.5">
+                  <div className="rounded-md bg-white/68 px-2 py-1.5">
                     <p className="text-muted-foreground">Gmail</p>
                     <p className="text-base font-semibold">{unreadCount}</p>
                   </div>
@@ -360,22 +378,6 @@ export default function DashboardPage() {
             </>
           )}
         </aside>
-
-        {sidebarCollapsed && (
-          <Button
-            type="button"
-            variant="outline"
-            size="icon"
-            onClick={toggleSidebar}
-            aria-label="展开菜单"
-            aria-controls="desktop-sidebar"
-            aria-expanded={false}
-            title="展开菜单"
-            className="fixed left-0 top-24 z-40 hidden h-9 w-9 rounded-l-none bg-white/95 shadow-md md:inline-flex"
-          >
-            <PanelLeftOpen className="h-4 w-4" />
-          </Button>
-        )}
 
         <Sheet open={mobileMenuOpen} onOpenChange={setMobileMenuOpen}>
           <SheetContent side="left" className="w-72 p-4">
@@ -390,8 +392,8 @@ export default function DashboardPage() {
         </Sheet>
 
         <main
-          className={`ml-0 flex h-[calc(100vh-5rem)] min-h-0 flex-1 flex-col overflow-hidden transition-[margin] duration-200 ease-out motion-reduce:transition-none ${
-            sidebarCollapsed ? 'md:ml-0' : 'md:ml-4'
+          className={`ml-0 flex h-[calc(100vh-4.75rem)] min-h-0 flex-1 flex-col overflow-hidden transition-[margin] duration-200 ease-out motion-reduce:transition-none ${
+            sidebarCollapsed ? 'md:ml-2.5' : 'md:ml-3'
           }`}
         >
           {currentView === 'kanban' && (
@@ -399,7 +401,7 @@ export default function DashboardPage() {
           )}
 
           {currentView === 'list' && (
-            <div className="glass-panel-strong min-h-0 flex-1 rounded-lg p-4">
+            <div className="app-workbench min-h-0 flex-1 rounded-xl p-4">
               {settings.feishuUrl ? (
                 <div className="h-full flex flex-col">
                   <div className="flex items-center justify-between mb-4">
@@ -445,13 +447,13 @@ export default function DashboardPage() {
           )}
 
           {currentView === 'email' && (
-            <div className="glass-panel-strong min-h-0 flex-1 rounded-lg p-4">
+            <div className="app-workbench min-h-0 flex-1 rounded-xl p-4">
               <EmailTemplateManager templates={templates} onCopy={(textToCopy) => navigator.clipboard.writeText(textToCopy)} />
             </div>
           )}
 
           {currentView === 'reminders' && (
-            <div className="glass-panel-strong min-h-0 flex-1 rounded-lg p-4">
+            <div className="app-workbench min-h-0 flex-1 rounded-xl p-4">
               <ReminderPanel
                 reminders={reminders}
                 influencers={influencers}
@@ -463,37 +465,37 @@ export default function DashboardPage() {
           )}
 
           {currentView === 'settings' && (
-            <div className="glass-panel-strong flex min-h-0 flex-1 flex-col overflow-hidden rounded-lg p-4">
+            <div className="app-workbench flex min-h-0 flex-1 flex-col overflow-hidden rounded-xl p-4">
               <SettingsPanel />
             </div>
           )}
 
           {currentView === 'prompts' && (
-            <div className="glass-panel-strong flex min-h-0 flex-1 flex-col overflow-hidden rounded-lg p-4">
+            <div className="app-workbench flex min-h-0 flex-1 flex-col overflow-hidden rounded-xl p-4">
               <PromptManager mode="general" />
             </div>
           )}
 
           {currentView === 'draft-prompts' && (
-            <div className="glass-panel-strong flex min-h-0 flex-1 flex-col overflow-hidden rounded-lg p-4">
+            <div className="app-workbench flex min-h-0 flex-1 flex-col overflow-hidden rounded-xl p-4">
               <PromptManager mode="drafting" />
             </div>
           )}
 
           {currentView === 'todo' && (
-            <div className="glass-panel-strong min-h-0 flex-1 rounded-lg p-4">
+            <div className="app-workbench min-h-0 flex-1 rounded-xl p-4">
               <TodoBoard todos={todos} onAdd={addTodo} onToggle={toggleTodo} onDelete={deleteTodo} onUpdate={updateTodo} />
             </div>
           )}
 
           {currentView === 'calendar' && (
-            <div className="glass-panel-strong min-h-0 flex-1 rounded-lg p-4">
+            <div className="app-workbench min-h-0 flex-1 rounded-xl p-4">
               <WorkCalendar events={events} todos={todos} onAddEvent={addEvent} onDeleteEvent={deleteEvent} />
             </div>
           )}
 
           {currentView === 'prospecting' && (
-            <div className="glass-panel-strong min-h-0 flex-1 overflow-hidden rounded-lg p-4">
+            <div className="app-workbench min-h-0 flex-1 overflow-hidden rounded-xl p-4">
               <CreatorProspectingPage />
             </div>
           )}
@@ -501,7 +503,7 @@ export default function DashboardPage() {
           {(gmailHasMounted || currentView === 'gmail') && (
             <div
               className={currentView === 'gmail'
-                ? 'min-h-0 flex-1 overflow-hidden rounded-lg'
+                ? 'min-h-0 flex-1 overflow-hidden rounded-xl'
                 : 'hidden'}
             >
               <GmailPage active={currentView === 'gmail'} />

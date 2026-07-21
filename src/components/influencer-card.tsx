@@ -66,7 +66,7 @@ export function InfluencerCard({ influencer, onEdit, onDelete, isDragging }: Inf
   return (
     <>
       <Card
-        className={`cursor-pointer rounded-lg border-white/65 bg-white/72 backdrop-blur-xl transition-all duration-200 hover:-translate-y-0.5 hover:bg-white hover:shadow-apple-hover ${
+        className={`cursor-pointer rounded-xl border-border/55 bg-white/84 backdrop-blur-xl transition-[background-color,border-color,box-shadow,opacity] duration-200 hover:bg-white hover:shadow-apple-hover ${
           isDragging ? 'shadow-apple-hover opacity-90' : 'shadow-apple'
         }`}
         onClick={() => setShowDetail(true)}

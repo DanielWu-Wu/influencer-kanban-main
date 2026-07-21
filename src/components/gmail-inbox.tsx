@@ -1248,7 +1248,7 @@ export function GmailInbox({
 
   return (
     <div className="flex h-full min-h-0 flex-col overflow-hidden">
-      <div className="flex shrink-0 items-center justify-between border-b border-white/55 bg-white/62 px-4 py-3 backdrop-blur-xl">
+      <div className="material-toolbar flex shrink-0 items-center justify-between border-b border-border/55 px-4 py-3">
         <div className="flex min-w-0 flex-col">
           <div className="flex min-w-0 items-center gap-2">
             <h2 className="section-title truncate">{MAILBOX_LABELS[mailbox]}</h2>
@@ -1297,7 +1297,7 @@ export function GmailInbox({
         </div>
       </div>
 
-      <div className="shrink-0 border-b border-white/55 bg-white/45 px-3 py-2">
+      <div className="material-toolbar shrink-0 border-b border-border/55 px-3 py-2">
         <div className="relative">
           <Search className="absolute left-3 top-2.5 h-4 w-4 text-muted-foreground" />
           <Input
@@ -1320,12 +1320,12 @@ export function GmailInbox({
       </div>
 
       {mailbox === 'inbox' && (
-        <div className="grid shrink-0 grid-cols-3 border-b border-white/55 bg-white/38">
+        <div className="material-toolbar grid shrink-0 grid-cols-3 border-b border-border/55">
           {CATEGORY_TABS.map(({ id, label, icon: Icon }) => (
             <button
               key={id}
               type="button"
-              className={`flex h-11 cursor-pointer items-center justify-center gap-2 border-b-2 text-sm transition-all duration-200 ease-out active:scale-[0.99] motion-reduce:transition-none motion-reduce:active:scale-100 ${
+              className={`flex h-11 cursor-pointer items-center justify-center gap-2 border-b-2 text-sm transition-[color,background-color,border-color] duration-200 ease-out active:bg-white/75 motion-reduce:transition-none ${
                 category === id
                   ? 'border-primary bg-white/55 font-medium text-primary shadow-[inset_0_-1px_0_var(--primary)] hover:bg-white/70'
                   : 'border-transparent text-muted-foreground hover:bg-white/65 hover:text-foreground'
@@ -1382,8 +1382,8 @@ export function GmailInbox({
                 role="button"
                 tabIndex={0}
                 aria-busy={threadOpening}
-                className={`glass-list-row group cursor-pointer border-b border-white/55 px-3 py-2.5 outline-none transition-all duration-200 ease-out hover:bg-white/72 hover:shadow-sm active:bg-white/85 focus-visible:ring-2 focus-visible:ring-ring/40 motion-reduce:transition-none ${
-                  selectedThreadId === thread.id ? 'bg-white/85 shadow-[inset_3px_0_0_var(--primary)]' : ''
+                className={`glass-list-row group cursor-pointer border-b border-border/45 px-3 py-2.5 outline-none transition-[background-color,box-shadow] duration-200 ease-out hover:bg-white/82 active:bg-white/90 focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring/40 motion-reduce:transition-none ${
+                  selectedThreadId === thread.id ? 'bg-primary/[0.07] shadow-[inset_2px_0_0_var(--primary)]' : ''
                 } ${thread.hasUnread ? 'bg-primary/[0.055]' : ''} ${threadOpening ? 'cursor-wait bg-white/85' : ''}`}
                 onClick={() => handleOpenThread(thread)}
                 onKeyDown={(event) => {

@@ -236,8 +236,8 @@ export function ReminderPanel({
 
       {/* 添加提醒弹窗 */}
       {showAddDialog && (
-        <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50">
-          <Card className="w-full max-w-md mx-4">
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/28 backdrop-blur-[2px]">
+          <Card className="glass-panel-strong mx-4 w-full max-w-md rounded-xl">
             <CardHeader>
               <CardTitle>添加跟进提醒</CardTitle>
             </CardHeader>

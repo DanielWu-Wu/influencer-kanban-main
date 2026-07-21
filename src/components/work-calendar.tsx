@@ -129,9 +129,9 @@ export function WorkCalendar({ events, todos, onAddEvent, onDeleteEvent }: WorkC
   return (
     <div className="h-full flex flex-col">
       {/* 头部 */}
-      <div className="flex items-center justify-between mb-6">
+      <div className="material-toolbar -mx-1 mb-4 flex items-center justify-between rounded-xl border border-border/50 px-4 py-3 shadow-[var(--glass-shadow-soft)]">
         <div className="flex items-center gap-3">
-          <div className="w-10 h-10 rounded-2xl bg-violet-500 flex items-center justify-center shadow-lg shadow-violet-500/20">
+          <div className="flex h-10 w-10 items-center justify-center rounded-[10px] border border-violet-200/70 bg-violet-500 shadow-[0_6px_16px_rgba(139,92,246,0.16)]">
             <Calendar className="w-5 h-5 text-white" />
           </div>
           <div>
@@ -192,8 +192,8 @@ export function WorkCalendar({ events, todos, onAddEvent, onDeleteEvent }: WorkC
                 setShowEventDialog(true);
               }}
               className={`
-                relative p-1 rounded-xl transition-all duration-200 min-h-[60px]
-                ${day.isCurrentMonth ? 'bg-accent/30 hover:bg-accent/50' : 'bg-accent/10'}
+                relative min-h-[60px] rounded-lg border border-transparent p-1 transition-[background-color,border-color,box-shadow] duration-200
+                ${day.isCurrentMonth ? 'bg-white/58 hover:border-border/55 hover:bg-white/88' : 'bg-white/24'}
                 ${isToday ? 'ring-2 ring-blue-500' : ''}
                 ${isSelected ? 'bg-blue-50 ring-2 ring-blue-300' : ''}
                 ${isWeekend && day.isCurrentMonth ? '' : ''}

@@ -19,7 +19,7 @@ export function KanbanColumn({ column, influencers, onEdit, onDelete, isDragging
   return (
     <div
       ref={setNodeRef}
-      className={`glass-panel-soft flex max-h-full w-[260px] flex-shrink-0 flex-col rounded-lg transition-all duration-300 ${
+      className={`glass-panel-soft flex max-h-full w-[260px] flex-shrink-0 flex-col rounded-xl transition-[background-color,border-color,box-shadow,opacity] duration-200 ${
         isOver && isDragging ? 'ring-2 ring-primary/25 bg-primary/5' : ''
       }`}
     >

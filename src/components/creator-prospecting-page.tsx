@@ -2187,11 +2187,11 @@ export function CreatorProspectingPage() {
   }
 
   return (
-    <div className="flex h-full min-h-0 flex-col overflow-hidden rounded-lg border border-white/60 bg-white/60 shadow-apple backdrop-blur-xl">
+    <div className="flex h-full min-h-0 flex-col overflow-hidden">
       <Toaster richColors position="top-center" />
-      <header className="flex flex-wrap items-start justify-between gap-4 border-b border-border/70 px-4 py-3">
+      <header className="material-toolbar flex flex-wrap items-start justify-between gap-4 border-b border-border/55 px-4 py-3">
         <div className="flex items-center gap-3">
-          <div className="flex h-10 w-10 items-center justify-center rounded-lg bg-red-50 text-red-600">
+          <div className="flex h-10 w-10 items-center justify-center rounded-[10px] border border-red-100/80 bg-red-50/85 text-red-600 shadow-sm">
             <Youtube className="h-5 w-5" />
           </div>
           <div>
@@ -2205,7 +2205,7 @@ export function CreatorProspectingPage() {
         </div>
       </header>
 
-      <nav className="flex border-b border-border/70 bg-slate-50/55 px-4" aria-label="红人开发流程">
+      <nav className="material-toolbar flex border-b border-border/55 px-4" aria-label="红人开发流程">
         {TAB_META.map((tab) => {
           const Icon = tab.icon;
           const active = activeTab === tab.id;

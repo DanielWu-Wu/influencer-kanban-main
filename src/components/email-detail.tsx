@@ -908,9 +908,9 @@ export function EmailDetail({ thread, onBack, onThreadUpdated }: EmailDetailProp
   };
 
   return (
-    <div className="flex h-full min-h-0 flex-col overflow-hidden bg-white/30">
+    <div className="material-reading flex h-full min-h-0 flex-col overflow-hidden">
       {/* 头部 */}
-      <div className="flex items-center justify-between border-b border-white/55 bg-white/68 px-4 py-3 backdrop-blur-xl">
+      <div className="material-toolbar flex items-center justify-between border-b border-border/55 px-4 py-3">
         <div className="flex items-center gap-3">
           <Button
             variant="ghost"
@@ -953,14 +953,14 @@ export function EmailDetail({ thread, onBack, onThreadUpdated }: EmailDetailProp
 
       {/* 飞书红人资料 */}
       {(creatorProfileLoading || creatorProfile || creatorProfileError) && (
-        <div className="shrink-0 border-b border-white/55 bg-white/45 px-4 py-3 backdrop-blur-xl">
+        <div className="material-toolbar shrink-0 border-b border-border/55 px-4 py-3">
           {creatorProfileLoading ? (
             <div className="glass-control flex items-center gap-2 px-3 py-2 text-xs text-muted-foreground">
               <Loader2 className="h-3.5 w-3.5 animate-spin" />
               正在匹配飞书红人资料...
             </div>
           ) : creatorProfile ? (
-            <div className="space-y-2 rounded-lg border border-white/65 bg-white/72 px-3 py-2 shadow-apple">
+            <div className="flex flex-col gap-2 rounded-xl border border-border/60 bg-white/82 px-3 py-2 shadow-[var(--glass-shadow-soft)]">
               <div className="flex flex-wrap items-center gap-x-4 gap-y-1 text-sm">
                 <div className="flex min-w-[180px] items-center gap-2 font-medium">
                   <YouTubeChannelAvatar
@@ -1107,10 +1107,10 @@ export function EmailDetail({ thread, onBack, onThreadUpdated }: EmailDetailProp
             return (
               <div key={message.id} className="space-y-3">
                 {/* 邮件头 */}
-                <div 
+                <div
                   className={`
-                    cursor-pointer rounded-lg border p-4 shadow-apple transition-all duration-200
-                    ${isNewest ? 'border-primary/20 bg-primary/5' : 'border-white/65 bg-white/72'}
+                    cursor-pointer rounded-xl border p-4 shadow-[var(--glass-shadow-soft)] transition-[background-color,border-color,box-shadow] duration-200
+                    ${isNewest ? 'border-primary/22 bg-primary/[0.045]' : 'border-border/55 bg-white/92'}
                   `}
                   onClick={() => toggleMessage(message.id)}
                 >
@@ -1246,12 +1246,12 @@ export function EmailDetail({ thread, onBack, onThreadUpdated }: EmailDetailProp
                         </div>
                       ) : displayHtmlBody ? (
                         <div
-                          className="email-html-content max-w-full overflow-hidden rounded-lg border border-white/65 bg-white/85 p-4 text-sm shadow-sm"
+                          className="email-html-content max-w-full overflow-hidden rounded-lg border border-border/55 bg-white p-4 text-sm leading-relaxed shadow-sm"
                           dangerouslySetInnerHTML={{ __html: sanitizeEmailHtml(displayHtmlBody) }}
                         />
                       ) : (
                         <div className="prose prose-sm max-w-none">
-                          <pre className="max-w-full whitespace-pre-wrap break-words rounded-lg border border-white/65 bg-white/75 p-4 font-sans text-sm">
+                          <pre className="max-w-full whitespace-pre-wrap break-words rounded-lg border border-border/55 bg-white p-4 font-sans text-sm leading-relaxed">
                             {displayBody}
                           </pre>
                         </div>
@@ -1310,10 +1310,10 @@ export function EmailDetail({ thread, onBack, onThreadUpdated }: EmailDetailProp
           composerState === 'expanded' && replyMode === 'ai'
             ? 'h-[68dvh] min-h-0 overflow-hidden border-t border-gray-300 bg-white shadow-[0_-8px_24px_rgba(15,23,42,0.08)] sm:h-[min(62dvh,640px)]'
             : composerState === 'expanded'
-              ? 'max-h-[72%] overflow-y-auto border-t border-white/55 bg-white/82 p-4 backdrop-blur-xl'
+              ? 'material-toolbar max-h-[72%] overflow-y-auto border-t border-border/55 p-4'
               : composerState === 'minimized'
                 ? 'border-t border-gray-200 bg-white p-0 shadow-[0_-4px_14px_rgba(15,23,42,0.05)]'
-                : 'border-t border-white/55 bg-white/82 p-4 backdrop-blur-xl'
+                : 'material-toolbar border-t border-border/55 p-4'
         }`}
       >
         {composerState === 'closed' ? (

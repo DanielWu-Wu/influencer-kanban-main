@@ -75,6 +75,10 @@ export interface AppSettings {
   aiAnalysisPrompt?: string;
   aiDraftPrompt?: string;
   aiOutreachPrompt?: string;
+  aiOutreachFollowUp1Prompt?: string;
+  aiOutreachFollowUp2Prompt?: string;
+  aiLogisticsNoticePrompt?: string;
+  aiDiscountNoticePrompt?: string;
   promptTemplates?: PromptTemplate[];
   modelProvider?: 'builtin' | 'custom';
   customApiUrl?: string;
