@@ -484,30 +484,39 @@ function TableConfiguration({
           </div>
 
           <div className="grid gap-2 sm:grid-cols-2">
-            {targets.map((target) => (
-              <div key={target.key} className="space-y-1.5 rounded-md border bg-white/70 p-2.5">
-                <Label className="text-xs">{target.label}</Label>
-                <Select
-                  value={mapping[target.key] || 'none'}
-                  onValueChange={(value) => {
-                    setMapping((current) => ({ ...current, [target.key]: value === 'none' ? undefined : value }));
-                    setSaved(false);
-                  }}
-                >
-                  <SelectTrigger className="h-9 w-full bg-white">
-                    <SelectValue placeholder="选择飞书字段" />
-                  </SelectTrigger>
-                  <SelectContent>
-                    <SelectItem value="none">暂不映射</SelectItem>
-                    {inspection.fields.map((field) => (
-                      <SelectItem key={`${target.key}-${field.field_id}`} value={field.field_name}>
-                        {field.field_name}
+            {targets.map((target) => {
+              const isUnmapped = !mapping[target.key];
+              return (
+                <div key={target.key} className="space-y-1.5 rounded-md border bg-white/70 p-2.5">
+                  <Label className="text-xs">{target.label}</Label>
+                  <Select
+                    value={mapping[target.key] || 'none'}
+                    onValueChange={(value) => {
+                      setMapping((current) => ({ ...current, [target.key]: value === 'none' ? undefined : value }));
+                      setSaved(false);
+                    }}
+                  >
+                    <SelectTrigger
+                      className={`h-9 w-full ${isUnmapped
+                        ? 'border-amber-300 bg-amber-50/90 text-amber-800 hover:bg-amber-50 focus-visible:border-amber-400 focus-visible:ring-amber-200/70 [&>svg]:text-amber-600'
+                        : 'bg-white'}`}
+                    >
+                      <SelectValue placeholder="选择飞书字段" />
+                    </SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="none" className="text-amber-700 focus:bg-amber-50 focus:text-amber-800">
+                        暂不映射
                       </SelectItem>
-                    ))}
-                  </SelectContent>
-                </Select>
-              </div>
-            ))}
+                      {inspection.fields.map((field) => (
+                        <SelectItem key={`${target.key}-${field.field_id}`} value={field.field_name}>
+                          {field.field_name}
+                        </SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
+                </div>
+              );
+            })}
           </div>
 
           {inspection.sampleRecords.length > 0 && (
