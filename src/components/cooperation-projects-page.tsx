@@ -40,6 +40,7 @@ import {
   X,
 } from 'lucide-react';
 import { Badge } from '@/components/ui/badge';
+import { Avatar, AvatarFallback, AvatarImage } from '@/components/ui/avatar';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { CooperationEmailActions } from '@/components/cooperation-email-actions';
@@ -59,6 +60,10 @@ import {
   TableRow,
 } from '@/components/ui/table';
 import { useSettings } from '@/lib/data';
+import {
+  loadCreatorResourceProfiles,
+  matchCreatorResourceProfiles,
+} from '@/lib/creator-resource-profile';
 import { fetchFeishuRecordsCached } from '@/lib/feishu-record-cache';
 import {
   COOPERATION_STAGE_META,
@@ -69,6 +74,10 @@ import {
   type CooperationProject,
   type CooperationStage,
 } from '@/lib/cooperation-projects';
+import {
+  buildChannelAvatarLookup,
+  resolveChannelAvatars,
+} from '@/lib/youtube-channel-avatar';
 
 type ProjectsView = 'list' | 'board' | 'calendar';
 type RiskFilter = 'all' | 'risk' | 'overdue' | 'normal';
@@ -124,16 +133,29 @@ function RiskSummary({ project }: { project: CooperationProject }) {
   );
 }
 
+function ProjectAvatar({ project, compact = false, tiny = false }: {
+  project: CooperationProject;
+  compact?: boolean;
+  tiny?: boolean;
+}) {
+  const initials = project.channelName.trim().slice(0, 2).toUpperCase() || '红';
+  return (
+    <Avatar className={`${tiny ? 'size-4 text-[0]' : compact ? 'size-8 text-[11px]' : 'size-9 text-xs'} ring-1 ring-blue-100`}>
+      {project.avatarUrl ? (
+        <AvatarImage src={project.avatarUrl} alt={`${project.channelName} 频道头像`} className="object-cover" />
+      ) : null}
+      <AvatarFallback className="bg-blue-50 font-semibold text-blue-700">{initials}</AvatarFallback>
+    </Avatar>
+  );
+}
+
 function ProjectIdentity({ project, compact = false }: {
   project: CooperationProject;
   compact?: boolean;
 }) {
-  const initials = project.channelName.trim().slice(0, 2).toUpperCase() || '红';
   return (
     <div className="flex min-w-0 items-center gap-2.5">
-      <div className={`${compact ? 'h-8 w-8 text-[11px]' : 'h-9 w-9 text-xs'} flex shrink-0 items-center justify-center rounded-full bg-blue-50 font-semibold text-blue-700 ring-1 ring-blue-100`}>
-        {initials}
-      </div>
+      <ProjectAvatar project={project} compact={compact} />
       <div className="min-w-0">
         <button
           type="button"
@@ -433,7 +455,10 @@ function ProjectsCalendar({ projects, month, onMonthChange, onSelect }: {
                     className={`block w-full truncate rounded px-1.5 py-1 text-left text-[10px] font-medium hover:ring-1 hover:ring-blue-300 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-500 ${event.colorClass}`}
                     title={`${event.label} · ${event.project.channelName}`}
                   >
-                    {event.label} · {event.project.channelName}
+                    <span className="flex min-w-0 items-center gap-1">
+                      <ProjectAvatar project={event.project} tiny />
+                      <span className="truncate">{event.label} · {event.project.channelName}</span>
+                    </span>
                   </button>
                 ))}
                 {dayEvents.length > 2 ? <p className="px-1 text-[10px] text-slate-500">还有 {dayEvents.length - 2} 项</p> : null}
@@ -629,6 +654,7 @@ export function CooperationProjectsPage({ onOpenSettings }: { onOpenSettings: ()
   const [dateFrom, setDateFrom] = useState('');
   const [dateTo, setDateTo] = useState('');
   const [calendarMonth, setCalendarMonth] = useState(new Date());
+  const [avatarByProjectId, setAvatarByProjectId] = useState<Record<string, string>>({});
 
   const loadRecords = useCallback(async (force = false) => {
     if (!url) {
@@ -657,11 +683,63 @@ export function CooperationProjectsPage({ onOpenSettings }: { onOpenSettings: ()
     void loadRecords(false);
   }, [loadRecords, settingsLoading]);
 
-  const projects = useMemo(
+  const baseProjects = useMemo(
     () => records
       .filter((record) => Object.keys(record.fields).length > 0)
       .map((record) => mapFeishuCooperationRecord(record, mapping)),
     [mapping, records],
+  );
+
+  useEffect(() => {
+    if (!baseProjects.length) {
+      setAvatarByProjectId({});
+      return;
+    }
+    let cancelled = false;
+
+    const enrichAvatars = async () => {
+      const resourceProfiles = await loadCreatorResourceProfiles(settings).catch(() => []);
+      if (cancelled) return;
+      const nextAvatars: Record<string, string> = {};
+      const lookupByProjectId = new Map<string, ReturnType<typeof buildChannelAvatarLookup>>();
+      const lookups = [] as NonNullable<ReturnType<typeof buildChannelAvatarLookup>>[];
+
+      for (const project of baseProjects) {
+        const match = matchCreatorResourceProfiles(project, resourceProfiles);
+        const profileWithAvatar = match.profiles.find((profile) => profile.avatarUrl);
+        if (profileWithAvatar?.avatarUrl) {
+          nextAvatars[project.id] = profileWithAvatar.avatarUrl;
+          continue;
+        }
+        const matchedProfile = match.profiles[0];
+        const lookup = buildChannelAvatarLookup({
+          channelId: matchedProfile?.channelId || project.channelId,
+          channelUrl: matchedProfile?.channelUrl || project.channelUrl,
+        });
+        if (!lookup) continue;
+        lookupByProjectId.set(project.id, lookup);
+        lookups.push(lookup);
+      }
+
+      const resolved = await resolveChannelAvatars(lookups);
+      if (cancelled) return;
+      for (const [projectId, lookup] of lookupByProjectId) {
+        const avatar = lookup ? resolved.get(lookup.key) : undefined;
+        if (avatar?.status === 'ready' && avatar.avatarUrl) nextAvatars[projectId] = avatar.avatarUrl;
+      }
+      setAvatarByProjectId(nextAvatars);
+    };
+
+    void enrichAvatars();
+    return () => { cancelled = true; };
+  }, [baseProjects, settings]);
+
+  const projects = useMemo(
+    () => baseProjects.map((project) => ({
+      ...project,
+      avatarUrl: avatarByProjectId[project.id],
+    })),
+    [avatarByProjectId, baseProjects],
   );
 
   useEffect(() => {
@@ -694,16 +772,12 @@ export function CooperationProjectsPage({ onOpenSettings }: { onOpenSettings: ()
         return true;
       })
       .sort((left, right) => {
-        const leftOverdue = left.risks.some((risk) => risk.level === 'overdue') ? 1 : 0;
-        const rightOverdue = right.risks.some((risk) => risk.level === 'overdue') ? 1 : 0;
-        if (leftOverdue !== rightOverdue) return rightOverdue - leftOverdue;
-        const leftRisk = left.risks.length ? 1 : 0;
-        const rightRisk = right.risks.length ? 1 : 0;
-        if (leftRisk !== rightRisk) return rightRisk - leftRisk;
-        if (left.expectedPublishDate && right.expectedPublishDate) return left.expectedPublishDate - right.expectedPublishDate;
-        if (left.expectedPublishDate) return -1;
-        if (right.expectedPublishDate) return 1;
-        return (right.cooperationDate || 0) - (left.cooperationDate || 0);
+        if (left.stageDate && right.stageDate && left.stageDate !== right.stageDate) {
+          return left.stageDate - right.stageDate;
+        }
+        if (left.stageDate) return -1;
+        if (right.stageDate) return 1;
+        return left.channelName.localeCompare(right.channelName, 'zh-CN');
       });
   }, [dateFrom, dateTo, deferredSearch, ownerFilter, productFilter, projects, riskFilter, siteFilter, stageFilter]);
 
@@ -719,7 +793,7 @@ export function CooperationProjectsPage({ onOpenSettings }: { onOpenSettings: ()
   }
   if (!url) return <EmptyState onOpenSettings={onOpenSettings} />;
 
-  const missingNewMappings = ['email', 'discountCode', 'filmingCompleteDate', 'logisticsNotified', 'discountNotified']
+  const missingNewMappings = ['discountCode', 'filmingCompleteDate', 'logisticsNotified', 'discountNotified']
     .filter((key) => !mapping[key as keyof typeof mapping]).length;
 
   return (

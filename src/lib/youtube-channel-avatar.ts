@@ -23,6 +23,15 @@ type ResolveChannelAvatarOptions = {
   relevanceLanguage?: string;
 };
 
+type ResolvedChannelPayload = {
+  inputUrl?: string;
+  sourceUrl?: string;
+  avatarUrl?: string;
+  thumbnail?: string;
+  url?: string;
+  title?: string;
+};
+
 const CHANNEL_AVATAR_CACHE_PREFIX = 'influencer_ops_youtube_avatar:';
 const CHANNEL_AVATAR_SUCCESS_TTL_MS = 30 * 24 * 60 * 60 * 1000;
 const CHANNEL_AVATAR_FAILURE_TTL_MS = 10 * 60 * 1000;
@@ -99,6 +108,103 @@ function writeChannelAvatarCache(key: string, entry: ChannelAvatarCacheEntry) {
   }
 }
 
+function channelPayloadToAvatar(
+  channel: ResolvedChannelPayload | undefined,
+  fallbackLink: string,
+): ChannelAvatarState | null {
+  const avatarUrl = channel?.avatarUrl || channel?.thumbnail || '';
+  if (!avatarUrl) return null;
+  return {
+    status: 'ready',
+    avatarUrl,
+    channelUrl: channel?.url || channel?.sourceUrl || fallbackLink,
+    title: channel?.title,
+  };
+}
+
+function cacheResolvedAvatar(key: string, avatar: ChannelAvatarState) {
+  writeChannelAvatarCache(key, {
+    status: 'success',
+    avatarUrl: avatar.avatarUrl,
+    channelUrl: avatar.channelUrl,
+    title: avatar.title,
+    expiresAt: Date.now() + CHANNEL_AVATAR_SUCCESS_TTL_MS,
+  });
+}
+
+function cacheFailedAvatar(key: string) {
+  writeChannelAvatarCache(key, {
+    status: 'failed',
+    expiresAt: Date.now() + CHANNEL_AVATAR_FAILURE_TTL_MS,
+  });
+}
+
+export async function resolveChannelAvatars(
+  lookups: ChannelAvatarLookup[],
+  options: ResolveChannelAvatarOptions = {},
+) {
+  const uniqueLookups = Array.from(new Map(lookups.map((lookup) => [lookup.key, lookup])).values());
+  const results = new Map<string, ChannelAvatarState>();
+  const uncached: ChannelAvatarLookup[] = [];
+
+  for (const lookup of uniqueLookups) {
+    const cached = readChannelAvatarCache(lookup.key);
+    if (cached) results.set(lookup.key, cached);
+    else uncached.push(lookup);
+  }
+
+  const chunks: ChannelAvatarLookup[][] = [];
+  for (let index = 0; index < uncached.length; index += 20) {
+    chunks.push(uncached.slice(index, index + 20));
+  }
+
+  for (const chunk of chunks) {
+    try {
+      const response = await fetch('/api/youtube/resolve', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          links: chunk.map((lookup) => lookup.link),
+          maxVideos: 1,
+          includeRecentVideos: false,
+          regionCode: options.regionCode || '',
+          relevanceLanguage: options.relevanceLanguage || '',
+        }),
+      });
+      const payload = await response.json() as {
+        success?: boolean;
+        error?: string;
+        channels?: ResolvedChannelPayload[];
+      };
+      if (!response.ok || !payload.success) throw new Error(payload.error || '频道头像读取失败。');
+
+      const channelsBySource = new Map<string, ResolvedChannelPayload>();
+      for (const channel of payload.channels || []) {
+        for (const value of [channel.inputUrl, channel.sourceUrl]) {
+          if (value) channelsBySource.set(normalizeChannelUrl(value).toLowerCase(), channel);
+        }
+      }
+      for (const lookup of chunk) {
+        const channel = channelsBySource.get(normalizeChannelUrl(lookup.link).toLowerCase());
+        const avatar = channelPayloadToAvatar(channel, lookup.link);
+        if (avatar) {
+          results.set(lookup.key, avatar);
+          cacheResolvedAvatar(lookup.key, avatar);
+        } else {
+          results.set(lookup.key, { status: 'failed' });
+          cacheFailedAvatar(lookup.key);
+        }
+      }
+    } catch {
+      for (const lookup of chunk) {
+        results.set(lookup.key, { status: 'failed' });
+        cacheFailedAvatar(lookup.key);
+      }
+    }
+  }
+  return results;
+}
+
 export async function resolveChannelAvatar(
   lookup: ChannelAvatarLookup,
   options: ResolveChannelAvatarOptions = {},
@@ -137,30 +243,12 @@ export async function resolveChannelAvatar(
         throw new Error(result.error || '频道头像读取失败。');
       }
 
-      const channel = result.channels?.[0];
-      const avatarUrl = channel?.avatarUrl || channel?.thumbnail || '';
-      const channelUrl = channel?.url || channel?.sourceUrl || lookup.link;
-      if (!avatarUrl) throw new Error('频道未返回头像。');
-
-      const avatar: ChannelAvatarState = {
-        status: 'ready',
-        avatarUrl,
-        channelUrl,
-        title: channel?.title,
-      };
-      writeChannelAvatarCache(lookup.key, {
-        status: 'success',
-        avatarUrl,
-        channelUrl,
-        title: avatar.title,
-        expiresAt: Date.now() + CHANNEL_AVATAR_SUCCESS_TTL_MS,
-      });
+      const avatar = channelPayloadToAvatar(result.channels?.[0], lookup.link);
+      if (!avatar) throw new Error('频道未返回头像。');
+      cacheResolvedAvatar(lookup.key, avatar);
       return avatar;
     } catch {
-      writeChannelAvatarCache(lookup.key, {
-        status: 'failed',
-        expiresAt: Date.now() + CHANNEL_AVATAR_FAILURE_TTL_MS,
-      });
+      cacheFailedAvatar(lookup.key);
       return { status: 'failed' as const };
     }
   })().finally(() => {

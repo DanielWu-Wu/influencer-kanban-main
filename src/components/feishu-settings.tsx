@@ -337,8 +337,16 @@ function TableConfiguration({
   const [saved, setSaved] = useState(false);
   const [message, setMessage] = useState('');
   const targets = useMemo(
-    () => FEISHU_FIELD_TARGETS.filter((target) => config.mappingKeys.includes(target.key)),
-    [config.mappingKeys],
+    () => FEISHU_FIELD_TARGETS
+      .filter((target) => config.mappingKeys.includes(target.key))
+      .map((target) => role === 'cooperation' && target.key === 'email'
+        ? {
+            ...target,
+            label: '本次联系邮箱',
+            description: '只保存这次合作实际使用的一个收件邮箱',
+          }
+        : target),
+    [config.mappingKeys, role],
   );
   const mappedCount = targets.filter((target) => Boolean(mapping[target.key])).length;
 

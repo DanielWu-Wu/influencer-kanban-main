@@ -25,7 +25,17 @@ import {
 } from '@/components/ui/alert-dialog';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
+import { Checkbox } from '@/components/ui/checkbox';
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from '@/components/ui/dialog';
 import { Input } from '@/components/ui/input';
+import { RadioGroup, RadioGroupItem } from '@/components/ui/radio-group';
 import { Textarea } from '@/components/ui/textarea';
 import { type AppSettings, useGmailAuth } from '@/lib/data';
 import {
@@ -34,7 +44,13 @@ import {
   stripConfiguredEmailSignature,
   textToEmailHtml,
 } from '@/lib/email-content';
-import { flattenFeishuValue, type CooperationProject } from '@/lib/cooperation-projects';
+import { type CooperationProject } from '@/lib/cooperation-projects';
+import {
+  collectProfileEmails,
+  extractEmailAddresses,
+  loadCreatorResourceProfiles,
+  matchCreatorResourceProfiles,
+} from '@/lib/creator-resource-profile';
 import type { GmailAuth } from '@/lib/types';
 
 type NoticeType = 'logistics' | 'discount';
@@ -72,8 +88,6 @@ type Props = {
   onProjectUpdated: () => Promise<void>;
 };
 
-const EMAIL_PATTERN = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
-
 const NOTICE_META: Record<NoticeType, {
   label: string;
   shortLabel: string;
@@ -94,14 +108,6 @@ const NOTICE_META: Record<NoticeType, {
   },
 };
 
-function normalizeUrl(value: string) {
-  return value.trim().replace(/\/$/, '').toLowerCase();
-}
-
-function mappedText(fields: Record<string, unknown>, fieldName?: string) {
-  return fieldName ? flattenFeishuValue(fields[fieldName]).trim() : '';
-}
-
 function isGmailAuthError(error: unknown) {
   return /UNAUTHENTICATED|invalid authentication|invalid credentials|OAuth|access token|401|authError/i.test(
     error instanceof Error ? error.message : String(error || ''),
@@ -113,53 +119,22 @@ function replySubject(subject: string) {
   return /^re:/i.test(clean) ? clean : `Re: ${clean}`;
 }
 
-async function resolveResourceEmail(project: CooperationProject, settings: AppSettings) {
-  if (EMAIL_PATTERN.test(project.email)) return project.email.toLowerCase();
-  const url = settings.feishuUrl;
-  const mapping = settings.feishuFieldMapping || {};
-  if (!url || !mapping.email || (!mapping.channelUrl && !mapping.channelName)) return '';
-
-  const fieldNames = Array.from(new Set([
-    mapping.email,
-    mapping.channelUrl,
-    mapping.channelName,
-  ].filter(Boolean))) as string[];
-  const exactUrl = normalizeUrl(project.channelUrl);
-  const exactName = project.channelName.trim().toLowerCase();
-  const urlMatches = new Set<string>();
-  const nameMatches = new Set<string>();
-  let pageToken = '';
-
-  for (let page = 0; page < 10; page += 1) {
-    const response = await fetch('/api/feishu/records', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        action: 'search',
-        url,
-        pageSize: 500,
-        pageToken,
-        fieldNames,
-      }),
-    });
-    const result = await response.json();
-    if (!response.ok || !result.success) break;
-    const items = (result.data?.items || []) as Array<{ fields: Record<string, unknown> }>;
-    for (const item of items) {
-      const email = mappedText(item.fields, mapping.email).toLowerCase();
-      if (!EMAIL_PATTERN.test(email)) continue;
-      const channelUrl = normalizeUrl(mappedText(item.fields, mapping.channelUrl));
-      const channelName = mappedText(item.fields, mapping.channelName).toLowerCase();
-      if (exactUrl && channelUrl === exactUrl) urlMatches.add(email);
-      if (exactName && channelName === exactName) nameMatches.add(email);
-    }
-    if (!result.data?.has_more || !result.data?.page_token) break;
-    pageToken = String(result.data.page_token);
+async function resolveRecipientOptions(project: CooperationProject, settings: AppSettings) {
+  const projectEmails = extractEmailAddresses(project.email);
+  if (projectEmails.length === 1) {
+    return { confirmedEmail: projectEmails[0], emails: projectEmails, ambiguous: false };
+  }
+  if (projectEmails.length > 1) {
+    return { confirmedEmail: '', emails: projectEmails, ambiguous: false };
   }
 
-  if (urlMatches.size === 1) return [...urlMatches][0];
-  if (urlMatches.size > 1) return '';
-  return nameMatches.size === 1 ? [...nameMatches][0] : '';
+  const profiles = await loadCreatorResourceProfiles(settings);
+  const match = matchCreatorResourceProfiles(project, profiles);
+  return {
+    confirmedEmail: '',
+    emails: collectProfileEmails(match.profiles),
+    ambiguous: match.ambiguous,
+  };
 }
 
 export function CooperationEmailActions({ project, settings, onProjectUpdated }: Props) {
@@ -167,11 +142,22 @@ export function CooperationEmailActions({ project, settings, onProjectUpdated }:
   const [draft, setDraft] = useState<NoticeDraft | null>(null);
   const [confirmDraftOpen, setConfirmDraftOpen] = useState(false);
   const [confirmSentOpen, setConfirmSentOpen] = useState(false);
+  const [recipientSelection, setRecipientSelection] = useState<{
+    type: NoticeType;
+    emails: string[];
+  } | null>(null);
+  const [selectedRecipient, setSelectedRecipient] = useState('');
+  const [persistRecipient, setPersistRecipient] = useState(true);
+  const [savingRecipient, setSavingRecipient] = useState(false);
+  const [resolvingRecipientType, setResolvingRecipientType] = useState<NoticeType | null>(null);
 
   useEffect(() => {
     setDraft(null);
     setConfirmDraftOpen(false);
     setConfirmSentOpen(false);
+    setRecipientSelection(null);
+    setSelectedRecipient('');
+    setResolvingRecipientType(null);
   }, [project.id]);
 
   const refreshGmailAuth = async () => {
@@ -217,16 +203,11 @@ export function CooperationEmailActions({ project, settings, onProjectUpdated }:
     }
   };
 
-  const generateNotice = async (type: NoticeType) => {
-    const missingCore = type === 'logistics' ? !project.shippingTracking : !project.discountCode;
-    if (missingCore) {
-      toast.error(type === 'logistics' ? '请先补充运输追踪信息。' : '请先补充折扣码信息。');
-      return;
-    }
+  const generateNoticeForRecipient = async (type: NoticeType, recipient: string) => {
     setDraft({
       type,
       status: 'generating',
-      recipient: '',
+      recipient,
       subject: '',
       body: '',
       translatedBody: '',
@@ -234,12 +215,7 @@ export function CooperationEmailActions({ project, settings, onProjectUpdated }:
       riskNotes: [],
       missingInfo: [],
     });
-
     try {
-      const recipient = await resolveResourceEmail(project, settings);
-      if (!recipient) {
-        throw new Error('无法唯一确认红人邮箱。请在详细合作记录表映射联系邮箱，或确认资源库中的频道资料唯一。');
-      }
       const historyMessages = await loadContactHistory(recipient);
       const validHistory = historyMessages.filter((message) => !message.automated && !message.deliveryFailure);
       const thread = validHistory.at(-1);
@@ -294,6 +270,63 @@ export function CooperationEmailActions({ project, settings, onProjectUpdated }:
         error: error instanceof Error ? error.message : '生成告知邮件失败。',
       } : null);
     }
+  };
+
+  const generateNotice = async (type: NoticeType) => {
+    const missingCore = type === 'logistics' ? !project.shippingTracking : !project.discountCode;
+    if (missingCore) {
+      toast.error(type === 'logistics' ? '请先补充运输追踪信息。' : '请先补充折扣码信息。');
+      return;
+    }
+    setDraft(null);
+    setResolvingRecipientType(type);
+    try {
+      const options = await resolveRecipientOptions(project, settings);
+      if (options.confirmedEmail) {
+        await generateNoticeForRecipient(type, options.confirmedEmail);
+        return;
+      }
+      if (options.ambiguous) throw new Error('频道名称对应多条不同红人资料，请补充或映射 Channel ID、频道链接后再试。');
+      if (!options.emails.length) throw new Error('没有找到可用邮箱，请检查红人信息数据库中的频道资料和联系邮箱。');
+      setRecipientSelection({ type, emails: options.emails });
+      setSelectedRecipient(options.emails[0]);
+      setPersistRecipient(true);
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : '确认红人邮箱失败。');
+    } finally {
+      setResolvingRecipientType(null);
+    }
+  };
+
+  const confirmRecipient = async () => {
+    if (!recipientSelection || !selectedRecipient) return;
+    const { type } = recipientSelection;
+    const fieldName = settings.feishuCooperationFieldMapping?.email;
+    const canPersist = Boolean(settings.feishuCooperationUrl && fieldName);
+    setSavingRecipient(true);
+    if (persistRecipient && canPersist) {
+      try {
+        const response = await fetch('/api/feishu/records', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            action: 'update',
+            url: settings.feishuCooperationUrl,
+            recordId: project.id,
+            fields: { [fieldName!]: selectedRecipient },
+          }),
+        });
+        const result = await response.json();
+        if (!response.ok || !result.success) throw new Error(String(result.error || '保存本次联系邮箱失败。'));
+        toast.success('已保存为本次合作联系邮箱。');
+        await onProjectUpdated();
+      } catch (error) {
+        toast.warning(`${error instanceof Error ? error.message : '保存本次联系邮箱失败。'} 本次仍将使用所选邮箱生成草稿。`);
+      }
+    }
+    setRecipientSelection(null);
+    setSavingRecipient(false);
+    await generateNoticeForRecipient(type, selectedRecipient);
   };
 
   const createGmailDraft = async (accessToken: string) => {
@@ -399,6 +432,9 @@ export function CooperationEmailActions({ project, settings, onProjectUpdated }:
   const alreadyNotified = draft?.type === 'logistics'
     ? project.logisticsNotified
     : project.discountNotified;
+  const canPersistRecipient = Boolean(
+    settings.feishuCooperationUrl && settings.feishuCooperationFieldMapping?.email,
+  );
 
   return (
     <section className="border-b border-slate-200 py-4">
@@ -412,7 +448,7 @@ export function CooperationEmailActions({ project, settings, onProjectUpdated }:
           const Icon = meta.icon;
           const missingCore = type === 'logistics' ? !project.shippingTracking : !project.discountCode;
           const notified = type === 'logistics' ? project.logisticsNotified : project.discountNotified;
-          const loading = draft?.type === type && draft.status === 'generating';
+          const loading = (draft?.type === type && draft.status === 'generating') || resolvingRecipientType === type;
           return (
             <Button
               key={type}
@@ -526,6 +562,55 @@ export function CooperationEmailActions({ project, settings, onProjectUpdated }:
           )}
         </div>
       ) : null}
+
+      <Dialog
+        open={Boolean(recipientSelection)}
+        onOpenChange={(open) => {
+          if (!open && !savingRecipient) setRecipientSelection(null);
+        }}
+      >
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>选择本次合作联系邮箱</DialogTitle>
+            <DialogDescription>
+              红人信息数据库中找到多个邮箱。请选择这次合作实际使用的收件人，系统不会自行决定。
+            </DialogDescription>
+          </DialogHeader>
+          <RadioGroup value={selectedRecipient} onValueChange={setSelectedRecipient}>
+            {recipientSelection?.emails.map((email) => (
+              <label
+                key={email}
+                className="flex cursor-pointer items-center gap-3 rounded-lg border border-border bg-background px-3 py-3 text-sm hover:bg-muted/50"
+              >
+                <RadioGroupItem value={email} />
+                <span className="min-w-0 flex-1 truncate font-medium">{email}</span>
+              </label>
+            ))}
+          </RadioGroup>
+          <label className={`flex items-start gap-3 rounded-lg border px-3 py-3 ${canPersistRecipient ? 'cursor-pointer bg-muted/30' : 'bg-muted/20 opacity-70'}`}>
+            <Checkbox
+              checked={canPersistRecipient && persistRecipient}
+              disabled={!canPersistRecipient || savingRecipient}
+              onCheckedChange={(checked) => setPersistRecipient(checked === true)}
+            />
+            <span className="text-sm">
+              <span className="block font-medium">保存为本次合作邮箱</span>
+              <span className="mt-1 block text-xs leading-5 text-muted-foreground">
+                {canPersistRecipient
+                  ? '确认后写入详细合作记录；以后该合作优先使用这个邮箱。'
+                  : '尚未映射详细合作记录的“联系邮箱”，本次可以临时使用，但不会保存。'}
+              </span>
+            </span>
+          </label>
+          <DialogFooter>
+            <Button variant="outline" disabled={savingRecipient} onClick={() => setRecipientSelection(null)}>取消</Button>
+            <Button disabled={!selectedRecipient || savingRecipient} onClick={() => void confirmRecipient()}>
+              {savingRecipient ? <Loader2 className="animate-spin" /> : <MailCheck />}
+              {canPersistRecipient && persistRecipient ? '保存邮箱并生成' : '使用该邮箱生成'}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
 
       <AlertDialog open={confirmDraftOpen} onOpenChange={setConfirmDraftOpen}>
         <AlertDialogContent>

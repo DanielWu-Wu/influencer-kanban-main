@@ -85,6 +85,9 @@ export type CooperationProject = {
   channelName: string;
   email: string;
   channelUrl: string;
+  channelId: string;
+  avatarUrl?: string;
+  emailCandidates?: string[];
   platform: string;
   region: string;
   product: string;
@@ -128,6 +131,7 @@ const FIELD_ALIASES: Partial<Record<FeishuFieldKey, string[]>> = {
   channelName: ['红人频道名字', '红人频道名', '频道名称'],
   email: ['联系邮箱', '邮箱', 'email'],
   channelUrl: ['红人频道主页链接', '频道链接', 'YouTube主页链接'],
+  channelId: ['YouTube Channel ID', '频道ID', '频道 ID'],
   promotionPlatform: ['推广平台'],
   region: ['国家', '地区'],
   followers: ['粉丝量', '粉丝数'],
@@ -482,6 +486,7 @@ export function mapFeishuCooperationRecord(
     channelName: channelName || '未命名红人',
     email: mappedText(record, mapping, 'email').toLowerCase(),
     channelUrl: extractUrl(rawMappedValue(record, mapping, 'channelUrl')),
+    channelId: mappedText(record, mapping, 'channelId'),
     platform: mappedText(record, mapping, 'promotionPlatform') || '未填写',
     region: mappedText(record, mapping, 'region') || '未填写',
     product: product || '未填写合作产品',
