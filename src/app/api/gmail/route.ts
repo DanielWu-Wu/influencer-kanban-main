@@ -151,6 +151,9 @@ function parseHistoryMessage(message: Record<string, unknown>) {
   return {
     id: String(message.id || ''),
     threadId: String(message.threadId || ''),
+    labelIds: Array.isArray(message.labelIds)
+      ? message.labelIds.map((label) => String(label || ''))
+      : [],
     rfcMessageId: getHeader(headers, 'Message-ID'),
     references: getHeader(headers, 'References'),
     subject: getHeader(headers, 'Subject') || '无主题',
@@ -338,7 +341,10 @@ export async function GET(request: NextRequest) {
       const allOutbound = timeline.filter((message) => {
         const sender = getEmailAddress(message.from);
         const recipients = message.to.toLowerCase();
-        return sender !== contactEmail && recipients.includes(contactEmail);
+        return message.labelIds.includes('SENT')
+          && !message.labelIds.includes('DRAFT')
+          && sender !== contactEmail
+          && recipients.includes(contactEmail);
       });
       const incoming = timeline.filter((message) => getEmailAddress(message.from) === contactEmail);
       const deliveryFailures = timeline.filter((message) => message.deliveryFailure);
