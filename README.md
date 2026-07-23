@@ -144,4 +144,5 @@ C:\Users\Admin\.cache\codex-runtimes\codex-primary-runtime\dependencies\node\bin
 C:\Users\Admin\.cache\codex-runtimes\codex-primary-runtime\dependencies\node\bin\node.exe node_modules\eslint\bin\eslint.js <相关文件>
 ```
 
-更完整的当前交接请看 `HANDOFF.md`。
+更完整的当前交接请看 `docs/HANDOFF.md`。根目录 `HANDOFF.md`、`PROJECT_HANDOFF.md`
+和 `docs/AI_HANDOFF.md` 仅保留历史背景。

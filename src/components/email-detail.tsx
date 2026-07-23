@@ -11,7 +11,7 @@ import {
   Copy, Sparkles, ChevronDown, Loader2,
   Paperclip, Download, Forward, Mail, MailOpen,
   Database, Save, CheckCircle2, XCircle,
-  Maximize2, X,
+  ExternalLink, Maximize2, X,
 } from 'lucide-react';
 import { EmailComposer } from './email-composer';
 import { NewEmailComposer } from './new-email-composer';
@@ -27,6 +27,8 @@ import {
 import { normalizeEmail, type RecordAssistantLog } from '@/lib/record-assistant';
 import {
   buildChannelAvatarLookup,
+  channelAvatarLookupPriority,
+  getDirectYouTubeChannelUrl,
   readChannelAvatarCache,
   resolveChannelAvatar,
   type ChannelAvatarState,
@@ -333,6 +335,7 @@ export function EmailDetail({ thread, onBack, onThreadUpdated }: EmailDetailProp
   const { appendLog } = useRecordAssistant();
   const displayMessages = useMemo(() => sortMessagesNewestFirst(thread.messages), [thread.messages]);
   const newestDisplayMessageId = displayMessages[0]?.id || '';
+  const creatorYouTubeChannelUrl = getDirectYouTubeChannelUrl(creatorProfile);
 
   useEffect(() => {
     setExpandedMessages(new Set(newestDisplayMessageId ? [newestDisplayMessageId] : []));
@@ -363,16 +366,29 @@ export function EmailDetail({ thread, onBack, onThreadUpdated }: EmailDetailProp
 
       try {
         const records = await fetchFeishuRecordsCached(activeFeishuUrl);
-        const matched = records
+        const matches = records
           .map((record) => {
             const emailValue = stringifyFeishuValue(record.fields[activeEmailField]);
             const emails = extractEmails(emailValue);
             const matchedEmail = profileContactEmails.find((email) => emails.includes(email));
-            return matchedEmail
-              ? { record, matchedEmail }
+            const profile = matchedEmail
+              ? {
+                  channelName: getMappedFeishuValue(record, mapping, 'channelName') || '未填写频道名',
+                  channelUrl: getMappedFeishuValue(record, mapping, 'channelUrl'),
+                  channelId: getMappedFeishuValue(record, mapping, 'channelId'),
+                }
+              : null;
+            return matchedEmail && profile
+              ? { record, matchedEmail, profile }
               : null;
           })
-          .find(Boolean);
+          .filter((item): item is NonNullable<typeof item> => Boolean(item));
+        const matched = matches.reduce<(typeof matches)[number] | null>((best, candidate) => (
+          !best
+          || channelAvatarLookupPriority(candidate.profile) > channelAvatarLookupPriority(best.profile)
+            ? candidate
+            : best
+        ), null);
 
         if (cancelled) return;
 
@@ -387,9 +403,9 @@ export function EmailDetail({ thread, onBack, onThreadUpdated }: EmailDetailProp
           recordId: matchedRecord.record_id,
           email: matched.matchedEmail,
           matchedBy: `邮箱：${matched.matchedEmail}`,
-          channelName: getMappedFeishuValue(matchedRecord, mapping, 'channelName') || '未填写频道名',
-          channelUrl: getMappedFeishuValue(matchedRecord, mapping, 'channelUrl'),
-          channelId: getMappedFeishuValue(matchedRecord, mapping, 'channelId'),
+          channelName: matched.profile.channelName,
+          channelUrl: matched.profile.channelUrl,
+          channelId: matched.profile.channelId,
           region: getMappedFeishuValue(matchedRecord, mapping, 'region') || '未填写',
           platform: getMappedFeishuValue(matchedRecord, mapping, 'platform') || '未填写',
           followers: getMappedFeishuValue(matchedRecord, mapping, 'followers') || '未填写',
@@ -969,6 +985,24 @@ export function EmailDetail({ thread, onBack, onThreadUpdated }: EmailDetailProp
                     size="sm"
                   />
                   <span className="truncate">{creatorProfile.channelName}</span>
+                  {creatorYouTubeChannelUrl && (
+                    <Button
+                      asChild
+                      variant="ghost"
+                      size="icon"
+                      className="size-7 shrink-0 rounded-md text-primary hover:bg-primary/10 hover:text-primary"
+                    >
+                      <a
+                        href={creatorYouTubeChannelUrl}
+                        target="_blank"
+                        rel="noopener noreferrer"
+                        aria-label={`打开 ${creatorProfile.channelName} 的 YouTube 频道`}
+                        title="打开 YouTube 频道"
+                      >
+                        <ExternalLink className="size-3.5" />
+                      </a>
+                    </Button>
+                  )}
                 </div>
                 <span className="text-xs text-muted-foreground">
                   地区：<span className="text-foreground">{creatorProfile.region}</span>

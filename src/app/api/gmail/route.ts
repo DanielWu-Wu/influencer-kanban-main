@@ -1,5 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { repairTextEncoding } from '@/lib/email-text';
+import { classifyFollowUpConversation } from '@/lib/outreach-follow-up';
+import { containsIgnoredGmailContactEmail } from '@/lib/gmail-thread-contact';
 
 type GmailHeader = { name: string; value: string };
 type InlineImagePayload = {
@@ -333,7 +335,7 @@ export async function GET(request: NextRequest) {
         .filter((message): message is NonNullable<typeof message> => Boolean(message))
         .filter((message) => new Date(message.date || 0).getTime() >= sentAt)
         .sort((a, b) => new Date(a.date || 0).getTime() - new Date(b.date || 0).getTime());
-      const outbound = timeline.filter((message) => {
+      const allOutbound = timeline.filter((message) => {
         const sender = getEmailAddress(message.from);
         const recipients = message.to.toLowerCase();
         return sender !== contactEmail && recipients.includes(contactEmail);
@@ -342,12 +344,17 @@ export async function GET(request: NextRequest) {
       const deliveryFailures = timeline.filter((message) => message.deliveryFailure);
       const automatedReplies = incoming.filter((message) => message.automated && !message.deliveryFailure);
       const humanReplies = incoming.filter((message) => !message.automated && !message.deliveryFailure);
-      const latestReply = humanReplies.at(-1);
+      const {
+        outboundBeforeReply,
+        humanRepliesAfterOutreach,
+      } = classifyFollowUpConversation(allOutbound, humanReplies);
+      const latestReply = humanRepliesAfterOutreach.at(-1);
 
       return NextResponse.json({
         success: true,
         data: {
-          outbound: outbound.slice(0, 3),
+          // 红人首次人工回复后的我方邮件属于正常对话，不占用 Follow Up 次数。
+          outbound: outboundBeforeReply.slice(0, 3),
           reply: latestReply || null,
           automatedReply: automatedReplies.at(-1) || null,
           deliveryFailure: deliveryFailures.at(-1) || null,
@@ -428,6 +435,12 @@ export async function POST(request: NextRequest) {
     }
 
     if (action === 'draft') {
+      if (containsIgnoredGmailContactEmail(String(to || ''))) {
+        return NextResponse.json(
+          { error: '系统已阻止创建发给 Mailsuite/Mailtrack 通知邮箱的草稿，请重新确认真实红人邮箱。' },
+          { status: 400 },
+        );
+      }
       // 创建草稿
       const commonHeaders = [
         `To: ${sanitizeHeaderValue(String(to || ''))}`,

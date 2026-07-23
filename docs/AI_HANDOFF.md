@@ -1,5 +1,7 @@
 # AI Handoff
 
+> Historical reference only. The current handoff source of truth is `docs/HANDOFF.md`.
+
 ## Project Goal
 
 This project is a workflow console for overseas influencer marketing operations.

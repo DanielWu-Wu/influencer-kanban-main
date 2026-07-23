@@ -187,7 +187,7 @@ function mappedSentCount(record: FollowUpRecord) {
 }
 
 function effectiveSentCount(record: FollowUpRecord) {
-  return Math.max(mappedSentCount(record), record.check?.outbound.length || 0);
+  return record.check ? record.check.outbound.length : mappedSentCount(record);
 }
 
 function unsyncedGmailStage(record: FollowUpRecord): FollowUpStage | null {
@@ -858,7 +858,7 @@ export function OutreachFollowUpTab({ settings, auth, onAuthRefresh }: Props) {
         <div>
           <h2 className="text-base font-semibold">开发信跟进</h2>
           <p className="mt-1 text-sm text-muted-foreground">
-            第 3 天进行一次 Follow Up，第 7 天进行二次 Follow Up；草稿只保存到 Gmail，实际发送后再手动写回飞书。
+            第 3 天进行一次 Follow Up，第 7 天进行二次 Follow Up；红人回复后的正常往来不计入 Follow Up。
           </p>
         </div>
         <div className="flex flex-wrap items-center gap-2">
@@ -951,15 +951,15 @@ export function OutreachFollowUpTab({ settings, auth, onAuthRefresh }: Props) {
                       <td className="px-4 py-4">
                         <StageCell
                           label="第 3 天"
-                          sentAt={record.secondOutreachDate || record.check?.outbound[1]?.date}
-                          sent={isSent(record.secondOutreach)}
+                          sentAt={record.check ? record.check.outbound[1]?.date : record.secondOutreachDate}
+                          sent={record.check ? Boolean(record.check.outbound[1]) : isSent(record.secondOutreach)}
                         />
                       </td>
                       <td className="px-4 py-4">
                         <StageCell
                           label="第 7 天"
-                          sentAt={record.thirdOutreachDate || record.check?.outbound[2]?.date}
-                          sent={isSent(record.thirdOutreach)}
+                          sentAt={record.check ? record.check.outbound[2]?.date : record.thirdOutreachDate}
+                          sent={record.check ? Boolean(record.check.outbound[2]) : isSent(record.thirdOutreach)}
                         />
                       </td>
                       <td className="px-4 py-4"><StatusCell record={record} /></td>

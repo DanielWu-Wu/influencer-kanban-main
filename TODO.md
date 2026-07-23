@@ -104,4 +104,5 @@
 - YouTube API 额度有限，批量头像/频道解析要控制请求量。
 - 产品主图使用现有字段保存压缩预览，长期不适合大型素材管理。
 - 当前部分状态仍依赖本地/云设置混合存储，后续多人协作可能需要更完整的数据模型。
-- `HANDOFF.md` 是当前最新交接入口；`docs/AI_HANDOFF.md` 与 `PROJECT_HANDOFF.md` 已作为历史补充，未来需要时再同步重点信息。
+- `docs/HANDOFF.md` 是当前唯一现役交接入口；根目录 `HANDOFF.md`、`PROJECT_HANDOFF.md`
+  与 `docs/AI_HANDOFF.md` 只作为历史补充。

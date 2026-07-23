@@ -4,6 +4,18 @@ const IGNORED_CONTACT_EMAILS = new Set([
   'notification@mailsuite.com',
 ]);
 
+const IGNORED_NOTIFICATION_DOMAINS = new Set([
+  'mailsuite.com',
+  'mailtrack.io',
+]);
+
+const IGNORED_NOTIFICATION_LOCAL_PARTS = new Set([
+  'notification',
+  'notifications',
+  'no-reply',
+  'noreply',
+]);
+
 export function normalizeThreadContactEmail(value?: string): string {
   const email = value?.match(/<([^>]+)>/)?.[1] || value || '';
   return email.trim().replace(/^mailto:/i, '').toLowerCase();
@@ -21,13 +33,32 @@ function extractThreadContactEmails(value?: string): string[] {
     .filter(Boolean);
 }
 
+export function isIgnoredGmailContactEmail(value?: string): boolean {
+  const email = normalizeThreadContactEmail(value);
+  if (!email) return false;
+  if (IGNORED_CONTACT_EMAILS.has(email)) return true;
+
+  const separatorIndex = email.lastIndexOf('@');
+  if (separatorIndex <= 0) return false;
+  const localPart = email.slice(0, separatorIndex);
+  const domain = email.slice(separatorIndex + 1);
+  return (
+    IGNORED_NOTIFICATION_DOMAINS.has(domain)
+    && IGNORED_NOTIFICATION_LOCAL_PARTS.has(localPart)
+  );
+}
+
+export function containsIgnoredGmailContactEmail(value?: string): boolean {
+  return extractThreadContactEmails(value).some(isIgnoredGmailContactEmail);
+}
+
 export function isIgnoredGmailThreadSender(value?: string): boolean {
   const emails = extractThreadContactEmails(value);
-  return emails.length > 0 && emails.every((email) => IGNORED_CONTACT_EMAILS.has(email));
+  return emails.length > 0 && emails.every(isIgnoredGmailContactEmail);
 }
 
 function isEligibleContactEmail(email: string, ownEmail: string) {
-  return Boolean(email && email !== ownEmail && !IGNORED_CONTACT_EMAILS.has(email));
+  return Boolean(email && email !== ownEmail && !isIgnoredGmailContactEmail(email));
 }
 
 export type GmailThreadContact = {
@@ -48,6 +79,8 @@ export function getGmailThreadContact(
 
   for (let index = thread.messages.length - 1; index >= 0; index -= 1) {
     const candidateMessage = thread.messages[index];
+    const isSentMessage = candidateMessage.labels.includes('SENT');
+    if (isSentMessage) continue;
     const eligibleSenders = extractThreadContactEmails(candidateMessage.from)
       .filter((email) => isEligibleContactEmail(email, normalizedOwnEmail));
 
@@ -60,7 +93,15 @@ export function getGmailThreadContact(
   }
 
   for (let index = thread.messages.length - 1; index >= 0; index -= 1) {
-    extractThreadContactEmails(thread.messages[index].to)
+    const candidateMessage = thread.messages[index];
+    const senderEmails = extractThreadContactEmails(candidateMessage.from);
+    const isSentMessage = candidateMessage.labels.includes('SENT');
+    const isSentByKnownAccount = Boolean(
+      normalizedOwnEmail && senderEmails.includes(normalizedOwnEmail),
+    );
+    if (!isSentMessage && !isSentByKnownAccount) continue;
+
+    extractThreadContactEmails(candidateMessage.to)
       .filter((email) => isEligibleContactEmail(email, normalizedOwnEmail))
       .forEach((email) => {
         if (seenSenders.has(email) || seenRecipients.has(email)) return;

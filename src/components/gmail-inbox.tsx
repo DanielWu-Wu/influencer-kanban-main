@@ -42,8 +42,9 @@ import {
 } from '@/lib/types';
 import {
   buildChannelAvatarLookup,
+  channelAvatarLookupPriority,
   readChannelAvatarCache,
-  resolveChannelAvatar,
+  resolveChannelAvatars,
   type ChannelAvatarState,
 } from '@/lib/youtube-channel-avatar';
 import { YouTubeChannelAvatar } from './youtube-channel-avatar';
@@ -53,7 +54,6 @@ const GMAIL_DETAIL_BATCH_SIZE = 16;
 const GMAIL_AUTO_REFRESH_MS = 60_000;
 const GMAIL_CACHE_STALE_MS = 60_000;
 const SUBJECT_TRANSLATION_BATCH_SIZE = 12;
-const CHANNEL_AVATAR_PREFETCH_CONCURRENCY = 3;
 
 interface GmailInboxProps {
   active?: boolean;
@@ -485,16 +485,6 @@ async function fetchWithTimeout(
   }
 }
 
-async function runWithConcurrency<T>(
-  items: T[],
-  limit: number,
-  worker: (item: T) => Promise<void>,
-) {
-  for (let index = 0; index < items.length; index += limit) {
-    await Promise.all(items.slice(index, index + limit).map(worker));
-  }
-}
-
 export function GmailInbox({
   active = true,
   onSelectThread,
@@ -845,12 +835,19 @@ export function GmailInbox({
           records.forEach((record) => {
             const emails = extractEmails(stringifyFeishuValue(record.fields[emailField]));
             const matchedEmails = emails.filter((email) => targetEmails.has(email));
+            const candidate = {
+              channelName: getMappedFeishuValue(record, mapping, 'channelName'),
+              channelUrl: getMappedFeishuValue(record, mapping, 'channelUrl'),
+              channelId: getMappedFeishuValue(record, mapping, 'channelId'),
+            };
             matchedEmails.forEach((matchedEmail) => {
-              profileByEmail.set(matchedEmail, {
-                channelName: getMappedFeishuValue(record, mapping, 'channelName'),
-                channelUrl: getMappedFeishuValue(record, mapping, 'channelUrl'),
-                channelId: getMappedFeishuValue(record, mapping, 'channelId'),
-              });
+              const current = profileByEmail.get(matchedEmail);
+              if (
+                !current
+                || channelAvatarLookupPriority(candidate) > channelAvatarLookupPriority(current)
+              ) {
+                profileByEmail.set(matchedEmail, candidate);
+              }
             });
           });
 
@@ -864,9 +861,21 @@ export function GmailInbox({
           threadContacts.forEach(({ threadId, emails }) => {
             const matchedEmail = emails.find((email) => profileByEmail.has(email));
             const profile = matchedEmail ? profileByEmail.get(matchedEmail) : undefined;
-            if (!profile) return;
+            if (!profile) {
+              nextAvatars[threadId] = {
+                status: 'failed',
+                error: '未在红人信息数据库中匹配到该邮箱。',
+              };
+              return;
+            }
             const lookup = buildChannelAvatarLookup(profile);
-            if (!lookup) return;
+            if (!lookup) {
+              nextAvatars[threadId] = {
+                status: 'failed',
+                error: '飞书记录缺少 YouTube Channel ID、频道链接和有效频道名。',
+              };
+              return;
+            }
             const cached = readChannelAvatarCache(lookup.key);
             if (cached) {
               nextAvatars[threadId] = {
@@ -889,29 +898,34 @@ export function GmailInbox({
             }
           });
 
-          setThreadAvatars((current) => ({ ...current, ...nextAvatars }));
+          setThreadAvatars(nextAvatars);
 
-          await runWithConcurrency(
-            Array.from(pendingByLookup.values()),
-            CHANNEL_AVATAR_PREFETCH_CONCURRENCY,
-            async (item) => {
-              const avatar = await resolveChannelAvatar(item.lookup, {
-                regionCode: settings.youtubeDefaultRegion || '',
-                relevanceLanguage: settings.youtubeDefaultLanguage || '',
-              });
-              if (runId !== avatarPrefetchRunRef.current) return;
-              setThreadAvatars((current) => {
-                const next = { ...current };
-                item.threadIds.forEach((threadId) => {
-                  next[threadId] = {
-                    ...avatar,
-                    title: avatar.title || item.title,
-                  };
-                });
-                return next;
-              });
+          const pendingItems = Array.from(pendingByLookup.values());
+          const resolved = await resolveChannelAvatars(
+            pendingItems.map((item) => item.lookup),
+            {
+              regionCode: settings.youtubeDefaultRegion || '',
+              relevanceLanguage: settings.youtubeDefaultLanguage || '',
             },
           );
+          if (runId !== avatarPrefetchRunRef.current) return;
+          setThreadAvatars((current) => {
+            const next = { ...current };
+            pendingItems.forEach((item) => {
+              const avatar = resolved.get(item.lookup.key) || {
+                status: 'failed' as const,
+                cacheKey: item.lookup.key,
+                error: '频道头像读取失败。',
+              };
+              item.threadIds.forEach((threadId) => {
+                next[threadId] = {
+                  ...avatar,
+                  title: avatar.title || item.title,
+                };
+              });
+            });
+            return next;
+          });
         } catch {
           // Avatar prefetch is an optional UI enhancement; Gmail list should stay usable.
         }

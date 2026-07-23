@@ -33,6 +33,10 @@ import {
   stripConfiguredEmailSignature,
   toBase64Url,
 } from '@/lib/email-content';
+import {
+  getGmailThreadContact,
+  isIgnoredGmailThreadSender,
+} from '@/lib/gmail-thread-contact';
 import { GmailThread } from '@/lib/types';
 import { RichEmailEditor } from './rich-email-editor';
 import { useDelayedEmailSender } from './delayed-email-provider';
@@ -148,20 +152,18 @@ const QUICK_REPLY_IDEAS = [
   ['询问数据', '请询问频道近期视频表现和受众数据。'],
 ] as const;
 
-function extractEmail(value: string) {
-  return value.match(/<([^>]+)>/)?.[1] || value.split(',')[0]?.trim() || value;
-}
-
 function buildThreadMessages(thread: GmailThread) {
-  return thread.messages.map((message) => ({
-    id: message.id,
-    threadId: message.threadId,
-    subject: message.subject || thread.subject,
-    from: message.from,
-    to: message.to,
-    date: message.date,
-    body: message.body,
-  }));
+  return thread.messages
+    .filter((message) => !isIgnoredGmailThreadSender(message.from))
+    .map((message) => ({
+      id: message.id,
+      threadId: message.threadId,
+      subject: message.subject || thread.subject,
+      from: message.from,
+      to: message.to,
+      date: message.date,
+      body: message.body,
+    }));
 }
 
 export function EmailComposer({
@@ -206,15 +208,18 @@ export function EmailComposer({
   const fileInputRef = useRef<HTMLInputElement>(null);
 
   const threadMessages = useMemo(() => buildThreadMessages(thread), [thread]);
-  const lastMessage = thread.messages[thread.messages.length - 1];
-
-  const externalMessage = useMemo(() => {
-    const ownEmail = auth?.email?.toLowerCase();
-    return [...thread.messages].reverse().find((message) => {
-      const sender = extractEmail(message.from).toLowerCase();
-      return !ownEmail || sender !== ownEmail;
-    }) || lastMessage;
-  }, [auth?.email, lastMessage, thread.messages]);
+  const lastConversationMessage = useMemo(
+    () => [...thread.messages]
+      .reverse()
+      .find((message) => !isIgnoredGmailThreadSender(message.from)),
+    [thread.messages],
+  );
+  const threadContact = useMemo(
+    () => getGmailThreadContact(thread, auth?.email),
+    [auth?.email, thread],
+  );
+  const externalMessage = threadContact.message || lastConversationMessage;
+  const recipientEmail = threadContact.emails[0] || '';
 
   const invokeAI = async (
     payload: Record<string, unknown>,
@@ -240,15 +245,17 @@ export function EmailComposer({
   };
 
   const loadContactHistory = async () => {
+    if (!recipientEmail) {
+      throw new Error('未找到可用的红人邮箱；Mailsuite 等系统通知邮箱不会作为回复收件人。');
+    }
     const accessToken = await getAccessToken();
-    const contactEmail = extractEmail(externalMessage.from);
     const response = await fetch('/api/gmail', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
         action: 'contactHistory',
         accessToken,
-        contactEmail,
+        contactEmail: recipientEmail,
         maxResults: GMAIL_AI_HISTORY_LIMIT,
       }),
     });
@@ -323,7 +330,7 @@ export function EmailComposer({
       setGeneratedLangName(targetLangName);
       addSuggestion({
         threadId: thread.id,
-        messageId: externalMessage.id,
+        messageId: externalMessage?.id || thread.id,
         suggestedReply: cleanSuggestedReply,
         translatedReply: result.translatedReply,
         tone: result.tone || 'friendly',
@@ -397,17 +404,20 @@ export function EmailComposer({
 
   const createOutgoingEmail = async () => {
     if (isEmailContentEmpty(replyContent)) throw new Error('请先填写回复内容。');
+    if (!recipientEmail) {
+      throw new Error('未找到可用的红人邮箱；已排除 Mailsuite 等系统通知邮箱。');
+    }
     const finalReply = appendEmailSignature(replyContent, settings.emailSignature);
     const accessToken = await getAccessToken();
-    const references = [externalMessage.references, externalMessage.rfcMessageId]
+    const references = [externalMessage?.references, externalMessage?.rfcMessageId]
       .filter(Boolean)
       .join(' ');
     const subject = /^re:/i.test(thread.subject) ? thread.subject : `Re: ${thread.subject}`;
     const rawEmail = await buildRichRawEmail({
-      to: extractEmail(externalMessage.from),
+      to: recipientEmail,
       subject,
       htmlBody: finalReply,
-      inReplyTo: externalMessage.rfcMessageId,
+      inReplyTo: externalMessage?.rfcMessageId,
       references,
       attachments,
     });
@@ -439,7 +449,7 @@ export function EmailComposer({
       }
 
       addDraft({
-        to: extractEmail(externalMessage.from),
+        to: recipientEmail,
         subject,
         body: emailHtmlToText(finalReply),
       });
@@ -454,7 +464,11 @@ export function EmailComposer({
 
   const sendEmail = async () => {
     if (isEmailContentEmpty(replyContent)) return;
-    const recipient = extractEmail(externalMessage.from);
+    if (!recipientEmail) {
+      setAiError('未找到可用的红人邮箱；已排除 Mailsuite 等系统通知邮箱。');
+      return;
+    }
+    const recipient = recipientEmail;
     const delaySeconds = Math.min(60, Math.max(0, settings.emailSendDelaySeconds ?? 0));
     const confirmed = window.confirm(
       delaySeconds > 0
@@ -546,7 +560,7 @@ export function EmailComposer({
               ? '关闭助手后，手动回复框也会保留这份草稿。'
               : completion === 'scheduled'
                 ? '你可以在右下角查看真实倒计时，或在倒计时结束前取消发送。'
-                : `邮件已直接发送给 ${extractEmail(externalMessage.from)}。`}
+                : `邮件已直接发送给 ${recipientEmail}。`}
           </p>
         </div>
         {completion !== 'scheduled' && (
@@ -954,6 +968,9 @@ export function EmailComposer({
             <div className="flex flex-col gap-3 xl:flex-row xl:items-center xl:justify-between">
               {generationSettings}
               <div className="flex flex-wrap items-center justify-end gap-2">
+                <span className={`mr-1 text-xs ${recipientEmail ? 'text-gray-500' : 'text-red-600'}`}>
+                  收件人：{recipientEmail || '未找到可用的红人邮箱'}
+                </span>
                 <Button
                   variant="ghost"
                   className="text-gray-600 hover:bg-gray-100 hover:text-gray-900"
@@ -978,12 +995,12 @@ export function EmailComposer({
                 <Button
                   variant="outline"
                   onClick={sendEmail}
-                  disabled={aiLoading || translatingEditedReply || translationEditing || sending || savingDraft || isEmailContentEmpty(replyContent)}
+                  disabled={!recipientEmail || aiLoading || translatingEditedReply || translationEditing || sending || savingDraft || isEmailContentEmpty(replyContent)}
                 >
                   {sending ? <Loader2 className="animate-spin" data-icon="inline-start" /> : <Send data-icon="inline-start" />}
                   直接发送
                 </Button>
-                <Button onClick={saveToGmailDrafts} disabled={aiLoading || translatingEditedReply || translationEditing || savingDraft || sending || isEmailContentEmpty(replyContent)}>
+                <Button onClick={saveToGmailDrafts} disabled={!recipientEmail || aiLoading || translatingEditedReply || translationEditing || savingDraft || sending || isEmailContentEmpty(replyContent)}>
                   {savingDraft ? <Loader2 className="animate-spin" data-icon="inline-start" /> : <Save data-icon="inline-start" />}
                   保存 Gmail 草稿
                 </Button>
@@ -1027,12 +1044,15 @@ export function EmailComposer({
       {attachmentError && <p className="text-xs text-destructive">{attachmentError}</p>}
       <RichEmailEditor value={replyContent} onChange={setReplyContent} placeholder="输入回复内容..." minHeight="12rem" />
       {aiError && <ErrorMessage message={aiError} />}
+      <p className={`text-xs ${recipientEmail ? 'text-muted-foreground' : 'text-destructive'}`}>
+        回复收件人：{recipientEmail || '未找到可用的红人邮箱，Mailsuite 等系统通知邮箱已排除'}
+      </p>
       <div className="grid grid-cols-2 gap-2">
-        <Button variant="outline" onClick={sendEmail} disabled={sending || savingDraft || isEmailContentEmpty(replyContent)}>
+        <Button variant="outline" onClick={sendEmail} disabled={!recipientEmail || sending || savingDraft || isEmailContentEmpty(replyContent)}>
           {sending ? <Loader2 className="animate-spin" data-icon="inline-start" /> : <Send data-icon="inline-start" />}
           直接发送
         </Button>
-        <Button onClick={saveToGmailDrafts} disabled={savingDraft || sending || isEmailContentEmpty(replyContent)}>
+        <Button onClick={saveToGmailDrafts} disabled={!recipientEmail || savingDraft || sending || isEmailContentEmpty(replyContent)}>
           {savingDraft ? <Loader2 className="animate-spin" data-icon="inline-start" /> : <ArrowRight data-icon="inline-start" />}
           保存为草稿
         </Button>

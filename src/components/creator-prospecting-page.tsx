@@ -575,7 +575,21 @@ function FeishuOptionMultiSelect({
       >
         <Command>
           <CommandInput placeholder="搜索飞书内容类型" />
-          <CommandList>
+          <CommandList
+            className="overscroll-contain"
+            onWheel={(event) => {
+              const list = event.currentTarget;
+              if (list.scrollHeight <= list.clientHeight) return;
+              const distance = event.deltaMode === 1
+                ? event.deltaY * 24
+                : event.deltaMode === 2
+                  ? event.deltaY * list.clientHeight
+                  : event.deltaY;
+              list.scrollTop += distance;
+              event.preventDefault();
+              event.stopPropagation();
+            }}
+          >
             <CommandEmpty>没有匹配的飞书选项</CommandEmpty>
             <CommandGroup>
               {options.map((option) => {
@@ -1303,37 +1317,46 @@ export function CreatorProspectingPage() {
       toast.error('请先粘贴至少一个 YouTube 频道链接、@handle 或频道 ID。');
       return;
     }
-    const existingKeys = new Set(prospects.map((item) => normalizeYouTubeKey(firstValue(item.inputUrl, item.sourceUrl, item.url))));
-    const uniqueLinks = links.filter((link) => !existingKeys.has(normalizeYouTubeKey(link)));
-    if (!uniqueLinks.length) {
-      toast.info('这些链接已经在当前线索池中。');
-      return;
-    }
+    const existingByKey = new Map(prospects.map((item) => [
+      normalizeYouTubeKey(firstValue(item.inputUrl, item.sourceUrl, item.url)),
+      item,
+    ]));
     const now = new Date().toISOString();
-    const additions: Prospect[] = uniqueLinks.map((link) => ({
-      schemaVersion: CREATOR_PROSPECTS_SCHEMA_VERSION,
-      id: generateId(),
-      inputUrl: link,
-      workflowStatus: 'recorded',
-      emailStatus: 'missing',
-      dedupeStatus: 'unchecked',
-      resourceStatus: 'unchecked',
-      developmentStatus: 'unchecked',
-      competitorCollaboration: 'unknown',
-      createdAt: now,
-      updatedAt: now,
-    }));
+    const additions: Prospect[] = links.map((link) => {
+      const previousProspect = existingByKey.get(normalizeYouTubeKey(link));
+      return {
+        schemaVersion: CREATOR_PROSPECTS_SCHEMA_VERSION,
+        id: generateId(),
+        inputUrl: link,
+        workflowStatus: 'recorded',
+        emailStatus: 'missing',
+        dedupeStatus: 'unchecked',
+        resourceStatus: 'unchecked',
+        developmentStatus: 'unchecked',
+        repeatOutreach: Boolean(previousProspect),
+        previousProspectId: previousProspect?.id,
+        duplicateReason: previousProspect
+          ? '开发台中存在历史线索，本次将作为新的开发轮次继续处理'
+          : undefined,
+        competitorCollaboration: 'unknown',
+        createdAt: now,
+        updatedAt: now,
+      };
+    });
     setProspects((current) => [...additions, ...current]);
     setSelectedIds(additions.map((item) => item.id));
     setResolving(true);
-    toast.info(`正在识别 ${uniqueLinks.length} 个 YouTube 频道。`);
+    const repeatCount = additions.filter((item) => item.repeatOutreach).length;
+    toast.info(repeatCount
+      ? `正在识别 ${additions.length} 个频道，其中 ${repeatCount} 个将作为重复开发的新轮次。`
+      : `正在识别 ${additions.length} 个 YouTube 频道。`);
 
     try {
       const response = await fetch('/api/youtube/resolve', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
-          links: uniqueLinks,
+          links,
           regionCode: settings.youtubeDefaultRegion || '',
           relevanceLanguage: settings.youtubeDefaultLanguage || '',
           maxVideos: 8,
@@ -1477,25 +1500,27 @@ export function CreatorProspectingPage() {
           : developmentMatch.suspected
             ? 'suspected'
             : 'missing';
-        const linkedDevelopmentId = developmentMatch.exact?.record_id;
+        const previousDevelopmentRecordId = developmentMatch.exact?.record_id;
         return {
           ...prospect,
-          workflowStatus: linkedDevelopmentId ? 'dedupe_completed' : 'resolved',
+          workflowStatus: 'resolved',
           dedupeStatus: developmentMatch.exact
             ? 'duplicate'
             : developmentMatch.suspected || resourceMatch.suspected
               ? 'suspected'
               : 'unique',
           resourceStatus,
-          developmentStatus,
+          developmentStatus: developmentMatch.exact ? 'history_exists' : developmentStatus,
           resourceRecordId: resourceMatch.exact?.record_id || resourceMatch.suspected?.record_id,
-          feishuRecordId: linkedDevelopmentId,
+          feishuRecordId: undefined,
+          previousDevelopmentRecordId,
+          repeatOutreach: prospect.repeatOutreach || Boolean(previousDevelopmentRecordId),
           duplicateRecordId: developmentMatch.suspected?.record_id || resourceMatch.suspected?.record_id,
           resourceMatchPreview: resourceMatch.suspected
             ? buildResourceMatchPreview(resourceMatch.suspected, resourceMapping, resourceMatch.reason)
             : undefined,
           duplicateReason: developmentMatch.exact
-            ? `已关联现有开发记录：${developmentMatch.reason}`
+            ? `发现历史开发记录：${developmentMatch.reason}；本轮将新建独立开发记录`
             : developmentMatch.suspected
               ? `开发记录疑似重复：${developmentMatch.reason}`
               : resourceMatch.suspected
@@ -1715,7 +1740,9 @@ export function CreatorProspectingPage() {
                   workflowStatus: 'dedupe_completed' as const,
                   developmentStatus: 'exists' as const,
                   feishuRecordId: success.recordId,
-                  duplicateReason: '已新建红人开发记录',
+                  duplicateReason: item.previousDevelopmentRecordId
+                    ? '已新建本轮开发记录，并保留历史开发记录关联'
+                    : '已新建红人开发记录',
                 }),
             updatedAt: new Date().toISOString(),
           }
@@ -2327,12 +2354,14 @@ export function CreatorProspectingPage() {
               const prospect = prospects.find((item) => item.id === id);
               if (!prospect?.duplicateRecordId) return;
               updateProspect(id, {
-                workflowStatus: 'dedupe_completed',
-                developmentStatus: 'exists',
-                feishuRecordId: prospect.duplicateRecordId,
-                duplicateReason: '已关联红人开发情况表中的现有记录，不会重复创建',
+                workflowStatus: 'resolved',
+                developmentStatus: 'history_exists',
+                previousDevelopmentRecordId: prospect.duplicateRecordId,
+                feishuRecordId: undefined,
+                repeatOutreach: true,
+                duplicateReason: '已确认为历史开发记录；本轮将新建独立开发记录',
               });
-              toast.success('已关联现有开发记录，可以继续确认邀约方向。');
+              toast.success('已关联为历史开发记录，可以新建本轮开发记录。');
             }}
             onRemove={(id) => {
               rememberDeletedProspect(id);
@@ -2415,7 +2444,7 @@ export function CreatorProspectingPage() {
             <DialogDescription>
               {previewItems[0]?.target === 'resource'
                 ? '只有资源库未收录的红人才会出现在这里。确认后写入“红人信息数据库”。'
-                : '只有开发记录表中不存在的红人才会出现在这里。确认后写入“红人开发情况表”。'}
+                : '确认后将在“红人开发情况表”新建本轮记录；发现历史开发记录时会保留关联，但不会覆盖旧记录。'}
               单条失败不会影响其他记录。
             </DialogDescription>
             {previewItems[0]?.target === 'development' && (
@@ -2428,9 +2457,19 @@ export function CreatorProspectingPage() {
             {previewItems.map((item) => (
               <div key={item.prospect.id} className="border-b p-3 last:border-b-0">
                 <div className="flex items-center justify-between gap-3">
-                  <p className="font-semibold">{item.prospect.title || item.prospect.inputUrl}</p>
-                  <Badge variant="outline">{Object.keys(item.fields).length} 个字段</Badge>
+                  <div className="flex min-w-0 items-center gap-2">
+                    <p className="truncate font-semibold">{item.prospect.title || item.prospect.inputUrl}</p>
+                    {item.target === 'development' && item.prospect.previousDevelopmentRecordId ? (
+                      <Badge variant="outline" className="border-amber-200 bg-amber-50 text-amber-700">重复开发 · 将新建</Badge>
+                    ) : null}
+                  </div>
+                  <Badge variant="outline" className="shrink-0">{Object.keys(item.fields).length} 个字段</Badge>
                 </div>
+                {item.target === 'development' && item.prospect.previousDevelopmentRecordId ? (
+                  <p className="mt-2 rounded-md border border-amber-200 bg-amber-50 px-2.5 py-2 text-xs text-amber-800">
+                    已关联历史开发记录 {item.prospect.previousDevelopmentRecordId}。确认后只新建本轮记录，不修改历史记录。
+                  </p>
+                ) : null}
                 <dl className="mt-2 grid gap-2 text-sm sm:grid-cols-2">
                   {Object.entries(item.fields).map(([key, value]) => {
                     const isEditableResourceNote = item.target === 'resource'

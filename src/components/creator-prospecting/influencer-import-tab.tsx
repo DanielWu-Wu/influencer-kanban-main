@@ -516,7 +516,7 @@ export function InfluencerImportTab({
                       )}
                       {prospect.developmentStatus === 'suspected' && prospect.duplicateRecordId && (
                         <Button variant="ghost" size="sm" onClick={() => onUseExisting(prospect.id)}>
-                          关联开发记录
+                          确认为历史记录
                         </Button>
                       )}
                       <Button

@@ -1,6 +1,6 @@
 export const CREATOR_PROSPECTS_STORAGE_KEY = 'influencer-board-creator-prospects';
 export const CREATOR_PROSPECTS_DELETED_STORAGE_KEY = 'influencer-board-creator-prospects-deleted';
-export const CREATOR_PROSPECTS_SCHEMA_VERSION = 5;
+export const CREATOR_PROSPECTS_SCHEMA_VERSION = 6;
 
 export type ProspectingTab = 'import' | 'invitation' | 'outreach' | 'follow_up';
 
@@ -35,6 +35,7 @@ export type ProspectDevelopmentStatus =
   | 'unchecked'
   | 'checking'
   | 'exists'
+  | 'history_exists'
   | 'suspected'
   | 'missing'
   | 'error';
@@ -109,6 +110,9 @@ export type Prospect = {
   dedupeStatus: ProspectDedupeStatus;
   duplicateReason?: string;
   duplicateRecordId?: string;
+  previousDevelopmentRecordId?: string;
+  repeatOutreach?: boolean;
+  previousProspectId?: string;
   duplicateConfirmedUnique?: boolean;
   resourceMatchPreview?: {
     recordId: string;
@@ -192,6 +196,7 @@ export const DEVELOPMENT_STATUS_META: Record<ProspectDevelopmentStatus, { label:
   unchecked: { label: '开发记录未查', className: 'text-slate-500' },
   checking: { label: '开发记录查重中', className: 'text-blue-600' },
   exists: { label: '已有开发记录', className: 'text-emerald-700' },
+  history_exists: { label: '已有历史记录，本次将新建', className: 'text-amber-700' },
   suspected: { label: '疑似已有开发记录', className: 'text-amber-700' },
   missing: { label: '可新建开发记录', className: 'text-blue-700' },
   error: { label: '开发记录读取失败', className: 'text-red-700' },
@@ -406,7 +411,7 @@ export function canCreateFeishuRecord(prospect: Prospect) {
     && prospect.resourceStatus !== 'checking'
     && prospect.resourceStatus !== 'error'
     && prospect.resourceStatus !== 'suspected'
-    && prospect.developmentStatus === 'missing'
+    && ['missing', 'history_exists'].includes(prospect.developmentStatus)
     && !prospect.feishuRecordId;
 }
 
