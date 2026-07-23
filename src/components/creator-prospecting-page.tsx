@@ -162,6 +162,8 @@ type FeishuInspectField = {
   options?: FeishuFieldOption[];
 };
 
+type ResourceContentTypeStatus = 'idle' | 'loading' | 'ready' | 'error';
+
 type OutreachStreamEvent =
   | { event: 'stage'; data: { stage?: OutreachGenerationStage; label?: string } }
   | { event: 'delta'; data: { text?: string } }
@@ -782,6 +784,7 @@ export function CreatorProspectingPage() {
   const [resolving, setResolving] = useState(false);
   const [checkingDedupe, setCheckingDedupe] = useState(false);
   const [writingFeishu, setWritingFeishu] = useState(false);
+  const [preparingResourcePreview, setPreparingResourcePreview] = useState(false);
   const [preparingDevelopmentPreview, setPreparingDevelopmentPreview] = useState(false);
   const [deletingProspects, setDeletingProspects] = useState(false);
   const [generatingId, setGeneratingId] = useState<string | null>(null);
@@ -790,6 +793,9 @@ export function CreatorProspectingPage() {
   const [checkingHistoryId, setCheckingHistoryId] = useState<string | null>(null);
   const [previewItems, setPreviewItems] = useState<FeishuWritePreview[]>([]);
   const [resourceContentTypeOptions, setResourceContentTypeOptions] = useState<string[]>([]);
+  const [resourceContentTypeStatus, setResourceContentTypeStatus] = useState<ResourceContentTypeStatus>('idle');
+  const resourceContentTypeCacheRef = useRef(new Map<string, string[]>());
+  const resourcePreviewRunRef = useRef(0);
 
   useEffect(() => {
     const deletedIds = new Set(loadDeletedProspectIds());
@@ -1614,10 +1620,14 @@ export function CreatorProspectingPage() {
 
   const loadContentTypeOptions = async (fieldName?: string) => {
     if (!settings.feishuUrl || !fieldName) return [];
+    const cacheKey = `${settings.feishuUrl}::${fieldName}`;
+    const cached = resourceContentTypeCacheRef.current.get(cacheKey);
+    if (cached) return cached;
+
     const response = await fetch('/api/feishu/inspect', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ url: settings.feishuUrl }),
+      body: JSON.stringify({ url: settings.feishuUrl, fieldsOnly: true }),
     });
     const result = await response.json();
     if (!response.ok || !result.success) {
@@ -1626,27 +1636,30 @@ export function CreatorProspectingPage() {
     const fields = (result.data?.fields || []) as FeishuInspectField[];
     const field = fields.find((item) => item.field_name === fieldName);
     const rawOptions = field?.property?.options || field?.options || [];
-    return rawOptions.map(extractFeishuOptionName).filter(Boolean);
+    const options = rawOptions.map(extractFeishuOptionName).filter(Boolean);
+    resourceContentTypeCacheRef.current.set(cacheKey, options);
+    return options;
   };
 
   const openResourcePreview = async (items: Prospect[]) => {
+    setPreparingResourcePreview(true);
     const targets = items.filter((item) => (
       item.resourceStatus === 'missing'
       && !item.resourceRecordId
     ));
     if (!targets.length) {
+      setPreparingResourcePreview(false);
       toast.error('所选红人没有需要加入资源库的记录。');
       return;
     }
     const mapping = settings.feishuFieldMapping || {};
-    let contentTypeOptions: string[] = [];
-    setResourceContentTypeOptions([]);
-    try {
-      contentTypeOptions = await loadContentTypeOptions(mapping.contentType);
-      setResourceContentTypeOptions(contentTypeOptions);
-    } catch (error) {
-      toast.warning(error instanceof Error ? error.message : '内容类型选项读取失败，请检查飞书字段配置。');
-    }
+    const cacheKey = settings.feishuUrl && mapping.contentType
+      ? `${settings.feishuUrl}::${mapping.contentType}`
+      : '';
+    const cachedOptions = cacheKey
+      ? resourceContentTypeCacheRef.current.get(cacheKey)
+      : undefined;
+    const initialOptions = cachedOptions || [];
     const previews = targets
       .map((prospect) => ({
         prospect,
@@ -1654,15 +1667,55 @@ export function CreatorProspectingPage() {
         fields: buildResourceFields(
           prospect,
           mapping,
-          inferContentTypesFromOptions(prospect, contentTypeOptions),
+          inferContentTypesFromOptions(prospect, initialOptions),
         ),
       }))
       .filter((item) => Object.keys(item.fields).length > 0);
     if (!previews.length) {
+      setPreparingResourcePreview(false);
       toast.error('没有可写入字段，请先检查“红人信息数据库”的字段映射。');
       return;
     }
+    const runId = resourcePreviewRunRef.current + 1;
+    resourcePreviewRunRef.current = runId;
+    setResourceContentTypeOptions(initialOptions);
+    setResourceContentTypeStatus(
+      cachedOptions
+        ? 'ready'
+        : settings.feishuUrl && mapping.contentType
+          ? 'loading'
+          : 'idle',
+    );
     setPreviewItems(previews);
+    setPreparingResourcePreview(false);
+
+    if (cachedOptions || !settings.feishuUrl || !mapping.contentType) return;
+
+    try {
+      const contentTypeOptions = await loadContentTypeOptions(mapping.contentType);
+      if (runId !== resourcePreviewRunRef.current) return;
+      setResourceContentTypeOptions(contentTypeOptions);
+      setResourceContentTypeStatus('ready');
+      setPreviewItems((current) => current.map((item) => {
+        if (item.target !== 'resource' || !targets.some((target) => target.id === item.prospect.id)) {
+          return item;
+        }
+        const currentValue = item.fields[mapping.contentType!];
+        const hasManualValue = Array.isArray(currentValue) && currentValue.length > 0;
+        if (hasManualValue) return item;
+        return {
+          ...item,
+          fields: {
+            ...item.fields,
+            [mapping.contentType!]: inferContentTypesFromOptions(item.prospect, contentTypeOptions),
+          },
+        };
+      }));
+    } catch (error) {
+      if (runId !== resourcePreviewRunRef.current) return;
+      setResourceContentTypeStatus('error');
+      toast.warning(error instanceof Error ? error.message : '内容类型选项读取失败，请检查飞书字段配置。');
+    }
   };
 
   const confirmWriteFeishu = async () => {
@@ -1750,6 +1803,7 @@ export function CreatorProspectingPage() {
     }));
     setPreviewItems([]);
     setResourceContentTypeOptions([]);
+    setResourceContentTypeStatus('idle');
     setWritingFeishu(false);
     if (failures.length) {
       toast.error(`已创建 ${successes.length} 个，失败 ${failures.length} 个。${failures[0]}`);
@@ -1779,8 +1833,10 @@ export function CreatorProspectingPage() {
   };
 
   const closeWritePreview = () => {
+    resourcePreviewRunRef.current += 1;
     setPreviewItems([]);
     setResourceContentTypeOptions([]);
+    setResourceContentTypeStatus('idle');
   };
 
   const handleConfirmInvitation = async (items: Prospect[]) => {
@@ -2301,6 +2357,7 @@ export function CreatorProspectingPage() {
             resolving={resolving}
             checkingDedupe={checkingDedupe}
             writingFeishu={writingFeishu}
+            preparingResourcePreview={preparingResourcePreview}
             preparingDevelopmentPreview={preparingDevelopmentPreview}
             deletingProspects={deletingProspects}
             onInputChange={setInput}
@@ -2452,6 +2509,17 @@ export function CreatorProspectingPage() {
                 开发记录预览已生成；资源库邮箱同步会在弹窗内后台检查，检查完成后再确认写入。
               </div>
             )}
+            {previewItems[0]?.target === 'resource' && resourceContentTypeStatus === 'loading' && (
+              <div className="flex items-center gap-2 rounded-md border border-sky-100 bg-sky-50/80 px-3 py-2 text-xs text-sky-800">
+                <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                预览已生成，正在后台读取飞书“内容类型”选项…
+              </div>
+            )}
+            {previewItems[0]?.target === 'resource' && resourceContentTypeStatus === 'error' && (
+              <div className="rounded-md border border-amber-200 bg-amber-50 px-3 py-2 text-xs text-amber-800">
+                内容类型选项读取失败；你仍可确认写入其他字段。
+              </div>
+            )}
           </DialogHeader>
           <div className="mx-6 min-h-0 flex-1 overflow-y-auto rounded-lg border bg-slate-50/80">
             {previewItems.map((item) => (
@@ -2491,7 +2559,9 @@ export function CreatorProspectingPage() {
                               )}
                             />
                             <p className="mt-1 text-xs text-muted-foreground">
-                              {resourceContentTypeOptions.length
+                              {resourceContentTypeStatus === 'loading'
+                                ? '正在后台读取飞书“内容类型”选项…'
+                                : resourceContentTypeOptions.length
                                 ? '选项实时读取自飞书“内容类型”字段，可多选。'
                                 : '未读取到飞书选项，请检查内容类型字段映射和飞书表格配置。'}
                             </p>
@@ -2573,7 +2643,11 @@ export function CreatorProspectingPage() {
             <Button variant="outline" onClick={closeWritePreview} disabled={writingFeishu}>取消</Button>
             <Button onClick={confirmWriteFeishu} disabled={writingFeishu || hasPendingResourceEmailSync}>
               {writingFeishu || hasPendingResourceEmailSync ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <Database className="mr-2 h-4 w-4" />}
-              {hasPendingResourceEmailSync ? '正在检查邮箱同步…' : `确认新建 ${previewItems.length} 条`}
+              {hasPendingResourceEmailSync
+                ? '正在检查邮箱同步…'
+                : writingFeishu
+                  ? '正在写入飞书…'
+                  : `确认新建 ${previewItems.length} 条`}
             </Button>
           </DialogFooter>
         </DialogContent>

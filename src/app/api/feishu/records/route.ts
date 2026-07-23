@@ -1,6 +1,10 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { requestFeishuApi, resolveFeishuBaseUrl } from '@/lib/feishu-base';
 import { refreshStoredFeishuAuth } from '@/lib/feishu-cloud-auth';
+import {
+  cacheFeishuFieldTypes,
+  readCachedFeishuFieldTypes,
+} from '@/lib/feishu-field-cache';
 import { getRequestUser } from '@/lib/supabase/server';
 
 type TableList = {
@@ -49,14 +53,18 @@ async function normalizeFieldsForWrite(
   tableId: string,
   accessToken: string,
   fields: Record<string, unknown>,
+  cacheKey: string,
 ) {
-  const fieldsData = await requestFeishuApi<FieldList>(
-    `/bitable/v1/apps/${encodeURIComponent(appToken)}/tables/${encodeURIComponent(tableId)}/fields?page_size=100`,
-    accessToken,
-  );
-  const fieldTypes = new Map(
-    (fieldsData.items || []).map((field) => [field.field_name, field.type]),
-  );
+  let fieldTypes = readCachedFeishuFieldTypes(cacheKey);
+  if (!fieldTypes) {
+    const fieldsData = await requestFeishuApi<FieldList>(
+      `/bitable/v1/apps/${encodeURIComponent(appToken)}/tables/${encodeURIComponent(tableId)}/fields?page_size=100`,
+      accessToken,
+    );
+    cacheFeishuFieldTypes(cacheKey, fieldsData.items || []);
+    fieldTypes = readCachedFeishuFieldTypes(cacheKey);
+  }
+  if (!fieldTypes) throw new Error('飞书字段类型缓存失败。');
   return Object.fromEntries(
     Object.entries(fields).map(([fieldName, value]) => {
       if (fieldTypes.get(fieldName) !== FEISHU_MULTI_SELECT_FIELD_TYPE) {
@@ -149,6 +157,7 @@ export async function POST(request: NextRequest) {
       tableId,
       auth.accessToken,
       body.fields,
+      `${appAuth.user.id}:${location.appToken}:${tableId}`,
     );
 
     if (body.action === 'create') {

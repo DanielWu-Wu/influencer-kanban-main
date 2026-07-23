@@ -61,6 +61,7 @@ type Props = {
   resolving: boolean;
   checkingDedupe: boolean;
   writingFeishu: boolean;
+  preparingResourcePreview: boolean;
   preparingDevelopmentPreview: boolean;
   deletingProspects: boolean;
   onInputChange: (value: string) => void;
@@ -210,6 +211,7 @@ export function InfluencerImportTab({
   resolving,
   checkingDedupe,
   writingFeishu,
+  preparingResourcePreview,
   preparingDevelopmentPreview,
   deletingProspects,
   onInputChange,
@@ -292,9 +294,13 @@ export function InfluencerImportTab({
           {checkingDedupe ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <Database className="mr-2 h-4 w-4" />}
           飞书查重
         </Button>
-        <Button variant="outline" onClick={() => onAddResources(selected)} disabled={!canAddResource || writingFeishu}>
-          <UserPlus className="mr-2 h-4 w-4" />
-          加入资源库
+        <Button
+          variant="outline"
+          onClick={() => onAddResources(selected)}
+          disabled={!canAddResource || preparingResourcePreview || writingFeishu}
+        >
+          {preparingResourcePreview ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <UserPlus className="mr-2 h-4 w-4" />}
+          {preparingResourcePreview ? '准备预览中…' : '加入资源库'}
         </Button>
         <Button
           variant="outline"
