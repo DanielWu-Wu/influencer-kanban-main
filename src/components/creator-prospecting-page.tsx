@@ -163,6 +163,7 @@ type FeishuInspectField = {
 };
 
 type ResourceContentTypeStatus = 'idle' | 'loading' | 'ready' | 'error';
+type ResourceContentTypeAiStatus = 'idle' | 'loading' | 'ready' | 'partial' | 'error';
 
 type OutreachStreamEvent =
   | { event: 'stage'; data: { stage?: OutreachGenerationStage; label?: string } }
@@ -575,19 +576,23 @@ function FeishuOptionMultiSelect({
         align="start"
         className="w-[var(--radix-popover-trigger-width)] min-w-64 p-0"
       >
-        <Command>
+        <Command disablePointerSelection>
           <CommandInput placeholder="搜索飞书内容类型" />
           <CommandList
-            className="overscroll-contain"
+            className="touch-pan-y scroll-auto overscroll-y-contain"
             onWheel={(event) => {
               const list = event.currentTarget;
-              if (list.scrollHeight <= list.clientHeight) return;
+              const maxScrollTop = list.scrollHeight - list.clientHeight;
+              if (maxScrollTop <= 0) return;
               const distance = event.deltaMode === 1
                 ? event.deltaY * 24
                 : event.deltaMode === 2
                   ? event.deltaY * list.clientHeight
                   : event.deltaY;
-              list.scrollTop += distance;
+              list.scrollTop = Math.min(
+                maxScrollTop,
+                Math.max(0, list.scrollTop + distance),
+              );
               event.preventDefault();
               event.stopPropagation();
             }}
@@ -616,44 +621,22 @@ function FeishuOptionMultiSelect({
   );
 }
 
-function prospectContentText(prospect: Prospect) {
-  return [
-    prospect.title,
-    prospect.description,
-    prospect.country,
-    prospect.language,
-    ...(prospect.recentVideos || []).flatMap((video) => [
-      video.title,
-      video.translatedTitle,
-    ]),
-  ].filter(Boolean).join(' ').toLowerCase();
-}
-
-const CONTENT_TYPE_KEYWORDS: Array<{ pattern: RegExp; keywords: string[] }> = [
-  { pattern: /房车|camper|rv/i, keywords: ['rv', 'camper', 'camping', 'husbil', 'husvagn', 'motorhome', 'caravan', 'vanlife', 'wohnmobil', 'autocaravan', 'furgon', 'campervan'] },
-  { pattern: /off\s*grid|离网/i, keywords: ['off grid', 'off-grid', 'solar', 'photovoltaic', 'battery', 'power station', 'energy storage', 'independent energy', 'self sufficient', 'zonnepaneel'] },
-  { pattern: /工具|tools?/i, keywords: ['tool', 'tools', 'workshop', 'garage', 'repair', 'renovation', 'construction', 'woodworking'] },
-  { pattern: /diy|手工/i, keywords: ['diy', 'do it yourself', 'zelf', 'själv', 'gör', 'build', 'bygg', 'klussen', 'bricolage', 'maker'] },
-  { pattern: /科技|tech/i, keywords: ['tech', 'technology', 'gadget', 'electronics', 'smart home', 'domotica', 'device'] },
-  { pattern: /越野|overland/i, keywords: ['overland', 'offroad', 'off-road', '4x4', 'expedition', 'adventure vehicle'] },
-  { pattern: /农场|homestead/i, keywords: ['homestead', 'farm', 'garden', 'self sufficiency', 'permaculture', 'smallholding'] },
-  { pattern: /应急|prepper/i, keywords: ['prepper', 'prepping', 'emergency', 'survival', 'backup power'] },
-  { pattern: /海上|sailing|marine/i, keywords: ['sailing', 'boat', 'yacht', 'marine', 'sea', 'sailboat'] },
-  { pattern: /新闻|news/i, keywords: ['news', 'politics', 'current affairs'] },
-];
-
-function inferContentTypesFromOptions(prospect: Prospect, options: string[]) {
-  const text = prospectContentText(prospect);
-  return options.filter((option) => {
-    const normalized = option.toLowerCase();
-    if (text.includes(normalized)) return true;
-    const rule = CONTENT_TYPE_KEYWORDS.find((item) => item.pattern.test(option));
-    return Boolean(rule?.keywords.some((keyword) => text.includes(keyword)));
-  });
-}
-
 function extractFeishuOptionName(option: FeishuFieldOption) {
   return String(option.name || option.text || option.value || '').trim();
+}
+
+function buildContentTypeAiCacheKey(prospect: Prospect, options: string[]) {
+  return JSON.stringify([
+    prospect.channelId || prospect.url || prospect.inputUrl,
+    prospect.youtubeLastFetchedAt || '',
+    prospect.title || '',
+    prospect.description || '',
+    (prospect.recentVideos || []).slice(0, 8).map((video) => [
+      video.title,
+      video.translatedTitle || '',
+    ]),
+    options,
+  ]);
 }
 
 function compactFeishuWriteFields(fields: Record<string, unknown>) {
@@ -794,7 +777,10 @@ export function CreatorProspectingPage() {
   const [previewItems, setPreviewItems] = useState<FeishuWritePreview[]>([]);
   const [resourceContentTypeOptions, setResourceContentTypeOptions] = useState<string[]>([]);
   const [resourceContentTypeStatus, setResourceContentTypeStatus] = useState<ResourceContentTypeStatus>('idle');
+  const [resourceContentTypeAiStatus, setResourceContentTypeAiStatus] = useState<ResourceContentTypeAiStatus>('idle');
   const resourceContentTypeCacheRef = useRef(new Map<string, string[]>());
+  const resourceContentTypeAiCacheRef = useRef(new Map<string, string[]>());
+  const resourceContentTypeManualIdsRef = useRef(new Set<string>());
   const resourcePreviewRunRef = useRef(0);
 
   useEffect(() => {
@@ -1641,6 +1627,68 @@ export function CreatorProspectingPage() {
     return options;
   };
 
+  const classifyResourceContentTypes = async (
+    prospect: Prospect,
+    options: string[],
+  ) => {
+    const cacheKey = buildContentTypeAiCacheKey(prospect, options);
+    if (resourceContentTypeAiCacheRef.current.has(cacheKey)) {
+      return resourceContentTypeAiCacheRef.current.get(cacheKey) || [];
+    }
+
+    const controller = new AbortController();
+    const timeout = window.setTimeout(() => controller.abort(), 15_000);
+    try {
+      const response = await fetch('/api/ai', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        signal: controller.signal,
+        body: JSON.stringify({
+          action: 'classifyCreatorContentTypes',
+          allowedOptions: options,
+          channel: {
+            title: prospect.title || '',
+            description: prospect.description || '',
+            country: prospect.country || '',
+            language: prospect.language || '',
+            recentVideos: (prospect.recentVideos || []).slice(0, 8).map((video) => ({
+              title: video.title || '',
+              translatedTitle: video.translatedTitle || '',
+            })),
+          },
+          modelProvider: settings.modelProvider,
+          customApiUrl: settings.customApiUrl,
+          customApiKey: settings.customApiKey,
+          customModelName: settings.customModelName,
+        }),
+      });
+      const result = await response.json();
+      if (!response.ok || !result.success) {
+        throw new Error(getErrorMessage(result, 'AI 内容类型判断失败。'));
+      }
+      const allowedOptionSet = new Set(options);
+      const rawSelectedOptions: unknown[] = Array.isArray(result.data?.selectedOptions)
+        ? result.data.selectedOptions
+        : [];
+      const selectedOptions = rawSelectedOptions.length
+        ? Array.from(new Set<string>(
+            rawSelectedOptions
+              .map((option) => String(option || '').trim())
+              .filter((option) => allowedOptionSet.has(option)),
+          )).slice(0, 3)
+        : [];
+      resourceContentTypeAiCacheRef.current.set(cacheKey, selectedOptions);
+      return selectedOptions;
+    } catch (error) {
+      if (error instanceof DOMException && error.name === 'AbortError') {
+        throw new Error('AI 内容类型判断超时，请手动选择。');
+      }
+      throw error;
+    } finally {
+      window.clearTimeout(timeout);
+    }
+  };
+
   const openResourcePreview = async (items: Prospect[]) => {
     setPreparingResourcePreview(true);
     const targets = items.filter((item) => (
@@ -1667,7 +1715,7 @@ export function CreatorProspectingPage() {
         fields: buildResourceFields(
           prospect,
           mapping,
-          inferContentTypesFromOptions(prospect, initialOptions),
+          [],
         ),
       }))
       .filter((item) => Object.keys(item.fields).length > 0);
@@ -1678,7 +1726,9 @@ export function CreatorProspectingPage() {
     }
     const runId = resourcePreviewRunRef.current + 1;
     resourcePreviewRunRef.current = runId;
+    resourceContentTypeManualIdsRef.current.clear();
     setResourceContentTypeOptions(initialOptions);
+    setResourceContentTypeAiStatus('idle');
     setResourceContentTypeStatus(
       cachedOptions
         ? 'ready'
@@ -1689,28 +1739,70 @@ export function CreatorProspectingPage() {
     setPreviewItems(previews);
     setPreparingResourcePreview(false);
 
-    if (cachedOptions || !settings.feishuUrl || !mapping.contentType) return;
+    const classifyAndApply = async (contentTypeOptions: string[]) => {
+      if (!contentTypeOptions.length || !mapping.contentType) return;
+      setResourceContentTypeAiStatus('loading');
+      let successCount = 0;
+      let failureCount = 0;
+      let firstError = '';
+      await mapWithConcurrency(targets, 3, async (prospect) => {
+        try {
+          const selectedOptions = await classifyResourceContentTypes(prospect, contentTypeOptions);
+          if (runId !== resourcePreviewRunRef.current) return;
+          successCount += 1;
+          setPreviewItems((current) => current.map((item) => {
+            if (
+              item.prospect.id !== prospect.id
+              || item.target !== 'resource'
+              || resourceContentTypeManualIdsRef.current.has(prospect.id)
+            ) {
+              return item;
+            }
+            return {
+              ...item,
+              fields: {
+                ...item.fields,
+                [mapping.contentType!]: selectedOptions,
+              },
+            };
+          }));
+        } catch (error) {
+          if (runId !== resourcePreviewRunRef.current) return;
+          failureCount += 1;
+          if (!firstError) {
+            firstError = error instanceof Error ? error.message : 'AI 内容类型判断失败。';
+          }
+        }
+      });
+      if (runId !== resourcePreviewRunRef.current) return;
+      setResourceContentTypeAiStatus(
+        successCount
+          ? failureCount
+            ? 'partial'
+            : 'ready'
+          : 'error',
+      );
+      if (failureCount) {
+        toast.warning(
+          successCount
+            ? `部分红人的 AI 内容类型判断未完成：${firstError}`
+            : firstError,
+        );
+      }
+    };
+
+    if (cachedOptions) {
+      void classifyAndApply(cachedOptions);
+      return;
+    }
+    if (!settings.feishuUrl || !mapping.contentType) return;
 
     try {
       const contentTypeOptions = await loadContentTypeOptions(mapping.contentType);
       if (runId !== resourcePreviewRunRef.current) return;
       setResourceContentTypeOptions(contentTypeOptions);
       setResourceContentTypeStatus('ready');
-      setPreviewItems((current) => current.map((item) => {
-        if (item.target !== 'resource' || !targets.some((target) => target.id === item.prospect.id)) {
-          return item;
-        }
-        const currentValue = item.fields[mapping.contentType!];
-        const hasManualValue = Array.isArray(currentValue) && currentValue.length > 0;
-        if (hasManualValue) return item;
-        return {
-          ...item,
-          fields: {
-            ...item.fields,
-            [mapping.contentType!]: inferContentTypesFromOptions(item.prospect, contentTypeOptions),
-          },
-        };
-      }));
+      void classifyAndApply(contentTypeOptions);
     } catch (error) {
       if (runId !== resourcePreviewRunRef.current) return;
       setResourceContentTypeStatus('error');
@@ -1819,6 +1911,9 @@ export function CreatorProspectingPage() {
   };
 
   const updatePreviewField = (prospectId: string, fieldName: string, value: unknown) => {
+    if (fieldName === settings.feishuFieldMapping?.contentType) {
+      resourceContentTypeManualIdsRef.current.add(prospectId);
+    }
     setPreviewItems((current) => current.map((item) => (
       item.prospect.id === prospectId
         ? {
@@ -1837,6 +1932,8 @@ export function CreatorProspectingPage() {
     setPreviewItems([]);
     setResourceContentTypeOptions([]);
     setResourceContentTypeStatus('idle');
+    setResourceContentTypeAiStatus('idle');
+    resourceContentTypeManualIdsRef.current.clear();
   };
 
   const handleConfirmInvitation = async (items: Prospect[]) => {
@@ -2520,6 +2617,22 @@ export function CreatorProspectingPage() {
                 内容类型选项读取失败；你仍可确认写入其他字段。
               </div>
             )}
+            {previewItems[0]?.target === 'resource' && resourceContentTypeAiStatus === 'loading' && (
+              <div className="flex items-center gap-2 rounded-md border border-violet-100 bg-violet-50/80 px-3 py-2 text-xs text-violet-800">
+                <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                飞书选项已读取，AI 正在根据频道简介和最近视频判断内容类型…
+              </div>
+            )}
+            {previewItems[0]?.target === 'resource' && resourceContentTypeAiStatus === 'error' && (
+              <div className="rounded-md border border-amber-200 bg-amber-50 px-3 py-2 text-xs text-amber-800">
+                AI 未能完成内容类型判断，请手动选择；其他字段不受影响。
+              </div>
+            )}
+            {previewItems[0]?.target === 'resource' && resourceContentTypeAiStatus === 'partial' && (
+              <div className="rounded-md border border-amber-200 bg-amber-50 px-3 py-2 text-xs text-amber-800">
+                部分红人的 AI 判断未完成，请检查内容类型后再确认。
+              </div>
+            )}
           </DialogHeader>
           <div className="mx-6 min-h-0 flex-1 overflow-y-auto rounded-lg border bg-slate-50/80">
             {previewItems.map((item) => (
@@ -2561,8 +2674,10 @@ export function CreatorProspectingPage() {
                             <p className="mt-1 text-xs text-muted-foreground">
                               {resourceContentTypeStatus === 'loading'
                                 ? '正在后台读取飞书“内容类型”选项…'
+                                : resourceContentTypeAiStatus === 'loading'
+                                  ? 'AI 正在判断；你现在手动选择后，AI 不会覆盖你的选择。'
                                 : resourceContentTypeOptions.length
-                                ? '选项实时读取自飞书“内容类型”字段，可多选。'
+                                ? '由 AI 根据频道资料推荐，选项来自飞书；你可在确认前修改。'
                                 : '未读取到飞书选项，请检查内容类型字段映射和飞书表格配置。'}
                             </p>
                           </dd>
