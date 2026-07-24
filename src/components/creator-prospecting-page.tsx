@@ -579,23 +579,8 @@ function FeishuOptionMultiSelect({
         <Command disablePointerSelection>
           <CommandInput placeholder="搜索飞书内容类型" />
           <CommandList
-            className="touch-pan-y scroll-auto overscroll-y-contain"
-            onWheel={(event) => {
-              const list = event.currentTarget;
-              const maxScrollTop = list.scrollHeight - list.clientHeight;
-              if (maxScrollTop <= 0) return;
-              const distance = event.deltaMode === 1
-                ? event.deltaY * 24
-                : event.deltaMode === 2
-                  ? event.deltaY * list.clientHeight
-                  : event.deltaY;
-              list.scrollTop = Math.min(
-                maxScrollTop,
-                Math.max(0, list.scrollTop + distance),
-              );
-              event.preventDefault();
-              event.stopPropagation();
-            }}
+            className="touch-pan-y scroll-auto overscroll-y-contain [scrollbar-gutter:stable]"
+            onWheel={(event) => event.stopPropagation()}
           >
             <CommandEmpty>没有匹配的飞书选项</CommandEmpty>
             <CommandGroup>

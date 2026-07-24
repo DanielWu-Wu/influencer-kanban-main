@@ -89,6 +89,11 @@ function normalizeExternalUrl(value: string): string | null {
   return null;
 }
 
+function formatNaturalNumber(value?: number | null) {
+  if (value === null || value === undefined || !Number.isFinite(value)) return '-';
+  return String(Math.max(0, Math.trunc(value)));
+}
+
 async function copyChannelUrl(url: string) {
   try {
     if (navigator.clipboard?.writeText) {
@@ -383,7 +388,7 @@ export function InfluencerImportTab({
               <TableHead className="w-12">头像</TableHead>
               <TableHead className="min-w-44">频道</TableHead>
               <TableHead>国家/语言</TableHead>
-              <TableHead className="text-right">粉丝</TableHead>
+              <TableHead className="text-right">粉丝数</TableHead>
               <TableHead className="text-right">近期均播</TableHead>
               <TableHead>邮箱</TableHead>
               <TableHead>飞书双表状态</TableHead>
@@ -456,7 +461,7 @@ export function InfluencerImportTab({
                       {prospect.language ? `${outreachLanguageLabel(prospect.language)}${prospect.languageSource === 'inferred' ? '（推断）' : ''}` : '语言未知'}
                     </p>
                   </TableCell>
-                  <TableCell className="text-right tabular-nums">{formatCompactNumber(prospect.subscriberCount)}</TableCell>
+                  <TableCell className="text-right tabular-nums">{formatNaturalNumber(prospect.subscriberCount)}</TableCell>
                   <TableCell className="text-right tabular-nums">{formatCompactNumber(prospect.recentAverageViews)}</TableCell>
                   <TableCell className="min-w-52">
                     <Input

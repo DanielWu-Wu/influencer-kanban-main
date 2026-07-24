@@ -63,6 +63,7 @@ const ROLE_CONFIG: Record<TableRole, {
     mappingKeys: [
       'channelName',
       'avatar',
+      'platform',
       'email',
       'channelUrl',
       'channelId',

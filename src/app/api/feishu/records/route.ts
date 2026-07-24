@@ -65,6 +65,12 @@ async function normalizeFieldsForWrite(
     fieldTypes = readCachedFeishuFieldTypes(cacheKey);
   }
   if (!fieldTypes) throw new Error('飞书字段类型缓存失败。');
+  const missingFieldNames = Object.keys(fields).filter((fieldName) => !fieldTypes.has(fieldName));
+  if (missingFieldNames.length) {
+    throw new Error(
+      `飞书中找不到字段“${missingFieldNames.join('、')}”。字段可能已改名或删除，请到设置中对目标子表执行“只读检查子表”，确认映射后重新保存。`,
+    );
+  }
   return Object.fromEntries(
     Object.entries(fields).map(([fieldName, value]) => {
       if (fieldTypes.get(fieldName) !== FEISHU_MULTI_SELECT_FIELD_TYPE) {
