@@ -3,6 +3,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   AlertTriangle,
+  CalendarDays,
   CheckCheck,
   CheckCircle2,
   Loader2,
@@ -25,6 +26,7 @@ import {
 import { Avatar, AvatarFallback, AvatarImage } from '@/components/ui/avatar';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
+import { Input } from '@/components/ui/input';
 import {
   Dialog,
   DialogContent,
@@ -125,6 +127,14 @@ const FOLLOW_UP_DRAFT_CACHE_MAX_AGE = 30 * DAY_MS;
 
 function followUpDraftKey(recordId: string, stage: FollowUpStage) {
   return `${recordId}:${stage}`;
+}
+
+function dateInputTimestamp(value: string, endOfDay = false) {
+  if (!value) return 0;
+  const date = new Date(`${value}T00:00:00`);
+  if (Number.isNaN(date.getTime())) return 0;
+  if (endOfDay) date.setHours(23, 59, 59, 999);
+  return date.getTime();
 }
 
 function loadFollowUpDraftCache(storageKey: string) {
@@ -247,6 +257,32 @@ function canGenerateStage(
   if (sentCount !== stage - 1) return false;
   const draft = drafts[followUpDraftKey(record.recordId, stage)];
   return !draft || draft.status === 'error';
+}
+
+function buildWritePreview(
+  record: FollowUpRecord,
+  mapping: FeishuFieldMapping,
+): WritePreview | null {
+  if (!record.check || record.check.outbound.length === 0) return null;
+  const fields: Array<{ label: string; value: string }> = [];
+  const payload: Record<string, unknown> = {};
+  const append = (key: FeishuFieldKey, label: string, value: string | number) => {
+    const fieldName = mapping[key];
+    if (!fieldName) return;
+    payload[fieldName] = value;
+    fields.push({ label, value: typeof value === 'number' ? formatDate(value) : value });
+  };
+  append('firstOutreach', '初次开发信', '已发');
+  if (record.check.outbound.length >= 2) {
+    append('secondOutreachDate', '一次 Follow Up 日期', new Date(record.check.outbound[1].date).getTime());
+    append('secondOutreach', '一次 Follow Up', '已发');
+  }
+  if (record.check.outbound.length >= 3) {
+    append('thirdOutreachDate', '二次 Follow Up 日期', new Date(record.check.outbound[2].date).getTime());
+    append('thirdOutreach', '二次 Follow Up', '已发');
+  }
+  append('hasReply', '是否回复', record.check.reply ? '已回复' : '未回复');
+  return fields.length ? { record, fields, payload } : null;
 }
 
 function followUpStatus(record: FollowUpRecord) {
@@ -452,6 +488,8 @@ export function OutreachFollowUpTab({ settings, auth, onAuthRefresh }: Props) {
     [settings.feishuProspectingFieldMapping],
   );
   const [rangeDays, setRangeDays] = useState<(typeof RANGE_OPTIONS)[number]>(10);
+  const [customStartDate, setCustomStartDate] = useState('');
+  const [customEndDate, setCustomEndDate] = useState('');
   const [records, setRecords] = useState<FollowUpRecord[]>([]);
   const [loading, setLoading] = useState(false);
   const [loadError, setLoadError] = useState('');
@@ -466,6 +504,13 @@ export function OutreachFollowUpTab({ settings, auth, onAuthRefresh }: Props) {
   } | null>(null);
   const [resultDraftKey, setResultDraftKey] = useState<string | null>(null);
   const [writePreview, setWritePreview] = useState<WritePreview | null>(null);
+  const [writeAllConfirmOpen, setWriteAllConfirmOpen] = useState(false);
+  const [writeAllProgress, setWriteAllProgress] = useState<{
+    completed: number;
+    total: number;
+    success: number;
+    failed: number;
+  } | null>(null);
   const [markSentPreview, setMarkSentPreview] = useState<MarkSentPreview | null>(null);
   const [writingId, setWritingId] = useState<string | null>(null);
   const avatarLookupIdsRef = useRef(new Set<string>());
@@ -479,6 +524,15 @@ export function OutreachFollowUpTab({ settings, auth, onAuthRefresh }: Props) {
     [auth?.email],
   );
   const canLoad = Boolean(settings.feishuProspectingUrl && mapping.developmentDate);
+  const customStartAt = dateInputTimestamp(customStartDate);
+  const customEndAt = dateInputTimestamp(customEndDate, true);
+  const hasCustomRange = Boolean(customStartAt && customEndAt);
+  const rangeStartAt = hasCustomRange
+    ? customStartAt
+    : startOfToday() - (rangeDays - 1) * DAY_MS;
+  const rangeEndAt = hasCustomRange
+    ? customEndAt
+    : startOfToday() + DAY_MS - 1;
   const fieldNames = useMemo(() => Array.from(new Set([
     mapping.channelName,
     mapping.avatar,
@@ -497,6 +551,14 @@ export function OutreachFollowUpTab({ settings, auth, onAuthRefresh }: Props) {
     mapping.cooperationType,
     mapping.cooperationIdea,
   ].filter(Boolean))) as string[], [mapping]);
+  const writeAllTargets = useMemo(
+    () => records.flatMap((record) => {
+      if (record.synced) return [];
+      const preview = buildWritePreview(record, mapping);
+      return preview ? [preview] : [];
+    }),
+    [mapping, records],
+  );
 
   useEffect(() => {
     skipDraftCacheSaveRef.current = true;
@@ -530,7 +592,6 @@ export function OutreachFollowUpTab({ settings, auth, onAuthRefresh }: Props) {
     setLoading(true);
     setLoadError('');
     try {
-      const startAt = startOfToday() - (rangeDays - 1) * DAY_MS;
       const response = await fetch('/api/feishu/records', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -544,7 +605,7 @@ export function OutreachFollowUpTab({ settings, auth, onAuthRefresh }: Props) {
             conditions: [{
               field_name: mapping.developmentDate,
               operator: 'isGreater',
-              value: ['ExactDate', String(startAt - 1)],
+              value: ['ExactDate', String(rangeStartAt - 1)],
             }],
           },
         }),
@@ -569,7 +630,10 @@ export function OutreachFollowUpTab({ settings, auth, onAuthRefresh }: Props) {
         targetProduct: mappedValue(record, mapping, 'targetProduct'),
         cooperationType: mappedValue(record, mapping, 'cooperationType'),
         cooperationIdea: mappedValue(record, mapping, 'cooperationIdea'),
-      })).filter((record) => record.developmentDate >= startAt)
+      })).filter((record) => (
+        record.developmentDate >= rangeStartAt
+        && record.developmentDate <= rangeEndAt
+      ))
         .sort((a, b) => b.developmentDate - a.developmentDate);
       avatarLookupIdsRef.current.clear();
       setRecords(next);
@@ -579,7 +643,7 @@ export function OutreachFollowUpTab({ settings, auth, onAuthRefresh }: Props) {
     } finally {
       setLoading(false);
     }
-  }, [fieldNames, mapping, rangeDays, settings.feishuProspectingUrl]);
+  }, [fieldNames, mapping, rangeEndAt, rangeStartAt, settings.feishuProspectingUrl]);
 
   useEffect(() => {
     void loadRecords();
@@ -726,7 +790,9 @@ export function OutreachFollowUpTab({ settings, auth, onAuthRefresh }: Props) {
         check = await requestCheck(record, await refreshGmailAuth());
       }
       setRecords((current) => current.map((item) => (
-        item.recordId === record.recordId ? { ...item, check, checkedAt: Date.now(), checkError: undefined } : item
+        item.recordId === record.recordId
+          ? { ...item, check, checkedAt: Date.now(), checkError: undefined, synced: false }
+          : item
       )));
       if (showFeedback) {
         toast.success(check.reply
@@ -1013,29 +1079,12 @@ export function OutreachFollowUpTab({ settings, auth, onAuthRefresh }: Props) {
       toast.error('请先成功检查 Gmail，并确认已找到初次开发信。');
       return;
     }
-    const fields: Array<{ label: string; value: string }> = [];
-    const payload: Record<string, unknown> = {};
-    const append = (key: FeishuFieldKey, label: string, value: string | number) => {
-      const fieldName = mapping[key];
-      if (!fieldName) return;
-      payload[fieldName] = value;
-      fields.push({ label, value: typeof value === 'number' ? formatDate(value) : value });
-    };
-    append('firstOutreach', '初次开发信', '已发');
-    if (record.check.outbound.length >= 2) {
-      append('secondOutreachDate', '一次 Follow Up 日期', new Date(record.check.outbound[1].date).getTime());
-      append('secondOutreach', '一次 Follow Up', '已发');
-    }
-    if (record.check.outbound.length >= 3) {
-      append('thirdOutreachDate', '二次 Follow Up 日期', new Date(record.check.outbound[2].date).getTime());
-      append('thirdOutreach', '二次 Follow Up', '已发');
-    }
-    append('hasReply', '是否回复', record.check.reply ? '已回复' : '未回复');
-    if (!fields.length) {
+    const preview = buildWritePreview(record, mapping);
+    if (!preview) {
       toast.error('当前飞书字段映射中没有可写回的跟进字段。');
       return;
     }
-    setWritePreview({ record, fields, payload });
+    setWritePreview(preview);
   };
 
   const confirmWrite = async () => {
@@ -1054,14 +1103,76 @@ export function OutreachFollowUpTab({ settings, auth, onAuthRefresh }: Props) {
       });
       const result = await response.json();
       if (!response.ok || !result.success) throw new Error(String(result.error || '写回飞书失败。'));
+      setRecords((current) => current.map((record) => (
+        record.recordId === writePreview.record.recordId ? { ...record, synced: true } : record
+      )));
       setWritePreview(null);
       toast.success('已写回当前红人的飞书开发记录。');
-      await loadRecords();
     } catch (error) {
       toast.error(error instanceof Error ? error.message : '写回飞书失败。');
     } finally {
       setWritingId(null);
     }
+  };
+
+  const confirmWriteAll = async () => {
+    if (!settings.feishuProspectingUrl || !writeAllTargets.length || writeAllProgress) return;
+    setWriteAllProgress({
+      completed: 0,
+      total: writeAllTargets.length,
+      success: 0,
+      failed: 0,
+    });
+    let nextIndex = 0;
+    let successCount = 0;
+    let failedCount = 0;
+    const successfulIds = new Set<string>();
+    const worker = async () => {
+      while (nextIndex < writeAllTargets.length) {
+        const preview = writeAllTargets[nextIndex];
+        nextIndex += 1;
+        let success = false;
+        try {
+          const response = await fetch('/api/feishu/records', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              action: 'update',
+              url: settings.feishuProspectingUrl,
+              recordId: preview.record.recordId,
+              fields: preview.payload,
+            }),
+          });
+          const result = await response.json();
+          if (!response.ok || !result.success) throw new Error(String(result.error || '写回飞书失败。'));
+          successfulIds.add(preview.record.recordId);
+          successCount += 1;
+          success = true;
+        } catch {
+          // 单条失败不会中断整批，完成后统一汇总。
+          failedCount += 1;
+        } finally {
+          setWriteAllProgress((current) => current ? {
+            ...current,
+            completed: current.completed + 1,
+            success: current.success + (success ? 1 : 0),
+            failed: current.failed + (success ? 0 : 1),
+          } : null);
+        }
+      }
+    };
+    await Promise.all(Array.from(
+      { length: Math.min(2, writeAllTargets.length) },
+      worker,
+    ));
+    setRecords((current) => current.map((record) => (
+      successfulIds.has(record.recordId) ? { ...record, synced: true } : record
+    )));
+    setWriteAllProgress(null);
+    const summary = `成功 ${successCount}，失败 ${failedCount}`;
+    if (failedCount) toast.warning(`批量写回完成：${summary}。失败记录可在列表中重试。`);
+    else toast.success(`批量写回完成：${summary}。`);
+    setWriteAllConfirmOpen(false);
   };
 
   const openMarkSent = (record: FollowUpRecord, stage: FollowUpStage) => {
@@ -1128,36 +1239,107 @@ export function OutreachFollowUpTab({ settings, auth, onAuthRefresh }: Props) {
 
   return (
     <div className="flex min-h-0 flex-1 flex-col gap-4 overflow-hidden">
-      <section className="flex flex-wrap items-center justify-between gap-3 rounded-lg border border-border/70 bg-slate-50/60 px-4 py-3">
+      <section className="rounded-lg border border-border/70 bg-slate-50/60 px-4 py-3">
         <div>
           <h2 className="text-base font-semibold">开发信跟进</h2>
           <p className="mt-1 text-sm text-muted-foreground">
             第 3 天进行一次 Follow Up，第 7 天进行二次 Follow Up；红人回复后的正常往来不计入 Follow Up。
           </p>
         </div>
-        <div className="flex flex-wrap items-center gap-2">
+        <div className="mt-3 flex min-w-0 flex-wrap items-center gap-2">
+          <div
+            className={`flex items-center gap-1 rounded-md border bg-background p-0.5 ${
+              hasCustomRange ? 'border-primary/50 ring-1 ring-primary/15' : 'border-border'
+            }`}
+            role="group"
+            aria-label="自定义开发日期范围"
+          >
+            <CalendarDays className="ml-2 h-3.5 w-3.5 shrink-0 text-muted-foreground" />
+            <Input
+              type="date"
+              value={customStartDate}
+              max={customEndDate || undefined}
+              onChange={(event) => {
+                const nextStart = event.target.value;
+                if (!nextStart) {
+                  setCustomStartDate('');
+                  setCustomEndDate('');
+                  return;
+                }
+                setCustomStartDate(nextStart);
+                if (!customEndDate || nextStart > customEndDate) setCustomEndDate(nextStart);
+              }}
+              className="h-8 w-[8.5rem] border-0 bg-transparent px-2 text-xs shadow-none focus-visible:ring-0"
+              aria-label="开发日期开始"
+              title="开发日期开始"
+            />
+            <span className="text-xs text-muted-foreground">至</span>
+            <Input
+              type="date"
+              value={customEndDate}
+              min={customStartDate || undefined}
+              onChange={(event) => {
+                const nextEnd = event.target.value;
+                if (!nextEnd) {
+                  setCustomStartDate('');
+                  setCustomEndDate('');
+                  return;
+                }
+                setCustomEndDate(nextEnd);
+                if (!customStartDate || nextEnd < customStartDate) setCustomStartDate(nextEnd);
+              }}
+              className="h-8 w-[8.5rem] border-0 bg-transparent px-2 text-xs shadow-none focus-visible:ring-0"
+              aria-label="开发日期结束"
+              title="开发日期结束"
+            />
+          </div>
           <div className="flex rounded-md border border-border bg-background p-0.5" role="group" aria-label="开发日期范围">
             {RANGE_OPTIONS.map((days) => (
               <button
                 key={days}
                 type="button"
-                onClick={() => setRangeDays(days)}
+                onClick={() => {
+                  setCustomStartDate('');
+                  setCustomEndDate('');
+                  setRangeDays(days);
+                }}
                 className={`min-h-8 rounded px-2.5 text-xs font-medium transition-colors ${
-                  rangeDays === days ? 'bg-primary text-primary-foreground' : 'text-muted-foreground hover:text-foreground'
+                  !hasCustomRange && rangeDays === days
+                    ? 'bg-primary text-primary-foreground'
+                    : 'text-muted-foreground hover:text-foreground'
                 }`}
               >
                 最近 {days} 天
               </button>
             ))}
           </div>
-          <Button variant="outline" size="sm" onClick={() => void loadRecords()} disabled={loading || Boolean(draftBatchProgress)}>
-            {loading ? <Loader2 className="h-4 w-4 animate-spin" /> : <RefreshCw className="h-4 w-4" />}
-            刷新列表
-          </Button>
-          <Button size="sm" onClick={() => void handleCheckAll()} disabled={loading || Boolean(batchProgress) || Boolean(draftBatchProgress) || !records.length}>
-            {batchProgress ? <Loader2 className="h-4 w-4 animate-spin" /> : <CheckCheck className="h-4 w-4" />}
-            {batchProgress ? `正在检查 ${batchProgress.completed} / ${batchProgress.total}` : '检查全部'}
-          </Button>
+          <div className="ml-auto flex shrink-0 items-center gap-2">
+            <Button variant="outline" size="sm" onClick={() => void loadRecords()} disabled={loading || Boolean(draftBatchProgress)}>
+              {loading ? <Loader2 className="h-4 w-4 animate-spin" /> : <RefreshCw className="h-4 w-4" />}
+              刷新列表
+            </Button>
+            <Button size="sm" onClick={() => void handleCheckAll()} disabled={loading || Boolean(batchProgress) || Boolean(draftBatchProgress) || !records.length}>
+              {batchProgress ? <Loader2 className="h-4 w-4 animate-spin" /> : <CheckCheck className="h-4 w-4" />}
+              {batchProgress ? `正在检查 ${batchProgress.completed} / ${batchProgress.total}` : '检查全部'}
+            </Button>
+            <Button
+              size="sm"
+              variant="outline"
+              onClick={() => setWriteAllConfirmOpen(true)}
+              disabled={
+                loading
+                || Boolean(batchProgress)
+                || Boolean(draftBatchProgress)
+                || Boolean(writeAllProgress)
+                || writeAllTargets.length === 0
+              }
+            >
+              {writeAllProgress ? <Loader2 className="h-4 w-4 animate-spin" /> : <Send className="h-4 w-4" />}
+              {writeAllProgress
+                ? `正在写回 ${writeAllProgress.completed}/${writeAllProgress.total}`
+                : '写回全部'}
+            </Button>
+          </div>
         </div>
       </section>
 
@@ -1326,7 +1508,12 @@ export function OutreachFollowUpTab({ settings, auth, onAuthRefresh }: Props) {
                           </Button>
                         ) : null}
 
-                        <Button variant="ghost" size="sm" onClick={() => openWritePreview(record)} disabled={!record.check || record.check.outbound.length === 0 || checking}>
+                        <Button
+                          variant="ghost"
+                          size="sm"
+                          onClick={() => openWritePreview(record)}
+                          disabled={record.synced || !record.check || record.check.outbound.length === 0 || checking}
+                        >
                           <Send className="h-4 w-4" />{record.synced ? '已写回飞书' : '写回检查结果'}
                         </Button>
                       </div>
@@ -1368,6 +1555,61 @@ export function OutreachFollowUpTab({ settings, auth, onAuthRefresh }: Props) {
           </DialogFooter>
         </DialogContent>
       </Dialog>
+
+      <AlertDialog
+        open={writeAllConfirmOpen}
+        onOpenChange={(open) => !writeAllProgress && setWriteAllConfirmOpen(open)}
+      >
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>确认写回全部检查结果</AlertDialogTitle>
+            <AlertDialogDescription>
+              将把当前日期范围内已完成 Gmail 检查的 {writeAllTargets.length} 条结果同步到“红人开发情况表”。
+              未检查、检查失败或没有找到初次开发信的记录不会写入。
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <div className="rounded-md border border-border bg-slate-50 p-3 text-sm">
+            {writeAllProgress ? (
+              <div className="space-y-2">
+                <div className="flex justify-between gap-4">
+                  <span className="text-muted-foreground">写回进度</span>
+                  <span className="font-medium">{writeAllProgress.completed} / {writeAllProgress.total}</span>
+                </div>
+                <div className="flex justify-between gap-4">
+                  <span className="text-muted-foreground">当前结果</span>
+                  <span className="font-medium text-emerald-700">
+                    成功 {writeAllProgress.success}，失败 {writeAllProgress.failed}
+                  </span>
+                </div>
+              </div>
+            ) : (
+              <div className="space-y-2">
+                <div className="flex justify-between gap-4">
+                  <span className="text-muted-foreground">待写回记录</span>
+                  <span className="font-medium">{writeAllTargets.length} 条</span>
+                </div>
+                <div className="flex justify-between gap-4">
+                  <span className="text-muted-foreground">写回内容</span>
+                  <span className="text-right font-medium">开发信状态、Follow Up 状态与日期、是否回复</span>
+                </div>
+              </div>
+            )}
+          </div>
+          <AlertDialogFooter>
+            <AlertDialogCancel disabled={Boolean(writeAllProgress)}>取消</AlertDialogCancel>
+            <AlertDialogAction
+              onClick={(event) => {
+                event.preventDefault();
+                void confirmWriteAll();
+              }}
+              disabled={Boolean(writeAllProgress) || writeAllTargets.length === 0}
+            >
+              {writeAllProgress ? <Loader2 className="h-4 w-4 animate-spin" /> : <CheckCircle2 className="h-4 w-4" />}
+              {writeAllProgress ? '正在写回' : `确认写回 ${writeAllTargets.length} 条`}
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
 
       <AlertDialog open={Boolean(writePreview)} onOpenChange={(open) => !open && !writingId && setWritePreview(null)}>
         <AlertDialogContent>
