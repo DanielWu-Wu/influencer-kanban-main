@@ -1,6 +1,6 @@
 'use client';
 
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import {
   BadgePercent,
   BarChart3,
@@ -39,7 +39,7 @@ import {
   type PromptTemplate,
   type PromptType,
 } from '@/lib/ai-prompts';
-import { generateId, useSettings } from '@/lib/data';
+import { generateId, useSettings, type AppSettings } from '@/lib/data';
 
 type PromptValues = Record<PromptType, string>;
 
@@ -154,6 +154,32 @@ const initialPrompts: PromptValues = {
   discountNotice: DEFAULT_DISCOUNT_NOTICE_PROMPT,
 };
 
+const DEFAULT_SELECTED_PROMPT_TEMPLATES: Record<PromptType, string> = {
+  translate: 'builtin-translate-standard',
+  analysis: 'builtin-analysis-youtube',
+  draft: 'builtin-draft-business',
+  outreach: 'builtin-outreach-youtube',
+  outreachFollowUp1: 'builtin-outreach-follow-up-1',
+  outreachFollowUp2: 'builtin-outreach-follow-up-2',
+  logisticsNotice: 'builtin-logistics-notice',
+  discountNotice: 'builtin-discount-notice',
+};
+
+function getSavedPromptValues(settings: AppSettings): PromptValues {
+  return {
+    translate: settings.translatePrompt || DEFAULT_TRANSLATE_PROMPT,
+    analysis: settings.aiAnalysisPrompt || DEFAULT_ANALYSIS_PROMPT,
+    draft: settings.aiDraftPrompt || settings.aiEmailPrompt || DEFAULT_DRAFT_PROMPT,
+    outreach: settings.aiOutreachPrompt || DEFAULT_OUTREACH_PROMPT,
+    outreachFollowUp1:
+      settings.aiOutreachFollowUp1Prompt || DEFAULT_OUTREACH_FOLLOW_UP_1_PROMPT,
+    outreachFollowUp2:
+      settings.aiOutreachFollowUp2Prompt || DEFAULT_OUTREACH_FOLLOW_UP_2_PROMPT,
+    logisticsNotice: settings.aiLogisticsNoticePrompt || DEFAULT_LOGISTICS_NOTICE_PROMPT,
+    discountNotice: settings.aiDiscountNoticePrompt || DEFAULT_DISCOUNT_NOTICE_PROMPT,
+  };
+}
+
 export default function PromptManager({ mode = 'general' }: { mode?: PromptManagerMode }) {
   const pageConfig = PAGE_CONFIG[mode];
   const { settings, updateSettings, loading } = useSettings();
@@ -169,16 +195,10 @@ export default function PromptManager({ mode = 'general' }: { mode?: PromptManag
     logisticsNotice: '',
     discountNotice: '',
   });
-  const [selectedTemplates, setSelectedTemplates] = useState<Record<PromptType, string>>({
-    translate: 'builtin-translate-standard',
-    analysis: 'builtin-analysis-youtube',
-    draft: 'builtin-draft-business',
-    outreach: 'builtin-outreach-youtube',
-    outreachFollowUp1: 'builtin-outreach-follow-up-1',
-    outreachFollowUp2: 'builtin-outreach-follow-up-2',
-    logisticsNotice: 'builtin-logistics-notice',
-    discountNotice: 'builtin-discount-notice',
-  });
+  const [selectedTemplates, setSelectedTemplates] = useState<Record<PromptType, string>>(
+    () => ({ ...DEFAULT_SELECTED_PROMPT_TEMPLATES }),
+  );
+  const selectedTemplatesHydratedRef = useRef(false);
   const [expandedSection, setExpandedSection] = useState<PromptType | null>(null);
   const [saved, setSaved] = useState(false);
 
@@ -213,6 +233,44 @@ export default function PromptManager({ mode = 'general' }: { mode?: PromptManag
     if (!loading) setCustomTemplates(settings.promptTemplates || []);
   }, [loading, settings.promptTemplates]);
 
+  useEffect(() => {
+    if (loading || selectedTemplatesHydratedRef.current) return;
+    const availableTemplates = [
+      ...BUILT_IN_PROMPT_TEMPLATES,
+      ...(settings.promptTemplates || []),
+    ];
+    const savedSelections = settings.selectedPromptTemplates || {};
+    const savedPromptValues = getSavedPromptValues(settings);
+    const restoredSelections = { ...DEFAULT_SELECTED_PROMPT_TEMPLATES };
+
+    for (const type of Object.keys(restoredSelections) as PromptType[]) {
+      const savedTemplateId = savedSelections[type];
+      const savedTemplateExists = savedTemplateId && availableTemplates.some(
+        (template) => template.id === savedTemplateId && template.type === type,
+      );
+      if (savedTemplateExists && savedTemplateId) {
+        restoredSelections[type] = savedTemplateId;
+        continue;
+      }
+      const contentMatchedTemplate = availableTemplates.find(
+        (template) =>
+          template.type === type
+          && template.content.trim() === savedPromptValues[type].trim(),
+      );
+      if (contentMatchedTemplate) {
+        restoredSelections[type] = contentMatchedTemplate.id;
+      }
+    }
+
+    setSelectedTemplates(restoredSelections);
+    selectedTemplatesHydratedRef.current = true;
+    const selectionNeedsMigration = (Object.keys(restoredSelections) as PromptType[])
+      .some((type) => savedSelections[type] !== restoredSelections[type]);
+    if (selectionNeedsMigration) {
+      updateSettings({ selectedPromptTemplates: restoredSelections });
+    }
+  }, [loading, settings, updateSettings]);
+
   const allTemplates = useMemo(
     () => [...BUILT_IN_PROMPT_TEMPLATES, ...customTemplates],
     [customTemplates],
@@ -229,6 +287,7 @@ export default function PromptManager({ mode = 'general' }: { mode?: PromptManag
         translatePrompt: prompts.translate,
         aiAnalysisPrompt: prompts.analysis,
         promptTemplates: customTemplates,
+        selectedPromptTemplates: selectedTemplates,
       });
     } else {
       updateSettings({
@@ -240,6 +299,7 @@ export default function PromptManager({ mode = 'general' }: { mode?: PromptManag
         aiLogisticsNoticePrompt: prompts.logisticsNotice,
         aiDiscountNoticePrompt: prompts.discountNotice,
         promptTemplates: customTemplates,
+        selectedPromptTemplates: selectedTemplates,
       });
     }
     setSaved(true);
@@ -286,11 +346,17 @@ export default function PromptManager({ mode = 'general' }: { mode?: PromptManag
       toast.error('内置模板不能删除');
       return;
     }
-    persistTemplates(customTemplates.filter((item) => item.id !== templateId));
+    const nextTemplates = customTemplates.filter((item) => item.id !== templateId);
     const fallback = BUILT_IN_PROMPT_TEMPLATES.find((item) => item.type === type);
     if (fallback) {
-      setSelectedTemplates((current) => ({ ...current, [type]: fallback.id }));
+      const nextSelections = { ...selectedTemplates, [type]: fallback.id };
+      setCustomTemplates(nextTemplates);
+      setSelectedTemplates(nextSelections);
       setPrompts((current) => ({ ...current, [type]: fallback.content }));
+      updateSettings({
+        promptTemplates: nextTemplates,
+        selectedPromptTemplates: nextSelections,
+      });
     }
     toast.success('模板已删除');
   };
@@ -365,10 +431,16 @@ export default function PromptManager({ mode = 'general' }: { mode?: PromptManag
                         variant="ghost"
                         size="sm"
                         className="h-8 gap-1 rounded-lg text-muted-foreground hover:bg-white/80"
-                        onClick={() => setPrompts((current) => ({
-                          ...current,
-                          [section.type]: section.defaultValue,
-                        }))}
+                        onClick={() => {
+                          setPrompts((current) => ({
+                            ...current,
+                            [section.type]: section.defaultValue,
+                          }));
+                          setSelectedTemplates((current) => ({
+                            ...current,
+                            [section.type]: DEFAULT_SELECTED_PROMPT_TEMPLATES[section.type],
+                          }));
+                        }}
                       >
                         <RotateCcw className="h-3.5 w-3.5" />
                         恢复默认

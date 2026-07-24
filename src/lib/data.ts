@@ -17,7 +17,7 @@ import {
   EmailDraft,
   Product,
 } from './types';
-import type { PromptTemplate } from './ai-prompts';
+import type { PromptTemplate, PromptType } from './ai-prompts';
 import type { FeishuFieldMapping } from './feishu-mapping';
 import type { RecordAssistantSettings } from './record-assistant';
 import { getSupabaseBrowserClient } from './supabase/client';
@@ -80,6 +80,7 @@ export interface AppSettings {
   aiLogisticsNoticePrompt?: string;
   aiDiscountNoticePrompt?: string;
   promptTemplates?: PromptTemplate[];
+  selectedPromptTemplates?: Partial<Record<PromptType, string>>;
   modelProvider?: 'builtin' | 'custom';
   customApiUrl?: string;
   customApiKey?: string;

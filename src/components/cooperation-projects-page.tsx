@@ -245,12 +245,11 @@ function ProjectsTable({ projects, selectedId, onSelect }: {
 }) {
   return (
     <div className="h-full overflow-auto bg-white">
-      <Table className="min-w-[1120px]">
+      <Table className="min-w-[1020px]">
         <TableHeader className="sticky top-0 z-10 bg-slate-50">
           <TableRow className="border-slate-200 hover:bg-slate-50">
             <TableHead className="w-[210px] text-xs font-medium text-slate-600">红人</TableHead>
             <TableHead className="w-[190px] text-xs font-medium text-slate-600">合作项目</TableHead>
-            <TableHead className="w-[100px] text-xs font-medium text-slate-600">负责人</TableHead>
             <TableHead className="w-[135px] text-xs font-medium text-slate-600">当前进度</TableHead>
             <TableHead className="w-[112px] text-xs font-medium text-slate-600">阶段时间</TableHead>
             <TableHead className="w-[180px] text-xs font-medium text-slate-600">下一步</TableHead>
@@ -278,7 +277,6 @@ function ProjectsTable({ projects, selectedId, onSelect }: {
                 <p className="max-w-[180px] truncate text-sm font-medium text-slate-800" title={project.product}>{project.product}</p>
                 <p className="mt-0.5 text-[11px] text-slate-500">{project.site}</p>
               </TableCell>
-              <TableCell className="text-xs text-slate-700">{project.owner}</TableCell>
               <TableCell>
                 <StageBadge stage={project.stage} />
                 <p className="mt-1 text-[10px] text-slate-400">自动判断</p>
@@ -364,10 +362,7 @@ function ProjectsBoard({ projects, onSelect }: {
                     <ProjectIdentity project={project} compact />
                     <div className="mt-3 border-t border-slate-100 pt-2">
                       <p className="truncate text-xs font-medium text-slate-800">{project.product}</p>
-                      <div className="mt-2 flex items-center justify-between gap-2 text-[11px] text-slate-500">
-                        <span>{project.owner}</span>
-                        <span>{formatStageDuration(project.stageDate)}</span>
-                      </div>
+                      <p className="mt-2 text-right text-[11px] text-slate-500">{formatStageDuration(project.stageDate)}</p>
                       <div className="mt-2 flex items-center justify-between gap-2">
                         <span className="text-[11px] text-slate-500">预计 {formatCooperationDate(project.expectedPublishDate)}</span>
                         {project.risks.length ? <AlertTriangle className="h-3.5 w-3.5 text-amber-600" /> : null}
@@ -515,7 +510,6 @@ function ProjectDetail({ project, settings, feishuUrl, onProjectUpdated, onClose
           <dl>
             <DetailValue label="合作产品" value={project.product} />
             <DetailValue label="联系邮箱" value={project.email} />
-            <DetailValue label="负责人" value={project.owner} />
             <DetailValue label="合作站点" value={project.site} />
             <DetailValue label="合作类型" value={project.cooperationType} />
             <DetailValue label="合作费用" value={project.originalCurrencyCost} />
@@ -647,7 +641,6 @@ export function CooperationProjectsPage({ onOpenSettings }: { onOpenSettings: ()
   const [search, setSearch] = useState('');
   const deferredSearch = useDeferredValue(search);
   const [stageFilter, setStageFilter] = useState<CooperationStage | 'all'>('all');
-  const [ownerFilter, setOwnerFilter] = useState('all');
   const [productFilter, setProductFilter] = useState('all');
   const [siteFilter, setSiteFilter] = useState('all');
   const [riskFilter, setRiskFilter] = useState<RiskFilter>('all');
@@ -749,7 +742,6 @@ export function CooperationProjectsPage({ onOpenSettings }: { onOpenSettings: ()
     else setSelectedProject(undefined);
   }, [projects, selectedProject]);
 
-  const owners = useMemo(() => uniqueValues(projects.map((project) => project.owner), '未分配'), [projects]);
   const products = useMemo(() => uniqueValues(projects.map((project) => project.product), '未填写合作产品'), [projects]);
   const sites = useMemo(() => uniqueValues(projects.map((project) => project.site), '未填写'), [projects]);
 
@@ -759,10 +751,9 @@ export function CooperationProjectsPage({ onOpenSettings }: { onOpenSettings: ()
     const to = dateTo ? new Date(`${dateTo}T23:59:59`).getTime() : Number.POSITIVE_INFINITY;
     return projects
       .filter((project) => {
-        const haystack = [project.channelName, project.product, project.owner, project.site, project.region, project.channelUrl].join(' ').toLowerCase();
+        const haystack = [project.channelName, project.product, project.site, project.region, project.channelUrl].join(' ').toLowerCase();
         if (query && !haystack.includes(query)) return false;
         if (stageFilter !== 'all' && project.stage !== stageFilter) return false;
-        if (ownerFilter !== 'all' && project.owner !== ownerFilter) return false;
         if (productFilter !== 'all' && project.product !== productFilter) return false;
         if (siteFilter !== 'all' && project.site !== siteFilter) return false;
         if (riskFilter === 'risk' && project.risks.length === 0) return false;
@@ -779,7 +770,7 @@ export function CooperationProjectsPage({ onOpenSettings }: { onOpenSettings: ()
         if (right.stageDate) return 1;
         return left.channelName.localeCompare(right.channelName, 'zh-CN');
       });
-  }, [dateFrom, dateTo, deferredSearch, ownerFilter, productFilter, projects, riskFilter, siteFilter, stageFilter]);
+  }, [dateFrom, dateTo, deferredSearch, productFilter, projects, riskFilter, siteFilter, stageFilter]);
 
   if (settingsLoading || (loading && url)) {
     return (
@@ -836,15 +827,11 @@ export function CooperationProjectsPage({ onOpenSettings }: { onOpenSettings: ()
           <div className="flex flex-wrap items-center gap-2">
             <div className="relative min-w-[220px] flex-1 xl:max-w-[310px]">
               <Search className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-slate-400" />
-              <Input value={search} onChange={(event) => setSearch(event.target.value)} placeholder="搜索红人、产品或负责人" className="h-9 border-slate-200 pl-9 text-xs" />
+              <Input value={search} onChange={(event) => setSearch(event.target.value)} placeholder="搜索红人或产品" className="h-9 border-slate-200 pl-9 text-xs" />
             </div>
             <Select value={stageFilter} onValueChange={(value) => setStageFilter(value as CooperationStage | 'all')}>
               <SelectTrigger className="h-9 w-[135px] border-slate-200 text-xs"><SelectValue placeholder="合作阶段" /></SelectTrigger>
               <SelectContent><SelectItem value="all">全部阶段</SelectItem>{COOPERATION_STAGES.map((stage) => <SelectItem key={stage} value={stage}>{COOPERATION_STAGE_META[stage].label}</SelectItem>)}</SelectContent>
-            </Select>
-            <Select value={ownerFilter} onValueChange={setOwnerFilter}>
-              <SelectTrigger className="h-9 w-[120px] border-slate-200 text-xs"><SelectValue placeholder="负责人" /></SelectTrigger>
-              <SelectContent><SelectItem value="all">全部负责人</SelectItem>{owners.map((owner) => <SelectItem key={owner} value={owner}>{owner}</SelectItem>)}</SelectContent>
             </Select>
             <Select value={productFilter} onValueChange={setProductFilter}>
               <SelectTrigger className="h-9 w-[140px] border-slate-200 text-xs"><SelectValue placeholder="合作产品" /></SelectTrigger>
