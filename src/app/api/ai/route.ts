@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 import {
   DEFAULT_ANALYSIS_PROMPT,
+  DEFAULT_COOPERATION_IDEA_PROMPT,
   DEFAULT_DISCOUNT_NOTICE_PROMPT,
   DEFAULT_DRAFT_PROMPT,
   DEFAULT_LOGISTICS_NOTICE_PROMPT,
@@ -282,6 +283,86 @@ confidence 使用 0 到 100 的整数。
           confidence,
           found,
         },
+      });
+    }
+
+    if (action === 'suggestCooperationIdea') {
+      const channel = (body.channel || {}) as OutreachChannel;
+      const targetProduct = String(body.targetProduct || '').trim();
+      const cooperationType = String(body.cooperationType || '').trim();
+      const products = safeArray(body.products)
+        .slice(0, 1)
+        .map((product) => {
+          const item = (product || {}) as Record<string, unknown>;
+          return {
+            name: String(item.name || '').slice(0, 200),
+            model: String(item.model || '').slice(0, 200),
+            productUrl: String(item.productUrl || '').slice(0, 1_000),
+            sellingPoints: String(item.sellingPoints || '').slice(0, 6_000),
+            technicalSpecifications: String(item.technicalSpecifications || '').slice(0, 6_000),
+          };
+        });
+      const recentVideos = (channel.recentVideos || [])
+        .slice(0, 8)
+        .map((video) => ({
+          title: String(video.title || '').slice(0, 300),
+          description: String(video.description || '').slice(0, 600),
+        }));
+
+      if (!targetProduct || !cooperationType) {
+        return NextResponse.json(
+          { error: '请先选择目标产品和合作形式。' },
+          { status: 400 },
+        );
+      }
+
+      const result = parseJson(await invokeOpenAICompatibleApi(
+        [
+          {
+            role: 'system',
+            content: withCustomInstructions(
+              `${DEFAULT_COOPERATION_IDEA_PROMPT}
+
+无论用户如何微调提示词，都必须遵守以下系统边界：
+1. 不得编造输入资料中没有的产品功能、参数、合作条件或创作者事实。
+2. 只返回严格 JSON，不要 Markdown、解释或额外字段：
+{"cooperationIdea":"中文合作想法"}`,
+              body.cooperationIdeaPrompt,
+              DEFAULT_COOPERATION_IDEA_PROMPT,
+            ),
+          },
+          {
+            role: 'user',
+            content: JSON.stringify({
+              channel: {
+                title: String(channel.title || '').slice(0, 300),
+                description: String(channel.description || '').slice(0, 8_000),
+                country: String(channel.country || '').slice(0, 100),
+                language: String(channel.language || '').slice(0, 100),
+                subscriberCount: channel.subscriberCount ?? null,
+                recentAverageViews: channel.recentAverageViews ?? null,
+                recentVideos,
+              },
+              targetProduct,
+              cooperationType,
+              products,
+              userPreference: String(body.userPreference || '').slice(0, 3_000),
+            }, null, 2),
+          },
+        ],
+        getModelOptions(body, 0.35),
+      )) as { cooperationIdea?: unknown };
+
+      const cooperationIdea = String(result.cooperationIdea || '').trim().slice(0, 1_500);
+      if (!cooperationIdea) {
+        return NextResponse.json(
+          { error: 'AI 没有返回可用的合作想法。' },
+          { status: 502 },
+        );
+      }
+      return NextResponse.json({
+        success: true,
+        data: { cooperationIdea },
       });
     }
 

@@ -5,6 +5,8 @@ import {
   AlertTriangle,
   ArrowLeft,
   CheckCircle2,
+  ChevronDown,
+  ChevronUp,
   Edit3,
   ExternalLink,
   GripVertical,
@@ -38,7 +40,6 @@ import {
   countryLabel,
   formatCompactNumber,
   type Prospect,
-  WORKFLOW_META,
 } from '@/lib/creator-prospecting';
 import { appendEmailSignature, stripConfiguredEmailSignature } from '@/lib/email-content';
 import { outreachLanguageLabel } from '@/lib/outreach-languages';
@@ -304,6 +305,7 @@ export function OutreachEmailTab({
 }: Props) {
   const [query, setQuery] = useState('');
   const [editingIds, setEditingIds] = useState<string[]>([]);
+  const [expandedIds, setExpandedIds] = useState<string[]>([]);
   const [confirmDraftId, setConfirmDraftId] = useState<string | null>(null);
   const filtered = useMemo(() => {
     const normalized = query.trim().toLowerCase();
@@ -334,315 +336,419 @@ export function OutreachEmailTab({
           <h2 className="font-semibold">邮件审核队列</h2>
           <p className="text-sm text-muted-foreground">生成后先人工检查和编辑，确认无误才允许写入 Gmail 草稿。</p>
         </div>
-        <div className="relative min-w-64">
-          <Search className="absolute left-2.5 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
-          <Input
-            value={query}
-            onChange={(event) => setQuery(event.target.value)}
-            placeholder="筛选频道、邮箱或产品"
-            className="h-9 bg-white/75 pl-8"
-          />
+        <div className="flex flex-wrap items-center justify-end gap-2">
+          <span className="text-xs text-muted-foreground">{filtered.length} 封待审核</span>
+          <Button
+            type="button"
+            size="sm"
+            variant="outline"
+            className="h-9 bg-white/75"
+            onClick={() => setExpandedIds((current) => Array.from(new Set([
+              ...current,
+              ...filtered.map((prospect) => prospect.id),
+            ])))}
+            disabled={filtered.length === 0 || filtered.every((prospect) => expandedIds.includes(prospect.id))}
+          >
+            <ChevronDown className="mr-1 h-4 w-4" />
+            全部展开
+          </Button>
+          <Button
+            type="button"
+            size="sm"
+            variant="outline"
+            className="h-9 bg-white/75"
+            onClick={() => {
+              const filteredIds = new Set(filtered.map((prospect) => prospect.id));
+              setExpandedIds((current) => current.filter((id) => !filteredIds.has(id)));
+            }}
+            disabled={!filtered.some((prospect) => expandedIds.includes(prospect.id))}
+          >
+            <ChevronUp className="mr-1 h-4 w-4" />
+            全部收起
+          </Button>
+          <div className="relative min-w-64">
+            <Search className="absolute left-2.5 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
+            <Input
+              value={query}
+              onChange={(event) => setQuery(event.target.value)}
+              placeholder="筛选频道、邮箱或产品"
+              className="h-9 bg-white/75 pl-8"
+            />
+          </div>
         </div>
       </div>
 
       <div className="min-h-0 flex-1 space-y-3 overflow-y-auto pr-1">
         {filtered.map((prospect) => {
           const isEditing = editingIds.includes(prospect.id);
+          const isExpanded = expandedIds.includes(prospect.id);
           const safeDraftBody = sanitizeOutreachEmailBody(prospect.aiDraft?.body);
           const hasDraft = Boolean(prospect.aiDraft?.subject && safeDraftBody);
-          const isSaved = prospect.workflowStatus === 'gmail_draft_saved';
           const isGenerating = generatingId === prospect.id
             || ['preparing', 'streaming_body', 'finalizing'].includes(prospect.outreachGenerationStage || '');
           const productAsset = selectedProductEmailAsset(products, prospect.targetProduct);
           const isRegeneratingSubject = regeneratingPart?.id === prospect.id && regeneratingPart.part === 'subject';
           const isRegeneratingBody = regeneratingPart?.id === prospect.id && regeneratingPart.part === 'body';
           return (
-            <article key={prospect.id} className="rounded-lg border border-border/70 bg-white/70">
-              <header className="flex flex-wrap items-start justify-between gap-3 border-b bg-slate-50/70 px-4 py-3">
-                <div className="flex min-w-0 items-start gap-3">
-                  <div className="flex h-10 w-10 shrink-0 items-center justify-center overflow-hidden rounded-md bg-slate-100">
-                    {prospect.avatarUrl ? (
-                      // eslint-disable-next-line @next/next/no-img-element
-                      <img src={prospect.avatarUrl} alt="" className="h-full w-full object-cover" />
-                    ) : (
-                      <Youtube className="h-4 w-4 text-muted-foreground" />
-                    )}
-                  </div>
-                  <div className="min-w-0">
-                    <div className="flex flex-wrap items-center gap-2">
-                      <h3 className="truncate font-semibold">{prospect.title || prospect.inputUrl}</h3>
-                      <Badge variant="outline" className={WORKFLOW_META[prospect.workflowStatus].className}>
-                        {WORKFLOW_META[prospect.workflowStatus].label}
-                      </Badge>
-                      {!prospect.publicEmail && (
-                        <Badge variant="outline" className="border-amber-200 bg-amber-50 text-amber-700">
-                          邮箱缺失，待补充
-                        </Badge>
-                      )}
-                    </div>
-                    <p className="mt-1 text-xs text-muted-foreground">
-                      {countryLabel(prospect.country)} · {prospectLanguageLabel(prospect)} · {prospect.targetProduct || '未选产品'} · {prospect.cooperationType || '未选合作形式'}
-                    </p>
-                  </div>
-                </div>
-                <a
-                  href={prospect.url || prospect.sourceUrl || prospect.inputUrl}
-                  target="_blank"
-                  rel="noreferrer"
-                  className="inline-flex items-center gap-1 text-xs text-primary hover:underline"
-                >
-                  打开频道
-                  <ExternalLink className="h-3.5 w-3.5" />
-                </a>
-              </header>
-
-              <div className="grid gap-4 p-4 xl:grid-cols-[320px_minmax(0,1fr)]">
-                <aside className="space-y-3 text-sm">
-                  <div>
-                    <p className="text-xs font-semibold text-muted-foreground">邮箱</p>
-                    <Input
-                      type="email"
-                      value={prospect.publicEmail || ''}
-                      onChange={(event) => onPatch(prospect.id, {
-                        publicEmail: event.target.value,
-                        emailStatus: event.target.value.trim() ? 'manual' : 'missing',
-                      })}
-                      placeholder="补充邮箱后才能保存 Gmail 草稿"
-                      className="mt-1.5 h-9 bg-white"
-                    />
-                  </div>
-                  <div>
-                    <p className="text-xs font-semibold text-muted-foreground">合作想法</p>
-                    <p className="mt-1 whitespace-pre-wrap rounded-md bg-slate-50 p-2 leading-5">
-                      {prospect.cooperationIdea || '未填写'}
-                    </p>
-                  </div>
-                  <div>
-                    <p className="text-xs font-semibold text-muted-foreground">频道简介摘要</p>
-                    <p className="mt-1 line-clamp-5 leading-5 text-muted-foreground">
-                      {prospect.description || '暂无简介'}
-                    </p>
-                  </div>
-                  <div>
-                    <p className="text-xs font-semibold text-muted-foreground">最近视频</p>
-                    <ul className="mt-1 space-y-1 text-xs text-muted-foreground">
-                      {(prospect.recentVideos || []).slice(0, 8).map((video) => (
-                        <li key={video.videoId || video.url || video.title} className="line-clamp-1">
-                          · {video.translatedTitle || video.title}（{formatCompactNumber(video.viewCount)} 播放）
-                        </li>
-                      ))}
-                    </ul>
-                  </div>
-                </aside>
-
-                <section className="min-w-0">
-                  {!hasDraft ? (
-                    isGenerating ? (
-                      <div className="rounded-md border border-primary/20 bg-primary/5 p-4">
-                        <div className="flex items-start gap-3">
-                          <span className="mt-0.5 inline-flex h-8 w-8 shrink-0 items-center justify-center rounded-md bg-primary/10 text-primary">
-                            <Loader2 className="h-4 w-4 animate-spin" />
-                          </span>
-                          <div className="min-w-0 flex-1">
-                            <p className="font-medium">{generationStageLabel(prospect)}</p>
-                            <p className="mt-1 text-sm text-muted-foreground">
-                              正在根据频道资料、目标产品和合作想法起草邮件，正文会先逐步出现。
-                            </p>
-                          </div>
-                        </div>
-                        <div className="mt-4 grid gap-3">
-                          <div>
-                            <Label>邮件标题</Label>
-                            <div className="mt-1.5 rounded-md border bg-white/70 px-3 py-2 text-sm text-muted-foreground">
-                              {prospect.outreachGenerationStage === 'finalizing' ? '正在生成标题…' : '正文生成后整理标题'}
-                            </div>
-                          </div>
-                          <div>
-                            <Label>外语邮件正文</Label>
-                            <div className="mt-1.5 min-h-48 whitespace-pre-wrap rounded-md border bg-white px-3 py-2 text-sm leading-6">
-                              {prospect.streamingBody || prospect.aiDraft?.body || '正在等待第一段正文…'}
-                              <span className="ml-0.5 inline-block h-4 w-1 animate-pulse bg-primary align-[-2px]" />
-                            </div>
-                          </div>
-                          <div>
-                            <Label>中文翻译对照</Label>
-                            <div className="mt-1.5 rounded-md border bg-white/70 px-3 py-2 text-sm text-muted-foreground">
-                              正文生成完成后生成中文对照。
-                            </div>
-                          </div>
-                        </div>
-                      </div>
-                    ) : (
-                      <div className="flex min-h-64 flex-col items-center justify-center rounded-md border border-dashed text-center">
-                        <Sparkles className="mb-3 h-8 w-8 text-muted-foreground" />
-                        <p className="font-medium">{prospect.outreachGenerationStage === 'error' ? '开发信生成失败' : '尚未生成开发信'}</p>
-                        <p className="mt-1 max-w-md text-sm text-muted-foreground">
-                          {prospect.generationError || prospect.error || '智能助手会结合频道资料、产品、合作形式和你的合作想法起草邮件。'}
-                        </p>
-                        <Button className="mt-4" onClick={() => onGenerate(prospect)} disabled={generatingId === prospect.id}>
-                          {generatingId === prospect.id ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <Sparkles className="mr-2 h-4 w-4" />}
-                          {prospect.outreachGenerationStage === 'error' ? '重新生成' : '生成开发信'}
-                        </Button>
-                      </div>
-                    )
-                  ) : (
-                    <div className="space-y-3">
-                      <div>
-                        <div className="flex items-center justify-between gap-2">
-                          <Label htmlFor={`subject-${prospect.id}`}>邮件标题</Label>
-                          <Button
-                            type="button"
-                            size="sm"
-                            variant="outline"
-                            className="h-7 px-2 text-xs"
-                            onClick={() => onRegeneratePart(prospect, 'subject')}
-                            disabled={generatingId === prospect.id || isRegeneratingSubject || isRegeneratingBody}
-                          >
-                            {isRegeneratingSubject ? <Loader2 className="mr-1 h-3.5 w-3.5 animate-spin" /> : <RefreshCw className="mr-1 h-3.5 w-3.5" />}
-                            重新生成
-                          </Button>
-                        </div>
-                        <Input
-                          id={`subject-${prospect.id}`}
-                          value={prospect.aiDraft?.subject || ''}
-                          readOnly={!isEditing}
-                          onChange={(event) => onPatch(prospect.id, {
-                            aiDraft: { ...prospect.aiDraft!, subject: event.target.value },
-                          })}
-                          className={`mt-1.5 ${isEditing ? 'bg-white' : 'bg-slate-50'}`}
-                        />
-                        {Boolean(prospect.aiDraft?.subjectOptions?.length) && (
-                          <div className="mt-2 space-y-2">
-                            <p className="text-xs font-medium text-muted-foreground">备选标题（点击可替换当前标题）</p>
-                            <div className="grid gap-2">
-                              {prospect.aiDraft!.subjectOptions!.slice(0, 3).map((option, index) => {
-                                const isSelected = option.subject === prospect.aiDraft?.subject;
-                                return (
-                                  <button
-                                    key={`${option.subject}-${index}`}
-                                    type="button"
-                                    className={`rounded-md border p-2 text-left transition-colors ${
-                                      isSelected
-                                        ? 'border-primary/50 bg-primary/5'
-                                        : 'border-border/70 bg-slate-50 hover:border-primary/40 hover:bg-white'
-                                    }`}
-                                    onClick={() => onPatch(prospect.id, {
-                                      aiDraft: { ...prospect.aiDraft!, subject: option.subject },
-                                    })}
-                                  >
-                                    <div className="flex items-start gap-2">
-                                      <Badge variant={isSelected ? 'default' : 'secondary'} className="mt-0.5 shrink-0 rounded-md">
-                                        {index + 1}
-                                      </Badge>
-                                      <div className="min-w-0">
-                                        <p className="break-words text-sm font-medium">{option.subject}</p>
-                                        <p className="mt-1 break-words text-xs text-muted-foreground">
-                                          {option.translatedSubject || 'AI 未返回中文翻译'}
-                                        </p>
-                                      </div>
-                                    </div>
-                                  </button>
-                                );
-                              })}
-                            </div>
-                          </div>
+            <article
+              key={prospect.id}
+              className={`overflow-hidden rounded-lg border bg-white/70 transition-colors ${
+                isExpanded ? 'border-primary/35' : 'border-border/70 hover:border-primary/25'
+              }`}
+            >
+              <header className={`${isExpanded ? 'border-b' : ''} bg-slate-50/70`}>
+                <div className="flex min-h-[4.5rem] items-stretch">
+                  <button
+                    type="button"
+                    className="grid min-w-0 flex-1 grid-cols-[minmax(220px,1.35fr)_minmax(160px,0.8fr)_minmax(220px,1fr)] items-center gap-4 px-4 py-2.5 text-left outline-none transition-colors hover:bg-primary/[0.035] focus-visible:bg-primary/[0.06] focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-primary/35 max-lg:grid-cols-[minmax(220px,1fr)_minmax(180px,0.8fr)] max-md:grid-cols-1"
+                    onClick={() => setExpandedIds((current) => (
+                      current.includes(prospect.id)
+                        ? current.filter((id) => id !== prospect.id)
+                        : [...current, prospect.id]
+                    ))}
+                    aria-expanded={isExpanded}
+                    aria-controls={`outreach-email-${prospect.id}`}
+                  >
+                    <span className="flex min-w-0 items-center gap-3">
+                      <span className="flex h-10 w-10 shrink-0 items-center justify-center overflow-hidden rounded-md bg-slate-100">
+                        {prospect.avatarUrl ? (
+                          // eslint-disable-next-line @next/next/no-img-element
+                          <img src={prospect.avatarUrl} alt="" className="h-full w-full object-cover" />
+                        ) : (
+                          <Youtube className="h-4 w-4 text-muted-foreground" />
                         )}
-                      </div>
-                      <ProductAssetPanel
-                        prospect={prospect}
-                        product={productAsset}
-                        onPatch={onPatch}
-                      />
-                      <MailPreview
-                        prospect={{
-                          ...prospect,
-                          aiDraft: prospect.aiDraft ? { ...prospect.aiDraft, body: safeDraftBody } : undefined,
-                        }}
-                        product={productAsset}
-                        emailSignature={emailSignature}
-                        isEditing={isEditing}
-                        isRegeneratingBody={isRegeneratingBody}
-                        regenerateDisabled={generatingId === prospect.id || isRegeneratingSubject || isRegeneratingBody}
-                        onPatch={onPatch}
-                        onEditingChange={(editing) => setEditingIds((current) => (
-                          editing
-                            ? Array.from(new Set([...current, prospect.id]))
-                            : current.filter((id) => id !== prospect.id)
-                        ))}
-                        onRegenerateBody={() => onRegeneratePart(prospect, 'body')}
-                      />
-                      <div>
-                        <Label htmlFor={`translation-${prospect.id}`}>中文翻译对照</Label>
-                        <p className="mt-0.5 text-xs text-muted-foreground">用于人工核对，不会写入 Gmail 邮件正文。</p>
-                        <Textarea
-                          id={`translation-${prospect.id}`}
-                          value={prospect.aiDraft?.translatedBody || prospect.aiDraft?.translatedSummary || ''}
-                          readOnly={!isEditing}
-                          onChange={(event) => onPatch(prospect.id, {
-                            aiDraft: { ...prospect.aiDraft!, translatedBody: event.target.value },
-                          })}
-                          className={`mt-1.5 min-h-48 resize-y leading-6 ${isEditing ? 'bg-white' : 'bg-slate-50'}`}
-                        />
-                      </div>
-                      <div className="grid gap-3 md:grid-cols-2">
-                        <div className="rounded-md bg-blue-50/70 p-3">
-                          <p className="text-xs font-semibold text-blue-800">个性化依据</p>
-                          <ul className="mt-1 space-y-1 text-sm text-blue-900/80">
-                            {(prospect.aiDraft?.personalizationNotes || ['AI 未返回个性化依据']).map((note) => <li key={note}>· {note}</li>)}
-                          </ul>
-                        </div>
-                        <div className="rounded-md bg-amber-50/70 p-3">
-                          <p className="flex items-center gap-1 text-xs font-semibold text-amber-800">
-                            <AlertTriangle className="h-3.5 w-3.5" />
-                            风险提醒
-                          </p>
-                          <ul className="mt-1 space-y-1 text-sm text-amber-900/80">
-                            {[...(prospect.aiDraft?.riskNotes || []), ...(prospect.aiDraft?.missingInfo || [])].map((note) => <li key={note}>· {note}</li>)}
-                            {!(prospect.aiDraft?.riskNotes?.length || prospect.aiDraft?.missingInfo?.length) && <li>· 暂无明显风险，保存前仍需人工复核。</li>}
-                          </ul>
-                        </div>
-                      </div>
-                    </div>
-                  )}
-                </section>
-              </div>
-
-              <footer className="flex flex-wrap items-center gap-2 border-t px-4 py-3">
-                {hasDraft && (
-                  <>
-                    <Button variant="outline" onClick={() => onGenerate(prospect)} disabled={generatingId === prospect.id}>
-                      {generatingId === prospect.id ? <Loader2 className="mr-1 h-4 w-4 animate-spin" /> : <RefreshCw className="mr-1 h-4 w-4" />}
-                      重新生成
-                    </Button>
-                    <Button
-                      variant="outline"
-                      onClick={() => setEditingIds((current) => (
+                      </span>
+                      <span className="min-w-0">
+                        <span className="flex flex-wrap items-center gap-2">
+                          <span className="truncate text-sm font-semibold">{prospect.title || prospect.inputUrl}</span>
+                          {isGenerating ? (
+                            <Badge variant="outline" className="border-blue-200 bg-blue-50 text-blue-700">
+                              <Loader2 className="mr-1 h-3 w-3 animate-spin" />
+                              正在生成
+                            </Badge>
+                          ) : hasDraft ? (
+                            <Badge variant="outline" className="border-emerald-200 bg-emerald-50 text-emerald-700">
+                              <CheckCircle2 className="mr-1 h-3 w-3" />
+                              开发信已生成
+                            </Badge>
+                          ) : prospect.outreachGenerationStage === 'error' ? (
+                            <Badge variant="outline" className="border-red-200 bg-red-50 text-red-700">
+                              <AlertTriangle className="mr-1 h-3 w-3" />
+                              生成失败
+                            </Badge>
+                          ) : (
+                            <Badge variant="outline" className="border-slate-200 bg-white text-slate-600">
+                              待生成
+                            </Badge>
+                          )}
+                          {!prospect.publicEmail && (
+                            <Badge variant="outline" className="border-amber-200 bg-amber-50 text-amber-700">
+                              邮箱缺失
+                            </Badge>
+                          )}
+                        </span>
+                        <span className="mt-1 block truncate text-xs text-muted-foreground">
+                          {countryLabel(prospect.country)} · {prospectLanguageLabel(prospect)} · {prospect.targetProduct || '未选产品'} · {prospect.cooperationType || '未选合作形式'}
+                        </span>
+                      </span>
+                    </span>
+                    <span className="min-w-0">
+                      <span className="block text-[11px] font-medium text-muted-foreground">收件邮箱</span>
+                      <span className="mt-1 block truncate text-sm">{prospect.publicEmail || '待补充邮箱'}</span>
+                    </span>
+                    <span className="min-w-0 max-md:hidden">
+                      <span className="block text-[11px] font-medium text-muted-foreground">邮件标题</span>
+                      <span className={`mt-1 block truncate text-sm ${hasDraft ? 'text-foreground' : 'text-muted-foreground'}`}>
+                        {hasDraft
+                          ? prospect.aiDraft?.subject
+                          : isGenerating
+                            ? 'AI 正在生成邮件标题…'
+                            : prospect.outreachGenerationStage === 'error'
+                              ? '生成失败，可展开后重试'
+                              : '尚未生成'}
+                      </span>
+                    </span>
+                  </button>
+                  <div className="flex shrink-0 items-center gap-3 border-l border-border/60 px-4">
+                    <a
+                      href={prospect.url || prospect.sourceUrl || prospect.inputUrl}
+                      target="_blank"
+                      rel="noreferrer"
+                      className="inline-flex items-center gap-1 text-xs text-primary hover:underline"
+                    >
+                      打开频道
+                      <ExternalLink className="h-3.5 w-3.5" />
+                    </a>
+                    <button
+                      type="button"
+                      onClick={() => setExpandedIds((current) => (
                         current.includes(prospect.id)
                           ? current.filter((id) => id !== prospect.id)
                           : [...current, prospect.id]
                       ))}
+                      className="inline-flex min-h-11 items-center gap-1 rounded-md px-2 text-xs text-muted-foreground outline-none hover:bg-white hover:text-foreground focus-visible:ring-2 focus-visible:ring-primary/35"
+                      aria-expanded={isExpanded}
+                      aria-controls={`outreach-email-${prospect.id}`}
+                      aria-label={`${isExpanded ? '收起' : '展开'} ${prospect.title || '该红人'} 的开发信`}
                     >
-                      {isEditing ? <CheckCircle2 className="mr-1 h-4 w-4" /> : <Edit3 className="mr-1 h-4 w-4" />}
-                      {isEditing ? '完成编辑' : '编辑邮件'}
+                      {isExpanded ? <ChevronUp className="h-4 w-4" /> : <ChevronDown className="h-4 w-4" />}
+                      {isExpanded ? '收起' : '展开'}
+                    </button>
+                  </div>
+                </div>
+              </header>
+
+              {isExpanded ? (
+                <div id={`outreach-email-${prospect.id}`}>
+                  <div className="grid gap-4 p-4 xl:grid-cols-[320px_minmax(0,1fr)]">
+                    <aside className="space-y-3 text-sm">
+                      <div>
+                        <p className="text-xs font-semibold text-muted-foreground">邮箱</p>
+                        <Input
+                          type="email"
+                          value={prospect.publicEmail || ''}
+                          onChange={(event) => onPatch(prospect.id, {
+                            publicEmail: event.target.value,
+                            emailStatus: event.target.value.trim() ? 'manual' : 'missing',
+                          })}
+                          placeholder="补充邮箱后才能保存 Gmail 草稿"
+                          className="mt-1.5 h-9 bg-white"
+                        />
+                      </div>
+                      <div>
+                        <p className="text-xs font-semibold text-muted-foreground">合作想法</p>
+                        <p className="mt-1 whitespace-pre-wrap rounded-md bg-slate-50 p-2 leading-5">
+                          {prospect.cooperationIdea || '未填写'}
+                        </p>
+                      </div>
+                      <div>
+                        <p className="text-xs font-semibold text-muted-foreground">频道简介摘要</p>
+                        <p className="mt-1 line-clamp-5 leading-5 text-muted-foreground">
+                          {prospect.description || '暂无简介'}
+                        </p>
+                      </div>
+                      <div>
+                        <p className="text-xs font-semibold text-muted-foreground">最近视频</p>
+                        <ul className="mt-1 space-y-1 text-xs text-muted-foreground">
+                          {(prospect.recentVideos || []).slice(0, 8).map((video) => (
+                            <li key={video.videoId || video.url || video.title} className="line-clamp-1">
+                              · {video.translatedTitle || video.title}（{formatCompactNumber(video.viewCount)} 播放）
+                            </li>
+                          ))}
+                        </ul>
+                      </div>
+                    </aside>
+
+                    <section className="min-w-0">
+                      {!hasDraft ? (
+                        isGenerating ? (
+                          <div className="rounded-md border border-primary/20 bg-primary/5 p-4">
+                            <div className="flex items-start gap-3">
+                              <span className="mt-0.5 inline-flex h-8 w-8 shrink-0 items-center justify-center rounded-md bg-primary/10 text-primary">
+                                <Loader2 className="h-4 w-4 animate-spin" />
+                              </span>
+                              <div className="min-w-0 flex-1">
+                                <p className="font-medium">{generationStageLabel(prospect)}</p>
+                                <p className="mt-1 text-sm text-muted-foreground">
+                                  正在根据频道资料、目标产品和合作想法起草邮件，正文会先逐步出现。
+                                </p>
+                              </div>
+                            </div>
+                            <div className="mt-4 grid gap-3">
+                              <div>
+                                <Label>邮件标题</Label>
+                                <div className="mt-1.5 rounded-md border bg-white/70 px-3 py-2 text-sm text-muted-foreground">
+                                  {prospect.outreachGenerationStage === 'finalizing' ? '正在生成标题…' : '正文生成后整理标题'}
+                                </div>
+                              </div>
+                              <div>
+                                <Label>外语邮件正文</Label>
+                                <div className="mt-1.5 min-h-48 whitespace-pre-wrap rounded-md border bg-white px-3 py-2 text-sm leading-6">
+                                  {prospect.streamingBody || prospect.aiDraft?.body || '正在等待第一段正文…'}
+                                  <span className="ml-0.5 inline-block h-4 w-1 animate-pulse bg-primary align-[-2px]" />
+                                </div>
+                              </div>
+                              <div>
+                                <Label>中文翻译对照</Label>
+                                <div className="mt-1.5 rounded-md border bg-white/70 px-3 py-2 text-sm text-muted-foreground">
+                                  正文生成完成后生成中文对照。
+                                </div>
+                              </div>
+                            </div>
+                          </div>
+                        ) : (
+                          <div className="flex min-h-64 flex-col items-center justify-center rounded-md border border-dashed text-center">
+                            <Sparkles className="mb-3 h-8 w-8 text-muted-foreground" />
+                            <p className="font-medium">{prospect.outreachGenerationStage === 'error' ? '开发信生成失败' : '尚未生成开发信'}</p>
+                            <p className="mt-1 max-w-md text-sm text-muted-foreground">
+                              {prospect.generationError || prospect.error || '智能助手会结合频道资料、产品、合作形式和你的合作想法起草邮件。'}
+                            </p>
+                            <Button className="mt-4" onClick={() => onGenerate(prospect)} disabled={generatingId === prospect.id}>
+                              {generatingId === prospect.id ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <Sparkles className="mr-2 h-4 w-4" />}
+                              {prospect.outreachGenerationStage === 'error' ? '重新生成' : '生成开发信'}
+                            </Button>
+                          </div>
+                        )
+                      ) : (
+                        <div className="space-y-3">
+                          <div>
+                            <div className="flex items-center justify-between gap-2">
+                              <Label htmlFor={`subject-${prospect.id}`}>邮件标题</Label>
+                              <Button
+                                type="button"
+                                size="sm"
+                                variant="outline"
+                                className="h-7 px-2 text-xs"
+                                onClick={() => onRegeneratePart(prospect, 'subject')}
+                                disabled={generatingId === prospect.id || isRegeneratingSubject || isRegeneratingBody}
+                              >
+                                {isRegeneratingSubject ? <Loader2 className="mr-1 h-3.5 w-3.5 animate-spin" /> : <RefreshCw className="mr-1 h-3.5 w-3.5" />}
+                                重新生成
+                              </Button>
+                            </div>
+                            <Input
+                              id={`subject-${prospect.id}`}
+                              value={prospect.aiDraft?.subject || ''}
+                              readOnly={!isEditing}
+                              onChange={(event) => onPatch(prospect.id, {
+                                aiDraft: { ...prospect.aiDraft!, subject: event.target.value },
+                              })}
+                              className={`mt-1.5 ${isEditing ? 'bg-white' : 'bg-slate-50'}`}
+                            />
+                            {Boolean(prospect.aiDraft?.subjectOptions?.length) && (
+                              <div className="mt-2 space-y-2">
+                                <p className="text-xs font-medium text-muted-foreground">备选标题（点击可替换当前标题）</p>
+                                <div className="grid gap-2">
+                                  {prospect.aiDraft!.subjectOptions!.slice(0, 3).map((option, index) => {
+                                    const isSelected = option.subject === prospect.aiDraft?.subject;
+                                    return (
+                                      <button
+                                        key={`${option.subject}-${index}`}
+                                        type="button"
+                                        className={`rounded-md border p-2 text-left transition-colors ${
+                                          isSelected
+                                            ? 'border-primary/50 bg-primary/5'
+                                            : 'border-border/70 bg-slate-50 hover:border-primary/40 hover:bg-white'
+                                        }`}
+                                        onClick={() => onPatch(prospect.id, {
+                                          aiDraft: { ...prospect.aiDraft!, subject: option.subject },
+                                        })}
+                                      >
+                                        <div className="flex items-start gap-2">
+                                          <Badge variant={isSelected ? 'default' : 'secondary'} className="mt-0.5 shrink-0 rounded-md">
+                                            {index + 1}
+                                          </Badge>
+                                          <div className="min-w-0">
+                                            <p className="break-words text-sm font-medium">{option.subject}</p>
+                                            <p className="mt-1 break-words text-xs text-muted-foreground">
+                                              {option.translatedSubject || 'AI 未返回中文翻译'}
+                                            </p>
+                                          </div>
+                                        </div>
+                                      </button>
+                                    );
+                                  })}
+                                </div>
+                              </div>
+                            )}
+                          </div>
+                          <ProductAssetPanel
+                            prospect={prospect}
+                            product={productAsset}
+                            onPatch={onPatch}
+                          />
+                          <MailPreview
+                            prospect={{
+                              ...prospect,
+                              aiDraft: prospect.aiDraft ? { ...prospect.aiDraft, body: safeDraftBody } : undefined,
+                            }}
+                            product={productAsset}
+                            emailSignature={emailSignature}
+                            isEditing={isEditing}
+                            isRegeneratingBody={isRegeneratingBody}
+                            regenerateDisabled={generatingId === prospect.id || isRegeneratingSubject || isRegeneratingBody}
+                            onPatch={onPatch}
+                            onEditingChange={(editing) => setEditingIds((current) => (
+                              editing
+                                ? Array.from(new Set([...current, prospect.id]))
+                                : current.filter((id) => id !== prospect.id)
+                            ))}
+                            onRegenerateBody={() => onRegeneratePart(prospect, 'body')}
+                          />
+                          <div>
+                            <Label htmlFor={`translation-${prospect.id}`}>中文翻译对照</Label>
+                            <p className="mt-0.5 text-xs text-muted-foreground">用于人工核对，不会写入 Gmail 邮件正文。</p>
+                            <Textarea
+                              id={`translation-${prospect.id}`}
+                              value={prospect.aiDraft?.translatedBody || prospect.aiDraft?.translatedSummary || ''}
+                              readOnly={!isEditing}
+                              onChange={(event) => onPatch(prospect.id, {
+                                aiDraft: { ...prospect.aiDraft!, translatedBody: event.target.value },
+                              })}
+                              className={`mt-1.5 min-h-48 resize-y leading-6 ${isEditing ? 'bg-white' : 'bg-slate-50'}`}
+                            />
+                          </div>
+                          <div className="grid gap-3 md:grid-cols-2">
+                            <div className="rounded-md bg-blue-50/70 p-3">
+                              <p className="text-xs font-semibold text-blue-800">个性化依据</p>
+                              <ul className="mt-1 space-y-1 text-sm text-blue-900/80">
+                                {(prospect.aiDraft?.personalizationNotes || ['AI 未返回个性化依据']).map((note) => <li key={note}>· {note}</li>)}
+                              </ul>
+                            </div>
+                            <div className="rounded-md bg-amber-50/70 p-3">
+                              <p className="flex items-center gap-1 text-xs font-semibold text-amber-800">
+                                <AlertTriangle className="h-3.5 w-3.5" />
+                                风险提醒
+                              </p>
+                              <ul className="mt-1 space-y-1 text-sm text-amber-900/80">
+                                {[...(prospect.aiDraft?.riskNotes || []), ...(prospect.aiDraft?.missingInfo || [])].map((note) => <li key={note}>· {note}</li>)}
+                                {!(prospect.aiDraft?.riskNotes?.length || prospect.aiDraft?.missingInfo?.length) && <li>· 暂无明显风险，保存前仍需人工复核。</li>}
+                              </ul>
+                            </div>
+                          </div>
+                        </div>
+                      )}
+                    </section>
+                  </div>
+
+                  <footer className="flex flex-wrap items-center gap-2 border-t px-4 py-3">
+                    {hasDraft && (
+                      <>
+                        <Button variant="outline" onClick={() => onGenerate(prospect)} disabled={generatingId === prospect.id}>
+                          {generatingId === prospect.id ? <Loader2 className="mr-1 h-4 w-4 animate-spin" /> : <RefreshCw className="mr-1 h-4 w-4" />}
+                          重新生成
+                        </Button>
+                        <Button
+                          variant="outline"
+                          onClick={() => setEditingIds((current) => (
+                            current.includes(prospect.id)
+                              ? current.filter((id) => id !== prospect.id)
+                              : [...current, prospect.id]
+                          ))}
+                        >
+                          {isEditing ? <CheckCircle2 className="mr-1 h-4 w-4" /> : <Edit3 className="mr-1 h-4 w-4" />}
+                          {isEditing ? '完成编辑' : '编辑邮件'}
+                        </Button>
+                      </>
+                    )}
+                    <Button
+                      onClick={() => setConfirmDraftId(prospect.id)}
+                      disabled={!hasDraft || !prospect.publicEmail || savingDraftId === prospect.id}
+                    >
+                      {savingDraftId === prospect.id ? <Loader2 className="mr-1 h-4 w-4 animate-spin" /> : <MailPlus className="mr-1 h-4 w-4" />}
+                      保存 Gmail 草稿
                     </Button>
-                  </>
-                )}
-                <Button
-                  onClick={() => setConfirmDraftId(prospect.id)}
-                  disabled={!hasDraft || !prospect.publicEmail || savingDraftId === prospect.id || isSaved}
-                >
-                  {savingDraftId === prospect.id ? <Loader2 className="mr-1 h-4 w-4 animate-spin" /> : <MailPlus className="mr-1 h-4 w-4" />}
-                  {isSaved ? '草稿已保存' : '保存 Gmail 草稿'}
-                </Button>
-                <Button variant="ghost" onClick={() => onBack(prospect)}>
-                  <ArrowLeft className="mr-1 h-4 w-4" />
-                  返回邀约确认
-                </Button>
-                <Button variant="ghost" onClick={() => onSkip(prospect)} className="text-muted-foreground">
-                  <SkipForward className="mr-1 h-4 w-4" />
-                  标记为无需开发
-                </Button>
-              </footer>
+                    <Button variant="ghost" onClick={() => onBack(prospect)}>
+                      <ArrowLeft className="mr-1 h-4 w-4" />
+                      返回邀约确认
+                    </Button>
+                    <Button variant="ghost" onClick={() => onSkip(prospect)} className="text-muted-foreground">
+                      <SkipForward className="mr-1 h-4 w-4" />
+                      标记为无需开发
+                    </Button>
+                  </footer>
+                </div>
+              ) : null}
             </article>
           );
         })}

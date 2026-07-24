@@ -73,6 +73,7 @@ export interface AppSettings {
   translatePrompt?: string;
   aiEmailPrompt?: string;
   aiAnalysisPrompt?: string;
+  aiCooperationIdeaPrompt?: string;
   aiDraftPrompt?: string;
   aiOutreachPrompt?: string;
   aiOutreachFollowUp1Prompt?: string;

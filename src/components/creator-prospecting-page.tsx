@@ -7,6 +7,7 @@ import {
   ChevronDown,
   ClipboardCheck,
   Database,
+  ExternalLink,
   Loader2,
   MailCheck,
   Send,
@@ -245,6 +246,21 @@ function buildFeishuUrlValue(prospect: Prospect) {
   };
 }
 
+function getProspectChannelUrl(prospect: Prospect) {
+  const directUrl = firstValue(prospect.url, prospect.sourceUrl, prospect.inputUrl);
+  if (/^https?:\/\//i.test(directUrl)) return directUrl;
+
+  if (prospect.channelId) {
+    return `https://www.youtube.com/channel/${encodeURIComponent(prospect.channelId)}`;
+  }
+
+  const customUrl = firstValue(prospect.customUrl, directUrl);
+  if (/^https?:\/\//i.test(customUrl)) return customUrl;
+  if (customUrl.startsWith('@')) return `https://www.youtube.com/${customUrl}`;
+
+  return '';
+}
+
 function buildResourceFields(
   prospect: Prospect,
   mapping: FeishuFieldMapping,
@@ -397,6 +413,41 @@ async function translateRecentVideoTitles(
     ...video,
     translatedTitle: translatedTitles[index] || video.title,
   }));
+}
+
+async function translateChannelDescription(
+  description: string,
+  language: string | undefined,
+  settings: Pick<
+    AppSettings,
+    'translatePrompt' | 'modelProvider' | 'customApiUrl' | 'customModelName'
+  >,
+) {
+  const response = await fetch('/api/translate', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      text: description,
+      sourceLang: language || 'auto',
+      customPrompt: [
+        '你是 YouTube 频道简介翻译助手。',
+        '请把频道简介完整翻译成自然、准确、易读的简体中文。',
+        '保留原文的段落结构、品牌名、产品型号、人名、邮箱和网址。',
+        '只返回中文翻译，不要添加标题、解释、总结或 Markdown。',
+        settings.translatePrompt ? `翻译风格补充要求：${settings.translatePrompt}` : '',
+      ].filter(Boolean).join('\n'),
+      modelProvider: settings.modelProvider || 'builtin',
+      customApiUrl: settings.customApiUrl || '',
+      customModelName: settings.customModelName || '',
+    }),
+  });
+  const result = await response.json();
+  if (!response.ok || !result.success) {
+    throw new Error(getErrorMessage(result, '频道简介翻译失败。'));
+  }
+  const translatedText = String(result.data?.translatedText || '').trim();
+  if (!translatedText) throw new Error('AI 没有返回可用的频道简介翻译。');
+  return translatedText;
 }
 
 async function refreshRecentVideos(
@@ -866,6 +917,29 @@ export function CreatorProspectingPage() {
     )));
   };
 
+  const handleTranslateChannelDescription = useCallback(
+    async (prospect: Prospect) => {
+      const description = prospect.description?.trim();
+      if (!description) return '';
+      return translateChannelDescription(
+        description,
+        prospect.language,
+        {
+          translatePrompt: settings.translatePrompt,
+          modelProvider: settings.modelProvider,
+          customApiUrl: settings.customApiUrl,
+          customModelName: settings.customModelName,
+        },
+      );
+    },
+    [
+      settings.customApiUrl,
+      settings.customModelName,
+      settings.modelProvider,
+      settings.translatePrompt,
+    ],
+  );
+
   const handleRefreshYouTubeData = async (prospect: Prospect) => {
     if (refreshingYouTubeIds.includes(prospect.id)) return;
     setRefreshingYouTubeIds((current) => [...current, prospect.id]);
@@ -1113,6 +1187,41 @@ export function CreatorProspectingPage() {
       userPreference,
     ),
     [products, settings, userPreference],
+  );
+  const handleSuggestCooperationIdea = useCallback(
+    async (prospect: Prospect) => {
+      const context = stripOutreachPreviewData(getOutreachContext(prospect));
+      const response = await fetch('/api/ai', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          action: 'suggestCooperationIdea',
+          channel: context.channel,
+          products: context.products,
+          targetProduct: context.targetProduct,
+          cooperationType: context.cooperationType,
+          userPreference: context.userPreference,
+          cooperationIdeaPrompt: settings.aiCooperationIdeaPrompt,
+          modelProvider: settings.modelProvider,
+          customApiUrl: settings.customApiUrl,
+          customModelName: settings.customModelName,
+        }),
+      });
+      const result = await response.json();
+      if (!response.ok || !result.success) {
+        throw new Error(getErrorMessage(result, 'AI 合作想法生成失败。'));
+      }
+      const cooperationIdea = String(result.data?.cooperationIdea || '').trim();
+      if (!cooperationIdea) throw new Error('AI 没有返回可用的合作想法。');
+      return cooperationIdea;
+    },
+    [
+      getOutreachContext,
+      settings.aiCooperationIdeaPrompt,
+      settings.customApiUrl,
+      settings.customModelName,
+      settings.modelProvider,
+    ],
   );
 
   useEffect(() => {
@@ -2545,6 +2654,8 @@ export function CreatorProspectingPage() {
             onSkip={handleSkip}
             onCheckHistory={handleCheckHistory}
             onRefreshYouTubeData={handleRefreshYouTubeData}
+            onTranslateChannelDescription={handleTranslateChannelDescription}
+            onSuggestCooperationIdea={handleSuggestCooperationIdea}
             onInferContactName={handleInferContactName}
             onInferOutreachLanguage={handleInferOutreachLanguage}
           />
@@ -2620,17 +2731,36 @@ export function CreatorProspectingPage() {
             )}
           </DialogHeader>
           <div className="mx-6 min-h-0 flex-1 overflow-y-auto rounded-lg border bg-slate-50/80">
-            {previewItems.map((item) => (
-              <div key={item.prospect.id} className="border-b p-3 last:border-b-0">
-                <div className="flex items-center justify-between gap-3">
-                  <div className="flex min-w-0 items-center gap-2">
-                    <p className="truncate font-semibold">{item.prospect.title || item.prospect.inputUrl}</p>
-                    {item.target === 'development' && item.prospect.previousDevelopmentRecordId ? (
-                      <Badge variant="outline" className="border-amber-200 bg-amber-50 text-amber-700">重复开发 · 将新建</Badge>
-                    ) : null}
+            {previewItems.map((item) => {
+              const channelName = item.prospect.title || item.prospect.inputUrl;
+              const channelUrl = getProspectChannelUrl(item.prospect);
+
+              return (
+                <div key={item.prospect.id} className="border-b p-3 last:border-b-0">
+                  <div className="flex items-center justify-between gap-3">
+                    <div className="flex min-w-0 items-center gap-2">
+                      {channelUrl ? (
+                        <a
+                          href={channelUrl}
+                          target="_blank"
+                          rel="noopener noreferrer"
+                          data-preview-channel-link
+                          className="group flex min-w-0 items-center gap-1 font-semibold text-slate-900 underline-offset-4 hover:text-primary hover:underline focus-visible:rounded-sm focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/35"
+                          title={`打开 ${channelName} 的 YouTube 频道`}
+                          aria-label={`打开 ${channelName} 的 YouTube 频道（新标签页）`}
+                        >
+                          <span className="truncate">{channelName}</span>
+                          <ExternalLink className="h-3.5 w-3.5 shrink-0 text-muted-foreground transition-colors group-hover:text-primary" />
+                        </a>
+                      ) : (
+                        <p className="truncate font-semibold">{channelName}</p>
+                      )}
+                      {item.target === 'development' && item.prospect.previousDevelopmentRecordId ? (
+                        <Badge variant="outline" className="border-amber-200 bg-amber-50 text-amber-700">重复开发 · 将新建</Badge>
+                      ) : null}
+                    </div>
+                    <Badge variant="outline" className="shrink-0">{Object.keys(item.fields).length} 个字段</Badge>
                   </div>
-                  <Badge variant="outline" className="shrink-0">{Object.keys(item.fields).length} 个字段</Badge>
-                </div>
                 {item.target === 'development' && item.prospect.previousDevelopmentRecordId ? (
                   <p className="mt-2 rounded-md border border-amber-200 bg-amber-50 px-2.5 py-2 text-xs text-amber-800">
                     已关联历史开发记录 {item.prospect.previousDevelopmentRecordId}。确认后只新建本轮记录，不修改历史记录。
@@ -2736,8 +2866,9 @@ export function CreatorProspectingPage() {
                     )}
                   </div>
                 )}
-              </div>
-            ))}
+                </div>
+              );
+            })}
           </div>
           <DialogFooter className="border-t bg-white/95 px-6 py-4">
             <Button variant="outline" onClick={closeWritePreview} disabled={writingFeishu}>取消</Button>

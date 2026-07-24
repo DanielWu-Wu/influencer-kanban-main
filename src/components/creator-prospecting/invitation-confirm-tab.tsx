@@ -1,6 +1,6 @@
 'use client';
 
-import { useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   ArrowLeft,
   Check,
@@ -76,9 +76,38 @@ type Props = {
   onSkip: (prospect: Prospect) => void;
   onCheckHistory: (prospect: Prospect) => void;
   onRefreshYouTubeData: (prospect: Prospect) => Promise<void>;
+  onTranslateChannelDescription: (prospect: Prospect) => Promise<string>;
+  onSuggestCooperationIdea: (prospect: Prospect) => Promise<string>;
   onInferContactName: (prospect: Prospect, force?: boolean) => Promise<void>;
   onInferOutreachLanguage: (prospect: Prospect, force?: boolean) => Promise<void>;
 };
+
+type DescriptionTranslation = {
+  source: string;
+  status: 'loading' | 'ready' | 'error';
+  text?: string;
+  error?: string;
+};
+
+type CooperationIdeaGeneration = {
+  contextKey: string;
+  status: 'loading' | 'ready' | 'error';
+  error?: string;
+};
+
+function cooperationIdeaContextKey(prospect: Prospect) {
+  return [
+    prospect.id,
+    prospect.targetProduct?.trim() || '',
+    prospect.cooperationType?.trim() || '',
+  ].join('\n');
+}
+
+function hasMeaningfulCooperationIdea(value?: string) {
+  const normalized = String(value || '').trim().replace(/[。.!！]/g, '');
+  return Boolean(normalized)
+    && !['无', '暂无', '未填写', '待补充'].includes(normalized);
+}
 
 function yesNoUnknown(value?: boolean) {
   if (value === true) return '是';
@@ -340,11 +369,18 @@ export function InvitationConfirmTab({
   onSkip,
   onCheckHistory,
   onRefreshYouTubeData,
+  onTranslateChannelDescription,
+  onSuggestCooperationIdea,
   onInferContactName,
   onInferOutreachLanguage,
 }: Props) {
   const [query, setQuery] = useState('');
   const [selectedId, setSelectedId] = useState<string>('');
+  const [descriptionTranslations, setDescriptionTranslations] = useState<Record<string, DescriptionTranslation>>({});
+  const [cooperationIdeaGenerations, setCooperationIdeaGenerations] = useState<Record<string, CooperationIdeaGeneration>>({});
+  const descriptionTranslationRequestsRef = useRef(new Set<string>());
+  const cooperationIdeaRequestsRef = useRef(new Set<string>());
+  const latestProspectsRef = useRef(prospects);
   const visible = useMemo(() => {
     const normalized = query.trim().toLowerCase();
     if (!normalized) return prospects;
@@ -356,10 +392,129 @@ export function InvitationConfirmTab({
     ].some((value) => String(value || '').toLowerCase().includes(normalized)));
   }, [prospects, query]);
   const selected = prospects.find((item) => item.id === selectedId) || visible[0];
+  const selectedDescription = selected?.description?.trim() || '';
+  const selectedDescriptionTranslation = selected
+    ? descriptionTranslations[selected.id]
+    : undefined;
+  const visibleDescriptionTranslation = selectedDescriptionTranslation?.source === selectedDescription
+    ? selectedDescriptionTranslation
+    : undefined;
+  const selectedCooperationIdeaContextKey = selected
+    ? cooperationIdeaContextKey(selected)
+    : '';
+  const selectedCooperationIdeaGeneration = selected
+    ? cooperationIdeaGenerations[selected.id]
+    : undefined;
+  const visibleCooperationIdeaGeneration =
+    selectedCooperationIdeaGeneration?.contextKey === selectedCooperationIdeaContextKey
+      ? selectedCooperationIdeaGeneration
+      : undefined;
+
+  const requestDescriptionTranslation = useCallback((prospect: Prospect, force = false) => {
+    const source = prospect.description?.trim() || '';
+    if (!source) return;
+    const requestKey = `${prospect.id}\n${source}`;
+    if (force) descriptionTranslationRequestsRef.current.delete(requestKey);
+    if (descriptionTranslationRequestsRef.current.has(requestKey)) return;
+
+    descriptionTranslationRequestsRef.current.add(requestKey);
+    setDescriptionTranslations((current) => ({
+      ...current,
+      [prospect.id]: { source, status: 'loading' },
+    }));
+
+    void onTranslateChannelDescription(prospect)
+      .then((text) => {
+        setDescriptionTranslations((current) => ({
+          ...current,
+          [prospect.id]: { source, status: 'ready', text },
+        }));
+      })
+      .catch((error) => {
+        descriptionTranslationRequestsRef.current.delete(requestKey);
+        setDescriptionTranslations((current) => ({
+          ...current,
+          [prospect.id]: {
+            source,
+            status: 'error',
+            error: error instanceof Error ? error.message : '频道简介翻译失败，请稍后重试。',
+          },
+        }));
+      });
+  }, [onTranslateChannelDescription]);
+
+  const requestCooperationIdea = useCallback((prospect: Prospect, force = false) => {
+    const targetProduct = prospect.targetProduct?.trim() || '';
+    const cooperationType = prospect.cooperationType?.trim() || '';
+    if (!targetProduct || !cooperationType) return;
+
+    const contextKey = cooperationIdeaContextKey(prospect);
+    const existingIdea = prospect.cooperationIdea?.trim() || '';
+    const hasExistingIdea = hasMeaningfulCooperationIdea(existingIdea);
+    const existingIdeaSource = prospect.cooperationIdeaSource;
+    const isCurrentAiIdea = prospect.cooperationIdeaSource === 'ai';
+    if (!force && hasExistingIdea && !isCurrentAiIdea) return;
+    if (!force && isCurrentAiIdea && prospect.cooperationIdeaContextKey === contextKey) return;
+    if (force) cooperationIdeaRequestsRef.current.delete(contextKey);
+    if (cooperationIdeaRequestsRef.current.has(contextKey)) return;
+
+    cooperationIdeaRequestsRef.current.add(contextKey);
+    setCooperationIdeaGenerations((current) => ({
+      ...current,
+      [prospect.id]: { contextKey, status: 'loading' },
+    }));
+
+    void onSuggestCooperationIdea(prospect)
+      .then((idea) => {
+        const latestProspect = latestProspectsRef.current.find((item) => item.id === prospect.id);
+        const latestIdea = latestProspect?.cooperationIdea?.trim() || '';
+        const canApply = !hasMeaningfulCooperationIdea(latestIdea)
+          || latestProspect?.cooperationIdeaSource === 'ai'
+          || (
+            force
+            && latestIdea === existingIdea
+            && latestProspect?.cooperationIdeaSource === existingIdeaSource
+          );
+        if (latestProspect && cooperationIdeaContextKey(latestProspect) === contextKey && canApply) {
+          onPatch(prospect.id, {
+            cooperationIdea: idea,
+            cooperationIdeaSource: 'ai',
+            cooperationIdeaContextKey: contextKey,
+          });
+        }
+        setCooperationIdeaGenerations((current) => ({
+          ...current,
+          [prospect.id]: { contextKey, status: 'ready' },
+        }));
+      })
+      .catch((error) => {
+        cooperationIdeaRequestsRef.current.delete(contextKey);
+        setCooperationIdeaGenerations((current) => ({
+          ...current,
+          [prospect.id]: {
+            contextKey,
+            status: 'error',
+            error: error instanceof Error ? error.message : 'AI 合作想法生成失败，请稍后重试。',
+          },
+        }));
+      });
+  }, [onPatch, onSuggestCooperationIdea]);
 
   useEffect(() => {
     if (selectedId && !prospects.some((item) => item.id === selectedId)) setSelectedId('');
   }, [prospects, selectedId]);
+
+  useEffect(() => {
+    latestProspectsRef.current = prospects;
+  }, [prospects]);
+
+  useEffect(() => {
+    if (selected) requestDescriptionTranslation(selected);
+  }, [requestDescriptionTranslation, selected]);
+
+  useEffect(() => {
+    if (selected) requestCooperationIdea(selected);
+  }, [requestCooperationIdea, selected]);
 
   useEffect(() => {
     if (
@@ -556,6 +711,44 @@ export function InvitationConfirmTab({
 
               <div>
                 <div className="flex flex-wrap items-center justify-between gap-2">
+                  <p className="text-sm font-semibold">频道简介中文翻译</p>
+                  {visibleDescriptionTranslation?.status === 'loading' && (
+                    <span className="inline-flex items-center gap-1 text-xs text-muted-foreground">
+                      <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                      AI 快速翻译中
+                    </span>
+                  )}
+                  {visibleDescriptionTranslation?.status === 'error' && (
+                    <Button
+                      type="button"
+                      variant="ghost"
+                      size="sm"
+                      onClick={() => requestDescriptionTranslation(selected, true)}
+                      className="h-7 px-2 text-xs"
+                    >
+                      <RefreshCw className="mr-1 h-3.5 w-3.5" />
+                      重试翻译
+                    </Button>
+                  )}
+                </div>
+                <div className={cn(
+                  'mt-2 whitespace-pre-wrap rounded-md border p-3 text-sm leading-6',
+                  visibleDescriptionTranslation?.status === 'error'
+                    ? 'border-amber-200 bg-amber-50 text-amber-800'
+                    : 'border-blue-100 bg-blue-50/70 text-slate-700',
+                )}>
+                  {!selectedDescription
+                    ? '暂无频道简介，无需翻译。'
+                    : visibleDescriptionTranslation?.status === 'ready'
+                      ? visibleDescriptionTranslation.text
+                      : visibleDescriptionTranslation?.status === 'error'
+                        ? visibleDescriptionTranslation.error
+                        : '正在调用 AI 翻译频道简介…'}
+                </div>
+              </div>
+
+              <div>
+                <div className="flex flex-wrap items-center justify-between gap-2">
                   <p className="text-sm font-semibold">历史判断</p>
                   <Button
                     variant="outline"
@@ -715,14 +908,59 @@ export function InvitationConfirmTab({
                 )}
               </div>
               <div>
-                <Label htmlFor={`idea-${selected.id}`}>合作想法 *</Label>
+                <div className="flex items-center justify-between gap-2">
+                  <Label htmlFor={`idea-${selected.id}`}>合作想法 *</Label>
+                  {selected.targetProduct?.trim() && selected.cooperationType?.trim() && (
+                    <Button
+                      type="button"
+                      variant="ghost"
+                      size="sm"
+                      className="h-7 px-2 text-xs"
+                      onClick={() => requestCooperationIdea(selected, true)}
+                      disabled={visibleCooperationIdeaGeneration?.status === 'loading'}
+                    >
+                      {visibleCooperationIdeaGeneration?.status === 'loading' ? (
+                        <Loader2 className="mr-1 h-3.5 w-3.5 animate-spin" />
+                      ) : (
+                        <Sparkles className="mr-1 h-3.5 w-3.5" />
+                      )}
+                      {hasMeaningfulCooperationIdea(selected.cooperationIdea) ? 'AI 重新生成' : 'AI 生成'}
+                    </Button>
+                  )}
+                </div>
                 <Textarea
                   id={`idea-${selected.id}`}
                   value={selected.cooperationIdea || ''}
-                  onChange={(event) => onPatch(selected.id, { cooperationIdea: event.target.value })}
-                  placeholder="写明为什么适合、建议切入角度、希望重点展示的功能。"
+                  onChange={(event) => onPatch(selected.id, {
+                    cooperationIdea: event.target.value,
+                    cooperationIdeaSource: 'manual',
+                    cooperationIdeaContextKey: undefined,
+                  })}
+                  placeholder={
+                    selected.targetProduct?.trim() && selected.cooperationType?.trim()
+                      ? 'AI 将根据频道资料、产品和合作形式自动生成建议。'
+                      : '选择目标产品和合作形式后，AI 会自动生成合作想法。'
+                  }
                   className="mt-1.5 min-h-28 resize-y bg-white"
                 />
+                <p className={cn(
+                  'mt-1 text-xs',
+                  visibleCooperationIdeaGeneration?.status === 'error'
+                    ? 'text-amber-700'
+                    : 'text-muted-foreground',
+                )}>
+                  {!selected.targetProduct?.trim() || !selected.cooperationType?.trim()
+                    ? '请先选择目标产品和合作形式，AI 会立即开始分析。'
+                    : visibleCooperationIdeaGeneration?.status === 'loading'
+                      ? 'AI 正在结合频道简介、近期视频和产品资料生成合作想法…'
+                      : visibleCooperationIdeaGeneration?.status === 'error'
+                        ? visibleCooperationIdeaGeneration.error
+                        : selected.cooperationIdeaSource === 'ai'
+                          ? 'AI 已生成，你可以直接修改；修改后将保留你的版本。'
+                          : hasMeaningfulCooperationIdea(selected.cooperationIdea)
+                            ? '已保留你的人工内容，AI 不会自动覆盖。'
+                            : 'AI 会自动生成合作想法。'}
+                </p>
               </div>
               <div>
                 <Label htmlFor={`priority-${selected.id}`}>优先级</Label>

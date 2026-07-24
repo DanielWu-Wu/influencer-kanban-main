@@ -10,6 +10,7 @@ import {
   Clock3,
   FilePenLine,
   Languages,
+  Lightbulb,
   MailCheck,
   MailPlus,
   PackageCheck,
@@ -29,6 +30,7 @@ import { Textarea } from '@/components/ui/textarea';
 import {
   BUILT_IN_PROMPT_TEMPLATES,
   DEFAULT_ANALYSIS_PROMPT,
+  DEFAULT_COOPERATION_IDEA_PROMPT,
   DEFAULT_DISCOUNT_NOTICE_PROMPT,
   DEFAULT_DRAFT_PROMPT,
   DEFAULT_LOGISTICS_NOTICE_PROMPT,
@@ -52,8 +54,8 @@ const PAGE_CONFIG: Record<PromptManagerMode, {
 }> = {
   general: {
     title: '提示词管理',
-    description: '设置邮件翻译和合作分析规则，并保存常用模板',
-    sectionTypes: ['translate', 'analysis'],
+    description: '设置邮件翻译、合作分析和红人合作想法规则，并保存常用模板',
+    sectionTypes: ['translate', 'analysis', 'cooperationIdea'],
   },
   drafting: {
     title: 'AI 起草邮件提示词',
@@ -92,6 +94,14 @@ const PROMPT_SECTIONS: Array<{
     icon: BarChart3,
     defaultValue: DEFAULT_ANALYSIS_PROMPT,
     rows: 13,
+  },
+  {
+    type: 'cooperationIdea',
+    title: '红人合作想法提示词',
+    description: '控制 AI 如何结合频道、产品和合作形式生成合作切入建议',
+    icon: Lightbulb,
+    defaultValue: DEFAULT_COOPERATION_IDEA_PROMPT,
+    rows: 12,
   },
   {
     type: 'draft',
@@ -146,6 +156,7 @@ const PROMPT_SECTIONS: Array<{
 const initialPrompts: PromptValues = {
   translate: DEFAULT_TRANSLATE_PROMPT,
   analysis: DEFAULT_ANALYSIS_PROMPT,
+  cooperationIdea: DEFAULT_COOPERATION_IDEA_PROMPT,
   draft: DEFAULT_DRAFT_PROMPT,
   outreach: DEFAULT_OUTREACH_PROMPT,
   outreachFollowUp1: DEFAULT_OUTREACH_FOLLOW_UP_1_PROMPT,
@@ -157,6 +168,7 @@ const initialPrompts: PromptValues = {
 const DEFAULT_SELECTED_PROMPT_TEMPLATES: Record<PromptType, string> = {
   translate: 'builtin-translate-standard',
   analysis: 'builtin-analysis-youtube',
+  cooperationIdea: 'builtin-cooperation-idea-youtube',
   draft: 'builtin-draft-business',
   outreach: 'builtin-outreach-youtube',
   outreachFollowUp1: 'builtin-outreach-follow-up-1',
@@ -169,6 +181,8 @@ function getSavedPromptValues(settings: AppSettings): PromptValues {
   return {
     translate: settings.translatePrompt || DEFAULT_TRANSLATE_PROMPT,
     analysis: settings.aiAnalysisPrompt || DEFAULT_ANALYSIS_PROMPT,
+    cooperationIdea:
+      settings.aiCooperationIdeaPrompt || DEFAULT_COOPERATION_IDEA_PROMPT,
     draft: settings.aiDraftPrompt || settings.aiEmailPrompt || DEFAULT_DRAFT_PROMPT,
     outreach: settings.aiOutreachPrompt || DEFAULT_OUTREACH_PROMPT,
     outreachFollowUp1:
@@ -188,6 +202,7 @@ export default function PromptManager({ mode = 'general' }: { mode?: PromptManag
   const [templateNames, setTemplateNames] = useState<Record<PromptType, string>>({
     translate: '',
     analysis: '',
+    cooperationIdea: '',
     draft: '',
     outreach: '',
     outreachFollowUp1: '',
@@ -207,6 +222,8 @@ export default function PromptManager({ mode = 'general' }: { mode?: PromptManag
     setPrompts({
       translate: settings.translatePrompt || DEFAULT_TRANSLATE_PROMPT,
       analysis: settings.aiAnalysisPrompt || DEFAULT_ANALYSIS_PROMPT,
+      cooperationIdea:
+        settings.aiCooperationIdeaPrompt || DEFAULT_COOPERATION_IDEA_PROMPT,
       draft: settings.aiDraftPrompt || settings.aiEmailPrompt || DEFAULT_DRAFT_PROMPT,
       outreach: settings.aiOutreachPrompt || DEFAULT_OUTREACH_PROMPT,
       outreachFollowUp1:
@@ -219,6 +236,7 @@ export default function PromptManager({ mode = 'general' }: { mode?: PromptManag
   }, [
     loading,
     settings.aiAnalysisPrompt,
+    settings.aiCooperationIdeaPrompt,
     settings.aiDraftPrompt,
     settings.aiDiscountNoticePrompt,
     settings.aiEmailPrompt,
@@ -286,6 +304,7 @@ export default function PromptManager({ mode = 'general' }: { mode?: PromptManag
       updateSettings({
         translatePrompt: prompts.translate,
         aiAnalysisPrompt: prompts.analysis,
+        aiCooperationIdeaPrompt: prompts.cooperationIdea,
         promptTemplates: customTemplates,
         selectedPromptTemplates: selectedTemplates,
       });

@@ -131,6 +131,8 @@ export type Prospect = {
   targetProduct?: string;
   cooperationType?: string;
   cooperationIdea?: string;
+  cooperationIdeaSource?: 'ai' | 'manual';
+  cooperationIdeaContextKey?: string;
   contactName?: string;
   contactNameConfidence?: number;
   contactNameSource?: 'ai' | 'manual';
