@@ -245,10 +245,11 @@ function ProjectsTable({ projects, selectedId, onSelect }: {
 }) {
   return (
     <div className="h-full overflow-auto bg-white">
-      <Table className="min-w-[1020px]">
+      <Table className="min-w-[1130px]">
         <TableHeader className="sticky top-0 z-10 bg-slate-50">
           <TableRow className="border-slate-200 hover:bg-slate-50">
             <TableHead className="w-[210px] text-xs font-medium text-slate-600">红人</TableHead>
+            <TableHead className="w-[110px] text-xs font-medium text-slate-600">合作日期</TableHead>
             <TableHead className="w-[190px] text-xs font-medium text-slate-600">合作项目</TableHead>
             <TableHead className="w-[135px] text-xs font-medium text-slate-600">当前进度</TableHead>
             <TableHead className="w-[112px] text-xs font-medium text-slate-600">阶段时间</TableHead>
@@ -273,6 +274,9 @@ function ProjectsTable({ projects, selectedId, onSelect }: {
               }`}
             >
               <TableCell><ProjectIdentity project={project} compact /></TableCell>
+              <TableCell className="text-xs text-slate-700">
+                {formatCooperationDate(project.cooperationDate, true)}
+              </TableCell>
               <TableCell>
                 <p className="max-w-[180px] truncate text-sm font-medium text-slate-800" title={project.product}>{project.product}</p>
                 <p className="mt-0.5 text-[11px] text-slate-500">{project.site}</p>
@@ -763,11 +767,15 @@ export function CooperationProjectsPage({ onOpenSettings }: { onOpenSettings: ()
         return true;
       })
       .sort((left, right) => {
-        if (left.stageDate && right.stageDate && left.stageDate !== right.stageDate) {
-          return left.stageDate - right.stageDate;
+        if (
+          left.cooperationDate
+          && right.cooperationDate
+          && left.cooperationDate !== right.cooperationDate
+        ) {
+          return left.cooperationDate - right.cooperationDate;
         }
-        if (left.stageDate) return -1;
-        if (right.stageDate) return 1;
+        if (left.cooperationDate) return -1;
+        if (right.cooperationDate) return 1;
         return left.channelName.localeCompare(right.channelName, 'zh-CN');
       });
   }, [dateFrom, dateTo, deferredSearch, productFilter, projects, riskFilter, siteFilter, stageFilter]);
