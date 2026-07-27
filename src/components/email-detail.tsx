@@ -37,6 +37,8 @@ import { useRecordAssistant } from './record-assistant-provider';
 
 interface EmailDetailProps {
   thread: GmailThread;
+  loading?: boolean;
+  loadError?: string;
   onBack: () => void;
   onThreadUpdated?: (thread: GmailThread) => void;
 }
@@ -188,7 +190,13 @@ function sortMessagesNewestFirst(messages: GmailMessage[]) {
   return [...messages].sort((left, right) => getMessageTimestamp(right) - getMessageTimestamp(left));
 }
 
-export function EmailDetail({ thread, onBack, onThreadUpdated }: EmailDetailProps) {
+export function EmailDetail({
+  thread,
+  loading = false,
+  loadError,
+  onBack,
+  onThreadUpdated,
+}: EmailDetailProps) {
   const [expandedMessages, setExpandedMessages] = useState<Set<string>>(() => {
     const newestMessage = sortMessagesNewestFirst(thread.messages)[0];
     return new Set(newestMessage ? [newestMessage.id] : []);
@@ -197,6 +205,7 @@ export function EmailDetail({ thread, onBack, onThreadUpdated }: EmailDetailProp
   const [replyMode, setReplyMode] = useState<'compose' | 'ai'>('compose');
   const [savedReplyDraft, setSavedReplyDraft] = useState('');
   const [changingReadStateId, setChangingReadStateId] = useState<string | null>(null);
+  const [downloadingAttachmentIds, setDownloadingAttachmentIds] = useState<Set<string>>(new Set());
   const [messageActionError, setMessageActionError] = useState<string | null>(null);
   const [forwardDraft, setForwardDraft] = useState<{
     subject: string;
@@ -823,13 +832,54 @@ export function EmailDetail({ thread, onBack, onThreadUpdated }: EmailDetailProp
     .replace(/>/g, '&gt;')
     .replace(/"/g, '&quot;');
 
-  const dataUrlToFile = async (attachment: GmailAttachment) => {
-    if (!attachment.dataUrl) return null;
-    const response = await fetch(attachment.dataUrl);
+  const loadAttachmentDataUrl = async (messageId: string, attachment: GmailAttachment) => {
+    if (attachment.dataUrl) return attachment.dataUrl;
+    if (!attachment.id) throw new Error('附件缺少 Gmail 文件标识。');
+
+    const accessToken = await getAccessToken();
+    const response = await fetch(
+      `https://gmail.googleapis.com/gmail/v1/users/me/messages/${messageId}/attachments/${attachment.id}`,
+      { cache: 'no-store', headers: { Authorization: `Bearer ${accessToken}` } },
+    );
+    if (!response.ok) throw new Error(`下载附件失败：${attachment.filename}`);
+    const result = await response.json();
+    if (!result.data) throw new Error(`附件内容为空：${attachment.filename}`);
+    const normalizedSource = String(result.data)
+      .replace(/-/g, '+')
+      .replace(/_/g, '/');
+    const normalized = normalizedSource.padEnd(Math.ceil(normalizedSource.length / 4) * 4, '=');
+    return `data:${attachment.mimeType};base64,${normalized}`;
+  };
+
+  const dataUrlToFile = async (messageId: string, attachment: GmailAttachment) => {
+    const dataUrl = await loadAttachmentDataUrl(messageId, attachment);
+    const response = await fetch(dataUrl);
     const blob = await response.blob();
     return new File([blob], attachment.filename, {
       type: attachment.mimeType || blob.type || 'application/octet-stream',
     });
+  };
+
+  const handleDownloadAttachment = async (messageId: string, attachment: GmailAttachment) => {
+    const attachmentKey = `${messageId}:${attachment.id}`;
+    if (downloadingAttachmentIds.has(attachmentKey)) return;
+    setMessageActionError(null);
+    setDownloadingAttachmentIds((current) => new Set(current).add(attachmentKey));
+    try {
+      const dataUrl = await loadAttachmentDataUrl(messageId, attachment);
+      const link = document.createElement('a');
+      link.href = dataUrl;
+      link.download = attachment.filename;
+      link.click();
+    } catch (error) {
+      setMessageActionError(error instanceof Error ? error.message : '下载附件失败，请稍后重试。');
+    } finally {
+      setDownloadingAttachmentIds((current) => {
+        const next = new Set(current);
+        next.delete(attachmentKey);
+        return next;
+      });
+    }
   };
 
   const handleForward = async (message: GmailMessage) => {
@@ -857,7 +907,7 @@ export function EmailDetail({ thread, onBack, onThreadUpdated }: EmailDetailProp
       const attachmentFiles = (await Promise.all(
         (message.attachments || [])
           .filter((attachment) => !attachment.inline)
-          .map(dataUrlToFile),
+          .map((attachment) => dataUrlToFile(message.id, attachment)),
       )).filter((file): file is File => Boolean(file));
 
       setForwardDraft({
@@ -1122,6 +1172,32 @@ export function EmailDetail({ thread, onBack, onThreadUpdated }: EmailDetailProp
         </div>
       )}
       <ScrollArea className="min-h-0 flex-1">
+        {loading ? (
+          <div className="flex min-h-[320px] items-center justify-center p-6">
+            <div className="w-full max-w-2xl rounded-xl border border-border/55 bg-white/82 p-6 shadow-sm">
+              <div className="mb-5 flex items-center gap-2 text-sm font-medium text-primary">
+                <Loader2 className="h-4 w-4 animate-spin" />
+                正在读取邮件正文…
+              </div>
+              <div className="space-y-3" aria-hidden="true">
+                <div className="h-4 w-2/5 animate-pulse rounded bg-muted/70" />
+                <div className="h-3 w-full animate-pulse rounded bg-muted/55" />
+                <div className="h-3 w-11/12 animate-pulse rounded bg-muted/55" />
+                <div className="h-3 w-4/5 animate-pulse rounded bg-muted/55" />
+                <div className="h-24 w-full animate-pulse rounded-lg bg-muted/45" />
+              </div>
+            </div>
+          </div>
+        ) : loadError ? (
+          <div className="flex min-h-[320px] items-center justify-center p-6">
+            <div className="max-w-lg rounded-xl border border-destructive/20 bg-destructive/5 p-5 text-center">
+              <XCircle className="mx-auto mb-2 h-5 w-5 text-destructive" />
+              <p className="font-medium text-destructive">邮件正文暂时读取失败</p>
+              <p className="mt-1 text-sm text-muted-foreground">{loadError}</p>
+              <p className="mt-3 text-xs text-muted-foreground">返回列表后重新点击这封邮件即可重试。</p>
+            </div>
+          </div>
+        ) : (
         <div className="space-y-4 p-4">
           {displayMessages.map((message, index) => {
             const sender = getDisplayEmail(message.from);
@@ -1292,7 +1368,12 @@ export function EmailDetail({ thread, onBack, onThreadUpdated }: EmailDetailProp
                       )}
 
                       {visibleAttachments.length > 0 && (
-                        <AttachmentList attachments={visibleAttachments} />
+                        <AttachmentList
+                          messageId={message.id}
+                          attachments={visibleAttachments}
+                          downloadingAttachmentIds={downloadingAttachmentIds}
+                          onDownload={handleDownloadAttachment}
+                        />
                       )}
 
                       {/* 操作按钮 */}
@@ -1336,6 +1417,7 @@ export function EmailDetail({ thread, onBack, onThreadUpdated }: EmailDetailProp
             );
           })}
         </div>
+        )}
       </ScrollArea>
 
       {/* 底部回复区域 */}
@@ -1436,7 +1518,17 @@ export function EmailDetail({ thread, onBack, onThreadUpdated }: EmailDetailProp
   );
 }
 
-function AttachmentList({ attachments }: { attachments: GmailAttachment[] }) {
+function AttachmentList({
+  messageId,
+  attachments,
+  downloadingAttachmentIds,
+  onDownload,
+}: {
+  messageId: string;
+  attachments: GmailAttachment[];
+  downloadingAttachmentIds: Set<string>;
+  onDownload: (messageId: string, attachment: GmailAttachment) => void;
+}) {
   return (
     <div className="space-y-2">
       <div className="flex items-center gap-2 text-sm font-medium">
@@ -1445,11 +1537,12 @@ function AttachmentList({ attachments }: { attachments: GmailAttachment[] }) {
       </div>
       <div className="grid gap-2 sm:grid-cols-2">
         {attachments.map((attachment) => (
-          <a
+          <button
+            type="button"
             key={`${attachment.id}-${attachment.filename}`}
-            href={attachment.dataUrl}
-            download={attachment.filename}
-            className="flex min-w-0 items-center gap-3 rounded-lg border border-white/65 bg-white/72 p-3 shadow-sm transition-colors hover:bg-white"
+            className="flex min-w-0 items-center gap-3 rounded-lg border border-white/65 bg-white/72 p-3 text-left shadow-sm transition-colors hover:bg-white disabled:cursor-wait disabled:opacity-70"
+            disabled={downloadingAttachmentIds.has(`${messageId}:${attachment.id}`)}
+            onClick={() => onDownload(messageId, attachment)}
           >
             {attachment.mimeType.startsWith('image/') && attachment.dataUrl ? (
               <img
@@ -1468,8 +1561,12 @@ function AttachmentList({ attachments }: { attachments: GmailAttachment[] }) {
                 {formatFileSize(attachment.size)}
               </p>
             </div>
-            <Download className="w-4 h-4 flex-shrink-0 text-muted-foreground" />
-          </a>
+            {downloadingAttachmentIds.has(`${messageId}:${attachment.id}`) ? (
+              <Loader2 className="h-4 w-4 flex-shrink-0 animate-spin text-primary" />
+            ) : (
+              <Download className="h-4 w-4 flex-shrink-0 text-muted-foreground" />
+            )}
+          </button>
         ))}
       </div>
     </div>

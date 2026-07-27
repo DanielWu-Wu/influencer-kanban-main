@@ -31,6 +31,11 @@ export function GmailPage({ active = true }: { active?: boolean }) {
   const [showNewEmail, setShowNewEmail] = useState(false);
   const [mailboxRefreshKey, setMailboxRefreshKey] = useState(0);
   const [detailExpanded, setDetailExpanded] = useState(false);
+  const [threadLoadState, setThreadLoadState] = useState<{
+    threadId: string;
+    loading: boolean;
+    error?: string;
+  } | null>(null);
   const closeDetailTimerRef = useRef<number | null>(null);
 
   useEffect(() => {
@@ -68,6 +73,7 @@ export function GmailPage({ active = true }: { active?: boolean }) {
     setDetailExpanded(false);
     closeDetailTimerRef.current = window.setTimeout(() => {
       setSelectedThread(null);
+      setThreadLoadState(null);
       closeDetailTimerRef.current = null;
     }, DETAIL_TRANSITION_MS);
   };
@@ -76,6 +82,7 @@ export function GmailPage({ active = true }: { active?: boolean }) {
     setMailbox(nextMailbox);
     setDetailExpanded(false);
     setSelectedThread(null);
+    setThreadLoadState(null);
     setShowSettings(false);
   };
 
@@ -124,6 +131,7 @@ export function GmailPage({ active = true }: { active?: boolean }) {
             setShowSettings(true);
             setDetailExpanded(false);
             setSelectedThread(null);
+            setThreadLoadState(null);
           }}
         >
           <Settings className="h-4 w-4" />
@@ -168,6 +176,7 @@ export function GmailPage({ active = true }: { active?: boolean }) {
               setShowSettings(true);
               setDetailExpanded(false);
               setSelectedThread(null);
+              setThreadLoadState(null);
             }}
           >
             <Settings className="h-4 w-4" />
@@ -177,6 +186,9 @@ export function GmailPage({ active = true }: { active?: boolean }) {
         <GmailInbox
           active={active}
           onSelectThread={handleSelectThread}
+          onThreadLoadStateChange={(threadId, state) => {
+            setThreadLoadState({ threadId, ...state });
+          }}
           selectedThreadId={selectedThread?.id}
           mailbox={mailbox}
           category={category}
@@ -208,6 +220,10 @@ export function GmailPage({ active = true }: { active?: boolean }) {
           <EmailDetail
             key={selectedThread.id}
             thread={selectedThread}
+            loading={threadLoadState?.threadId === selectedThread.id && threadLoadState.loading}
+            loadError={threadLoadState?.threadId === selectedThread.id
+              ? threadLoadState.error
+              : undefined}
             onBack={handleCloseThread}
             onThreadUpdated={setSelectedThread}
           />

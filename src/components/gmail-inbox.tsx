@@ -53,11 +53,19 @@ const GMAIL_PAGE_SIZE = 50;
 const GMAIL_DETAIL_BATCH_SIZE = 16;
 const GMAIL_AUTO_REFRESH_MS = 60_000;
 const GMAIL_CACHE_STALE_MS = 60_000;
+const GMAIL_THREAD_DETAIL_CACHE_MS = 5 * 60_000;
+const GMAIL_THREAD_PREFETCH_DELAY_MS = 180;
 const SUBJECT_TRANSLATION_BATCH_SIZE = 12;
+
+type GmailThreadLoadState = {
+  loading: boolean;
+  error?: string;
+};
 
 interface GmailInboxProps {
   active?: boolean;
   onSelectThread: (thread: GmailThread) => void;
+  onThreadLoadStateChange?: (threadId: string, state: GmailThreadLoadState) => void;
   onThreadUpdated?: (thread: GmailThread) => void;
   onCategoryChange: (category: GmailCategory) => void;
   updatedThread?: GmailThread | null;
@@ -67,6 +75,14 @@ interface GmailInboxProps {
   refreshKey?: number;
   compact?: boolean;
 }
+
+type GmailThreadDetailCacheEntry = {
+  thread: GmailThread;
+  fetchedAt: number;
+};
+
+const gmailThreadDetailCache = new Map<string, GmailThreadDetailCacheEntry>();
+const gmailThreadDetailRequests = new Map<string, Promise<GmailThread>>();
 
 const MAILBOX_LABELS: Record<GmailMailbox, string> = {
   inbox: '\u6536\u4ef6\u7bb1',
@@ -485,9 +501,110 @@ async function fetchWithTimeout(
   }
 }
 
+function readCachedThreadDetail(thread: GmailThread) {
+  const cached = gmailThreadDetailCache.get(thread.id);
+  if (
+    !cached
+    || Date.now() - cached.fetchedAt >= GMAIL_THREAD_DETAIL_CACHE_MS
+    || cached.thread.lastMessageDate !== thread.lastMessageDate
+  ) {
+    if (cached) gmailThreadDetailCache.delete(thread.id);
+    return null;
+  }
+
+  return {
+    ...cached.thread,
+    hasUnread: thread.hasUnread,
+    isStarred: thread.isStarred,
+    labels: thread.labels,
+  };
+}
+
+function cacheThreadDetail(thread: GmailThread) {
+  if (!gmailThreadDetailCache.has(thread.id) && gmailThreadDetailCache.size >= 100) {
+    const oldestThreadId = gmailThreadDetailCache.keys().next().value;
+    if (oldestThreadId) gmailThreadDetailCache.delete(oldestThreadId);
+  }
+  gmailThreadDetailCache.delete(thread.id);
+  gmailThreadDetailCache.set(thread.id, {
+    thread,
+    fetchedAt: Date.now(),
+  });
+}
+
+async function fetchThreadDetail(thread: GmailThread, accessToken: string) {
+  const cached = readCachedThreadDetail(thread);
+  if (cached) return cached;
+
+  const pending = gmailThreadDetailRequests.get(thread.id);
+  if (pending) return pending;
+
+  const request = (async () => {
+    const response = await fetchWithTimeout(
+      `https://gmail.googleapis.com/gmail/v1/users/me/threads/${thread.id}?format=full`,
+      { headers: { Authorization: `Bearer ${accessToken}` } },
+      20_000,
+    );
+    if (!response.ok) {
+      const result = await response.json().catch(() => ({}));
+      const message = typeof result?.error?.message === 'string'
+        ? result.error.message
+        : '读取邮件正文失败';
+      throw new Error(message);
+    }
+
+    const parsed = await parseGmailThread(
+      await response.json() as Record<string, unknown>,
+      accessToken,
+      false,
+    );
+    cacheThreadDetail(parsed);
+    return parsed;
+  })();
+
+  gmailThreadDetailRequests.set(thread.id, request);
+  try {
+    return await request;
+  } finally {
+    gmailThreadDetailRequests.delete(thread.id);
+  }
+}
+
+async function hydrateInlineAttachments(thread: GmailThread, accessToken: string) {
+  let changed = false;
+  const messages = await Promise.all(thread.messages.map(async (message) => {
+    const inlineAttachments = (message.attachments || []).filter(
+      (attachment) => attachment.inline && !attachment.dataUrl && attachment.id,
+    );
+    if (inlineAttachments.length === 0) return message;
+
+    const loadedInlineAttachments = await Promise.all(
+      inlineAttachments.map((attachment) => loadAttachmentData(message.id, attachment, accessToken)),
+    );
+    const loadedById = new Map(
+      loadedInlineAttachments.map((attachment) => [attachment.id, attachment]),
+    );
+    const attachments = (message.attachments || []).map(
+      (attachment) => loadedById.get(attachment.id) || attachment,
+    );
+    const htmlBody = message.htmlBody
+      ? replaceInlineContentIds(message.htmlBody, attachments)
+      : message.htmlBody;
+    changed = changed || loadedInlineAttachments.some((attachment) => Boolean(attachment.dataUrl));
+    return {
+      ...message,
+      attachments,
+      htmlBody,
+    };
+  }));
+
+  return changed ? { ...thread, messages } : thread;
+}
+
 export function GmailInbox({
   active = true,
   onSelectThread,
+  onThreadLoadStateChange,
   onThreadUpdated,
   onCategoryChange,
   updatedThread,
@@ -505,6 +622,8 @@ export function GmailInbox({
   const subjectTranslationRunRef = useRef(0);
   const avatarPrefetchRunRef = useRef(0);
   const openingThreadRef = useRef<string | null>(null);
+  const openingThreadRunRef = useRef(0);
+  const threadPrefetchTimerRef = useRef<number | null>(null);
   const manuallyPreservedUnreadThreadIdsRef = useRef<Set<string>>(new Set());
   const [threads, setThreads] = useState<GmailThread[]>([]);
   const [loading, setLoading] = useState(false);
@@ -526,6 +645,12 @@ export function GmailInbox({
   const [nextPageToken, setNextPageToken] = useState<string | null>(null);
   const [lastSyncedAt, setLastSyncedAt] = useState<string | null>(null);
   const [normalUnreadCount, setNormalUnreadCount] = useState<number | null>(null);
+
+  useEffect(() => () => {
+    if (threadPrefetchTimerRef.current !== null) {
+      window.clearTimeout(threadPrefetchTimerRef.current);
+    }
+  }, []);
 
   useEffect(() => {
     setActivePaginationKey(paginationKey);
@@ -986,12 +1111,13 @@ export function GmailInbox({
     thread: GmailThread,
     addLabelIds: string[] = [],
     removeLabelIds: string[] = [],
+    accessTokenOverride?: string,
   ) => {
     setActionThreadId(thread.id);
     setError(null);
 
     try {
-      const accessToken = await getAccessToken();
+      const accessToken = accessTokenOverride || await getAccessToken();
       const response = await fetch(
         `https://gmail.googleapis.com/gmail/v1/users/me/threads/${thread.id}/modify`,
         {
@@ -1037,6 +1163,27 @@ export function GmailInbox({
               : message.isRead,
         })),
       };
+      const cached = gmailThreadDetailCache.get(nextThread.id);
+      if (cached) {
+        cacheThreadDetail({
+          ...cached.thread,
+          hasUnread: nextThread.hasUnread,
+          isStarred: nextThread.isStarred,
+          labels: nextThread.labels,
+          messages: cached.thread.messages.map((message) => ({
+            ...message,
+            labels: Array.from(new Set([
+              ...message.labels.filter((label) => !removeLabelIds.includes(label)),
+              ...addLabelIds,
+            ])),
+            isRead: removeLabelIds.includes('UNREAD')
+              ? true
+              : addLabelIds.includes('UNREAD')
+                ? false
+                : message.isRead,
+          })),
+        });
+      }
       const wasCountedAsNormalUnread = thread.hasUnread && isNormalInboxThread(thread);
       const isCountedAsNormalUnread = nextThread.hasUnread && isNormalInboxThread(nextThread);
       if (wasCountedAsNormalUnread !== isCountedAsNormalUnread) {
@@ -1069,27 +1216,56 @@ export function GmailInbox({
     }
   };
 
+  const prefetchThread = (thread: GmailThread) => {
+    if (readCachedThreadDetail(thread) || gmailThreadDetailRequests.has(thread.id)) return;
+    if (threadPrefetchTimerRef.current !== null) {
+      window.clearTimeout(threadPrefetchTimerRef.current);
+    }
+    threadPrefetchTimerRef.current = window.setTimeout(() => {
+      threadPrefetchTimerRef.current = null;
+      void getAccessToken()
+        .then((accessToken) => fetchThreadDetail(thread, accessToken))
+        .catch(() => {
+          // Prefetch is opportunistic; a normal click will retry and report failures.
+        });
+    }, GMAIL_THREAD_PREFETCH_DELAY_MS);
+  };
+
+  const cancelThreadPrefetch = () => {
+    if (threadPrefetchTimerRef.current === null) return;
+    window.clearTimeout(threadPrefetchTimerRef.current);
+    threadPrefetchTimerRef.current = null;
+  };
+
   const handleOpenThread = async (thread: GmailThread) => {
-    if (openingThreadRef.current) return;
+    const runId = openingThreadRunRef.current + 1;
+    openingThreadRunRef.current = runId;
     openingThreadRef.current = thread.id;
     setOpeningThreadId(thread.id);
+    onSelectThread(thread);
+    onThreadLoadStateChange?.(thread.id, { loading: true });
     let nextThread = thread;
+    let accessToken: string | null = null;
 
     try {
-      const accessToken = await getAccessToken();
-      const response = await fetchWithTimeout(
-        `https://gmail.googleapis.com/gmail/v1/users/me/threads/${thread.id}?format=full`,
-        { headers: { Authorization: `Bearer ${accessToken}` } },
-        20_000,
-      );
-      if (response.ok) {
-        nextThread = await parseGmailThread(await response.json(), accessToken, true);
+      accessToken = await getAccessToken();
+      nextThread = await fetchThreadDetail(thread, accessToken);
+      if (openingThreadRunRef.current === runId) {
+        onSelectThread(nextThread);
+        onThreadLoadStateChange?.(thread.id, { loading: false });
       }
-    } catch {
-      // The lightweight list data is still usable if full content loading fails.
+    } catch (caughtError) {
+      if (openingThreadRunRef.current === runId) {
+        onThreadLoadStateChange?.(thread.id, {
+          loading: false,
+          error: caughtError instanceof Error ? caughtError.message : '读取邮件正文失败',
+        });
+      }
     } finally {
-      openingThreadRef.current = null;
-      setOpeningThreadId(null);
+      if (openingThreadRunRef.current === runId) {
+        openingThreadRef.current = null;
+        setOpeningThreadId(null);
+      }
     }
 
     const shouldPreserveUnread = nextThread.hasUnread
@@ -1099,7 +1275,7 @@ export function GmailInbox({
       );
 
     if (nextThread.hasUnread && !shouldPreserveUnread) {
-      nextThread = await modifyThread(nextThread, [], ['UNREAD']);
+      void modifyThread(nextThread, [], ['UNREAD'], accessToken || undefined);
     } else {
       setThreads((current) =>
         sortThreadsByLatest(
@@ -1108,7 +1284,16 @@ export function GmailInbox({
         ),
       );
     }
-    onSelectThread(nextThread);
+
+    if (accessToken && openingThreadRunRef.current === runId) {
+      void hydrateInlineAttachments(nextThread, accessToken).then((hydratedThread) => {
+        if (hydratedThread === nextThread) return;
+        cacheThreadDetail(hydratedThread);
+        if (openingThreadRunRef.current === runId) onSelectThread(hydratedThread);
+      }).catch(() => {
+        // Inline images are optional and must never delay or hide the email body.
+      });
+    }
   };
 
   const translateThreadSubjects = useCallback(async (targetThreads: GmailThread[]) => {
@@ -1400,6 +1585,10 @@ export function GmailInbox({
                   selectedThreadId === thread.id ? 'bg-primary/[0.07] shadow-[inset_2px_0_0_var(--primary)]' : ''
                 } ${thread.hasUnread ? 'bg-primary/[0.055]' : ''} ${threadOpening ? 'cursor-wait bg-white/85' : ''}`}
                 onClick={() => handleOpenThread(thread)}
+                onMouseEnter={() => prefetchThread(thread)}
+                onMouseLeave={cancelThreadPrefetch}
+                onFocus={() => prefetchThread(thread)}
+                onBlur={cancelThreadPrefetch}
                 onKeyDown={(event) => {
                   if (event.key === 'Enter') handleOpenThread(thread);
                 }}
