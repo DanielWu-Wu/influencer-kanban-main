@@ -1,4 +1,11 @@
-# TODO
+# TODO（历史入口，已停止单独维护）
+
+> 当前待办、验证缺口和优先级统一维护在
+> [`docs/HANDOFF.md`](docs/HANDOFF.md)。本文件以下内容仅供历史追溯，
+> 不作为当前任务清单，避免与现役交接形成两套答案。
+
+<details>
+<summary>展开旧 TODO 快照</summary>
 
 ## 已完成
 
@@ -106,3 +113,5 @@
 - 当前部分状态仍依赖本地/云设置混合存储，后续多人协作可能需要更完整的数据模型。
 - `docs/HANDOFF.md` 是当前唯一现役交接入口；根目录 `HANDOFF.md`、`PROJECT_HANDOFF.md`
   与 `docs/AI_HANDOFF.md` 只作为历史补充。
+
+</details>

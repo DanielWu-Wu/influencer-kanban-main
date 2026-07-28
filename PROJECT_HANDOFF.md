@@ -1,7 +1,12 @@
-# PROJECT_HANDOFF
+# 历史项目交接入口（已停用）
 
-> 历史交接说明：当前唯一现役交接入口是 `docs/HANDOFF.md`。本文件保留较多早期背景，
-> 后续开发应优先以 `docs/HANDOFF.md`、当前 Git 状态和实际代码为准。
+> 本文件不再维护。当前唯一现役交接文档是
+> [`docs/HANDOFF.md`](docs/HANDOFF.md)。
+>
+> 以下内容仅保留旧链接兼容和历史追溯，不代表当前代码状态、风险或下一步。
+
+<details>
+<summary>展开历史项目交接内容</summary>
 
 ## 项目名称和目标
 
@@ -328,3 +333,5 @@ UI 方向是清爽、现代、信息密度高的桌面工作台，轻 Glassmorph
 请先阅读 HANDOFF.md、AGENTS.md、README.md、TODO.md，并查看 git status。
 当前重点是统一真实邮件发送状态和设计每日待办/工作日历第一版规则；不要自动发送 Gmail，不要硬编码飞书字段，不要改数据库结构。
 ```
+
+</details>

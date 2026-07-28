@@ -331,20 +331,14 @@ async function fetchChannelIdByHandle(apiKey: string, handle: string) {
   const cleanHandle = cleanChannelPathSegment(handle);
   if (!cleanHandle) return '';
 
-  for (const candidate of [cleanHandle, `@${cleanHandle}`]) {
-    const url = buildYouTubeUrl('channels', {
-      part: 'snippet',
-      forHandle: candidate,
-      key: apiKey,
-    });
+  const url = buildYouTubeUrl('channels', {
+    part: 'snippet',
+    forHandle: `@${cleanHandle}`,
+    key: apiKey,
+  });
 
-    const data = await fetchYouTubeJson<YouTubeChannelsResponse>(url, 'YouTube 频道 Handle 解析');
-    if (data.items?.[0]?.id) {
-      return data.items[0].id;
-    }
-  }
-
-  return '';
+  const data = await fetchYouTubeJson<YouTubeChannelsResponse>(url, 'YouTube 频道 Handle 解析');
+  return data.items?.[0]?.id || '';
 }
 
 async function fetchChannelIdByUsername(apiKey: string, username: string) {
@@ -388,21 +382,36 @@ async function searchChannelId(apiKey: string, query: string, regionCode: string
   return data.items?.[0]?.id?.channelId || '';
 }
 
-async function resolveChannelId(apiKey: string, item: ResolvedInput, regionCode: string, relevanceLanguage: string) {
+async function resolveChannelId(
+  apiKey: string,
+  item: ResolvedInput,
+  regionCode: string,
+  relevanceLanguage: string,
+  allowSearchFallback: boolean,
+) {
   if (item.channelId) return item.channelId;
 
   if (item.videoId) {
+    if (!allowSearchFallback) {
+      throw new Error('自动头像查询仅支持 Channel ID 或标准 @Handle 频道链接。');
+    }
     return await fetchVideoChannelId(apiKey, item.videoId);
   }
 
   if (item.handle) {
     const direct = await fetchChannelIdByHandle(apiKey, item.handle);
     if (direct) return direct;
+    if (!allowSearchFallback) return '';
   }
 
   if (item.username) {
     const direct = await fetchChannelIdByUsername(apiKey, item.username);
     if (direct) return direct;
+    if (!allowSearchFallback) return '';
+  }
+
+  if (!allowSearchFallback) {
+    throw new Error('自动头像查询仅支持 Channel ID 或标准 @Handle 频道链接，不会使用 search.list。');
   }
 
   return await searchChannelId(
@@ -495,6 +504,8 @@ export async function POST(request: NextRequest) {
     links?: unknown[];
     apiKey?: unknown;
     maxVideos?: unknown;
+    includeRecentVideos?: unknown;
+    allowSearchFallback?: unknown;
     regionCode?: unknown;
     relevanceLanguage?: unknown;
   };
@@ -511,7 +522,8 @@ export async function POST(request: NextRequest) {
   }
 
   const maxVideos = Math.min(8, Math.max(1, Number(body.maxVideos) || 5));
-  const includeRecentVideos = (body as { includeRecentVideos?: unknown }).includeRecentVideos !== false;
+  const includeRecentVideos = body.includeRecentVideos !== false;
+  const allowSearchFallback = body.allowSearchFallback !== false;
   const regionCode = typeof body.regionCode === 'string' ? body.regionCode.trim().toUpperCase().slice(0, 2) : '';
   const relevanceLanguage = typeof body.relevanceLanguage === 'string' ? body.relevanceLanguage.trim().toLowerCase() : '';
   const parsedInputs = links.map((link: string) => ({ input: link, parsed: parseYouTubeInput(link) }));
@@ -530,6 +542,7 @@ export async function POST(request: NextRequest) {
           item.parsed,
           regionCode,
           relevanceLanguage,
+          allowSearchFallback,
         );
         if (!channelId) {
           errors.push({ sourceUrl: item.input, error: '没有找到匹配的 YouTube 频道。' });

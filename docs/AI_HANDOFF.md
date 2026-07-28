@@ -1,6 +1,13 @@
-# AI Handoff
+# Historical AI Handoff (Retired)
 
-> Historical reference only. The current handoff source of truth is `docs/HANDOFF.md`.
+> This file is no longer maintained. The sole active handoff is
+> [`HANDOFF.md`](HANDOFF.md).
+>
+> The content below is retained only for old-link compatibility and historical
+> reference. It does not describe the current code status or next priority.
+
+<details>
+<summary>Expand historical AI handoff</summary>
 
 ## Project Goal
 
@@ -87,3 +94,5 @@ The UI direction is a clean, dense, light Glassmorphism workbench.
 - Do not run broad repository scans when a focused file read is enough; this project has many large UI files.
 - Do not use destructive git or filesystem commands. The user often has local uncommitted work and commits through GitHub Desktop.
 - Do not prioritize visual flourish over dense operational clarity. This is a B2B workbench, not a landing page.
+
+</details>

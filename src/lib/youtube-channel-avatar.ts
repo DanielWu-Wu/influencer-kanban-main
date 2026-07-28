@@ -37,11 +37,39 @@ type ResolvedChannelPayload = {
 
 const CHANNEL_AVATAR_CACHE_PREFIX = 'influencer_ops_youtube_avatar:';
 const CHANNEL_AVATAR_SUCCESS_TTL_MS = 30 * 24 * 60 * 60 * 1000;
-const CHANNEL_AVATAR_FAILURE_TTL_MS = 3 * 60 * 1000;
+const CHANNEL_AVATAR_TRANSIENT_FAILURE_TTL_MS = 10 * 60 * 1000;
+const CHANNEL_AVATAR_STABLE_FAILURE_TTL_MS = 24 * 60 * 60 * 1000;
+const CHANNEL_AVATAR_QUOTA_RESET_BUFFER_MS = 5 * 60 * 1000;
+const CHANNEL_AVATAR_BATCH_SIZE = 50;
 const pendingAvatarRequests = new Map<string, Promise<ChannelAvatarState>>();
 
 export function normalizeChannelUrl(value: string) {
   return value.trim().replace(/\/+$/, '');
+}
+
+function normalizeAutomaticAvatarChannelUrl(value: string) {
+  const rawUrl = normalizeChannelUrl(value);
+  if (!rawUrl) return '';
+
+  const candidate = /^https?:\/\//i.test(rawUrl) ? rawUrl : `https://${rawUrl}`;
+  try {
+    const url = new URL(candidate);
+    const hostname = url.hostname.toLowerCase().replace(/^www\./, '');
+    if (hostname !== 'youtube.com' && !hostname.endsWith('.youtube.com')) return '';
+
+    const segments = url.pathname.split('/').filter(Boolean);
+    if (segments[0]?.startsWith('@')) {
+      const handle = segments[0].replace(/^@+/, '').trim();
+      return handle ? `https://www.youtube.com/@${handle}` : '';
+    }
+    if (segments[0]?.toLowerCase() === 'channel' && segments[1]) {
+      return `https://www.youtube.com/channel/${segments[1]}`;
+    }
+  } catch {
+    return '';
+  }
+
+  return '';
 }
 
 export function getDirectYouTubeChannelUrl(profile: {
@@ -76,8 +104,7 @@ export function buildChannelAvatarLookup(profile: {
 } | null) {
   if (!profile) return null;
   const channelId = String(profile.channelId || '').trim();
-  const channelUrl = normalizeChannelUrl(String(profile.channelUrl || ''));
-  const channelName = String(profile.channelName || '').trim();
+  const channelUrl = normalizeAutomaticAvatarChannelUrl(String(profile.channelUrl || ''));
   if (channelId) {
     return {
       key: `channel:${channelId.toLowerCase()}`,
@@ -90,12 +117,6 @@ export function buildChannelAvatarLookup(profile: {
       link: channelUrl,
     };
   }
-  if (channelName && !['未填写', '未填写频道名'].includes(channelName)) {
-    return {
-      key: `search:${channelName.toLowerCase()}`,
-      link: channelName,
-    };
-  }
   return null;
 }
 
@@ -106,9 +127,7 @@ export function channelAvatarLookupPriority(profile: {
 } | null) {
   if (!profile) return 0;
   if (String(profile.channelId || '').trim()) return 3;
-  if (String(profile.channelUrl || '').trim()) return 2;
-  const channelName = String(profile.channelName || '').trim();
-  if (channelName && !['未填写', '未填写频道名'].includes(channelName)) return 1;
+  if (normalizeAutomaticAvatarChannelUrl(String(profile.channelUrl || ''))) return 2;
   return 0;
 }
 
@@ -181,11 +200,52 @@ function cacheResolvedAvatar(key: string, avatar: ChannelAvatarState) {
   });
 }
 
+function nextPacificQuotaResetAt(now = Date.now()) {
+  const pacificDay = new Intl.DateTimeFormat('en-CA', {
+    timeZone: 'America/Los_Angeles',
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit',
+  });
+  const currentDay = pacificDay.format(new Date(now));
+  let beforeReset = now;
+  let afterReset = now + 26 * 60 * 60 * 1000;
+
+  for (let index = 0; index < 24; index += 1) {
+    const midpoint = Math.floor((beforeReset + afterReset) / 2);
+    if (pacificDay.format(new Date(midpoint)) === currentDay) beforeReset = midpoint;
+    else afterReset = midpoint;
+  }
+
+  return afterReset + CHANNEL_AVATAR_QUOTA_RESET_BUFFER_MS;
+}
+
+function avatarFailureExpiresAt(error?: string) {
+  const normalized = String(error || '').toLowerCase();
+  if (
+    normalized.includes('配额')
+    || normalized.includes('quota')
+    || normalized.includes('daily limit')
+  ) {
+    return nextPacificQuotaResetAt();
+  }
+  if (
+    normalized.includes('没有找到')
+    || normalized.includes('未返回头像')
+    || normalized.includes('不存在')
+    || normalized.includes('无法识别')
+    || normalized.includes('仅支持 channel id')
+  ) {
+    return Date.now() + CHANNEL_AVATAR_STABLE_FAILURE_TTL_MS;
+  }
+  return Date.now() + CHANNEL_AVATAR_TRANSIENT_FAILURE_TTL_MS;
+}
+
 function cacheFailedAvatar(key: string, error?: string) {
   writeChannelAvatarCache(key, {
     status: 'failed',
     error,
-    expiresAt: Date.now() + CHANNEL_AVATAR_FAILURE_TTL_MS,
+    expiresAt: avatarFailureExpiresAt(error),
   });
 }
 
@@ -204,8 +264,8 @@ export async function resolveChannelAvatars(
   }
 
   const chunks: ChannelAvatarLookup[][] = [];
-  for (let index = 0; index < uncached.length; index += 20) {
-    chunks.push(uncached.slice(index, index + 20));
+  for (let index = 0; index < uncached.length; index += CHANNEL_AVATAR_BATCH_SIZE) {
+    chunks.push(uncached.slice(index, index + CHANNEL_AVATAR_BATCH_SIZE));
   }
 
   await Promise.all(chunks.map(async (chunk) => {
@@ -217,6 +277,7 @@ export async function resolveChannelAvatars(
           links: chunk.map((lookup) => lookup.link),
           maxVideos: 1,
           includeRecentVideos: false,
+          allowSearchFallback: false,
           regionCode: options.regionCode || '',
           relevanceLanguage: options.relevanceLanguage || '',
         }),
@@ -284,6 +345,7 @@ export async function resolveChannelAvatar(
           links: [lookup.link],
           maxVideos: 1,
           includeRecentVideos: false,
+          allowSearchFallback: false,
           regionCode: options.regionCode || '',
           relevanceLanguage: options.relevanceLanguage || '',
         }),

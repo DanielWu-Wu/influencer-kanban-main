@@ -2,9 +2,11 @@
 
 这是一个面向跨境电商海外红人推广专员的日常运营工作台。项目目标是把 YouTube 红人发现、飞书多维表格建档、Gmail 开发信、AI 辅助翻译/回复、产品资料、合作状态跟进集中到一个清晰可控的桌面 Web 应用里。
 
-当前最重要的页面是 **红人开发台**，用于从 YouTube 频道录入红人，查重飞书双表，确认邀约方向，生成开发信，保存 Gmail 草稿，检查回复并安排二次/三次开发信跟进。
+当前最重要的页面是 **红人开发台**，用于从 YouTube 频道录入红人，查重飞书双表，确认邀约方向，生成开发信，保存 Gmail 草稿，检查回复并安排一次/二次 Follow Up。
 
-当前最新交接入口是根目录 `HANDOFF.md`。`PROJECT_HANDOFF.md`、`TODO.md` 和 `docs/AI_HANDOFF.md` 可作为历史补充，但后续开发应优先以 `HANDOFF.md` 和实际代码为准。
+当前唯一现役交接入口是 [`docs/HANDOFF.md`](docs/HANDOFF.md)。根目录
+`HANDOFF.md`、`PROJECT_HANDOFF.md`、`TODO.md` 和 `docs/AI_HANDOFF.md`
+只保留旧链接兼容，不作为当前状态或优先级依据。
 
 ## 技术栈
 

@@ -1,5 +1,147 @@
 # 红人推广工作台交接文档
 
+> **唯一现役交接版本**
+>
+> 更新时间：2026-07-27
+>
+> 当前代码基线：`main` / `9632ae8`（增强 Gmail 性能），审计时与 `origin/main` 一致。
+>
+> 本文件是当前状态、风险、待验证项和下一任务的唯一交接依据。根目录
+> `HANDOFF.md`、`PROJECT_HANDOFF.md`、`docs/AI_HANDOFF.md` 和 `TODO.md`
+> 仅保留为历史入口，不再维护并行现况。
+
+## 0. 下一位开发者先看这里
+
+1. 完整阅读根目录 `AGENTS.md` 和本文件。
+2. 运行 `git status --short --branch`，保留所有既有改动。
+3. 当前产品约定是：首封开发信保存 Gmail 草稿后，由用户立即前往 Gmail 手动发送；
+   系统可直接结束本轮开发流程，无需再增加发送状态确认。
+4. 涉及 Gmail、飞书、YouTube 的写入或真实账号验证，继续保留人工触发与确认，绝不自动发送邮件。
+
+## 1. 当前项目边界
+
+这是跨境电商海外红人推广工作台，覆盖 YouTube 红人发现、飞书建档、Gmail
+开发信与 Follow Up、AI 辅助翻译/起草、合作项目跟进。AI 只负责辅助判断和生成；
+真实发送、飞书批量写回、字段结构变化仍由用户明确触发和确认。
+
+主要入口：
+
+- 红人开发台：`src/components/creator-prospecting-page.tsx`
+- Follow Up：`src/components/outreach-follow-up-tab.tsx`
+- Gmail：`src/components/gmail-page.tsx`、`src/components/gmail-inbox.tsx`、
+  `src/components/email-detail.tsx`
+- 合作项目：`src/components/cooperation-projects-page.tsx`
+- 飞书映射：`src/components/feishu-settings.tsx`、`src/lib/feishu-mapping.ts`
+- 项目规则：根目录 `AGENTS.md`
+
+## 2. 已由代码确认的现役能力
+
+### 红人录入、邀约和开发信
+
+- 支持 YouTube 频道批量识别、飞书资源库/开发记录双表查重和重复开发新轮次。
+- 加入资源库确认页使用飞书保存的字段映射；“粉丝数”写入自然数，不再写“万”。
+- 频道名可点击跳转 YouTube；内容类型由 AI 结合频道标题、简介、近期视频和飞书可选项判断，
+  最多返回 3 项，失败时保留人工选择。
+- 邀约确认页展示“频道简介中文翻译”；选择目标产品和合作形式后可自动生成合作想法。
+- 用户保存的邮件提示词模板选择会通过 `selectedPromptTemplates` 恢复，不再每次回到内置模板。
+- 开发信队列采用紧凑横向折叠卡片，支持“全部展开/全部收起”；
+  “正在生成”为蓝色，“开发信已生成”为绿色，生成完成不自动展开。
+
+### Follow Up
+
+- 一次/二次 Follow Up 支持单条和当前日期范围内批量起草。
+- 支持最近 7/10/14/30 天以及自定义日期范围。
+- 起草流程会检查 Gmail、调用对应 AI 提示词并保存 Gmail 草稿，不自动发送。
+- 二次 Follow Up 必须取得真实已发送的一次 Follow Up；`DRAFT` 不计入已发送，
+  且 AI 请求必须包含 `previousFollowUp`。
+- 已生成草稿支持悬停预览和只读结果窗口；失败项保留重试。
+- “写回全部”带确认对话框和逐条进度，用于把已检查结果同步到“红人开发情况表”。
+
+### Gmail
+
+- Mailsuite/Mailtrack 等通知地址在联系人解析和草稿 API 两层拦截，不能成为回复收件人。
+- Gmail 线程详情加入 5 分钟、最多 100 条的前端缓存。
+- 鼠标悬停/聚焦线程约 180ms 后预取；点击后先显示详情骨架，不再等待完整请求才切换。
+- 正文优先加载，内联图片后台补齐，普通附件按需加载；已读写回改为后台执行。
+- 有过期响应保护，快速切换线程时旧请求不会覆盖当前线程。
+
+### 合作项目
+
+- 列表界面已移除“负责人”筛选和列；底层历史字段仍保留兼容，不做数据结构删除。
+- 列表显示“合作日期”，支持日期范围筛选。
+- 默认按合作日期升序排列：旧合作在上，新合作在下；无日期记录排在有日期记录之后。
+
+## 3. 已确认的首封开发信状态约定
+
+- 首封开发信保存到 Gmail 草稿后，用户会立即前往 Gmail 手动发送。
+- 保存成功即可将当前线索从开发信流程移出，并允许飞书双表标记为“已发”。
+- 这是当前单人工作流下有意采用的轻量化约定，不列为待修复缺陷。
+- 系统仍然不得自动发送邮件；如果未来改为多人协作或不保证立即手动发送，再重新拆分
+  “草稿已保存”和“真实已发送”状态。
+
+## 4. 本轮验证结果
+
+| 验证面 | 状态 | 结果 |
+| --- | --- | --- |
+| TypeScript | 已验证 | `tsc --noEmit` 通过 |
+| ESLint | 已验证 | 0 error，9 warning |
+| 生产构建 | 已验证 | 沙箱内编译后遇到 `spawn EPERM`；获准在本机运行后完整通过，28 个页面/路由生成成功 |
+| Gmail 详情性能 | 部分真实验证 | 本地登录态验证了即时骨架、长线程正文加载和重复打开缓存；未发送邮件、未创建草稿 |
+| 外部写入 | 未执行 | 本轮没有 Gmail 发送、飞书写回、部署或数据结构变更 |
+
+现有 9 个 lint warning：
+
+- `email-detail.tsx`：1 个原生 `<img>` 提示。
+- `reminder-panel.tsx`：6 个未使用图标导入。
+- `todo-board.tsx`：2 个未使用导入/参数。
+
+这些 warning 不阻塞当前构建，但应在独立的小型清理任务中处理，避免混入业务修复。
+
+## 5. 仍需真实账号验收
+
+以下功能已做代码核对，但不能用本地模拟代替真实 Gmail/飞书/YouTube 验收：
+
+1. Mailsuite/Mailtrack 通知邮件场景下，实际保存草稿时收件人是否仍为红人。
+2. 一次/二次 Follow Up 的真实 `SENT`/`DRAFT`、人工回复、自动回复和退信分类。
+3. 同一频道重复开发时，是否新建当前轮次且不覆盖历史飞书记录。
+4. 飞书真实内容类型选项、粉丝数自然数写入和 AI 分类结果。
+5. “写回全部”在真实“红人开发情况表”中的逐条结果和失败恢复。
+6. 合作日期在不同飞书日期值形态下的解析、筛选与升序排序。
+
+真实验收涉及外部写入时，必须由用户明确点击并确认；不要在自动测试里发送邮件或批量写表。
+
+## 6. Git 与工作区现况
+
+- 审计开始时主工作区干净：`main...origin/main`，HEAD 为 `9632ae8`。
+- 本次只更新交接/入口文档，不提交、不部署、不删除文件。
+- 另有一个 Codex detached worktree：
+  `C:/Users/Admin/.codex/worktrees/347c/influencer-kanban-main`，HEAD 为 `de11118`。
+  本轮没有修改或清理它；在确认不再需要前不要删除。
+- 完成本次收尾后，以 `git status --short` 显示的文档改动为准，继续开发时必须保留。
+
+## 7. 已知注意事项
+
+- Gmail 冷启动线程仍受 Google API、网络和邮件数量影响；当前优化主要改善首屏反馈、预取和重复打开。
+- 本地浏览器曾观察到浮动 AI 助手的既有 hydration warning，尚未确认影响业务。
+- 不要硬编码飞书字段名；所有写入继续使用用户保存的字段映射。
+- Follow Up 和回复判断仍以 Gmail 实际 `SENT`、`DRAFT` 与来信记录为准；
+  只有首封开发信沿用“保存草稿后由用户立即手动发送”的已确认约定。
+- 不要自动发送邮件、自动群发或在无确认的情况下批量写飞书。
+
+## 8. 常用验证命令
+
+```powershell
+C:\Users\Admin\.cache\codex-runtimes\codex-primary-runtime\dependencies\node\bin\node.exe node_modules\typescript\bin\tsc -p tsconfig.json --noEmit
+C:\Users\Admin\.cache\codex-runtimes\codex-primary-runtime\dependencies\bin\pnpm.cmd lint
+C:\Users\Admin\.cache\codex-runtimes\codex-primary-runtime\dependencies\bin\pnpm.cmd build
+C:\Users\Admin\.cache\codex-runtimes\codex-primary-runtime\dependencies\native\git\cmd\git.exe status --short --branch
+```
+
+---
+
+<details>
+<summary>2026-07-23 旧交接快照（已归档，不代表当前状态）</summary>
+
 > 更新时间：2026-07-23
 >
 > 当前已提交基线：`main` / `2c89747`（优化项目合作进度跟进）
@@ -199,3 +341,5 @@ pnpm build
 ```
 
 本机若没有 Node/pnpm PATH，可直接使用 Codex bundled Node 执行本地 `tsc`、`eslint` 和 `next build`。Windows 沙箱内执行 `tsx` 或 Next build 可能遇到 `spawn EPERM`，需要在获准后于沙箱外运行；这不是代码编译错误。
+
+</details>
