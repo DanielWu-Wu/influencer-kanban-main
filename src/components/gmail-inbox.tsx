@@ -24,6 +24,7 @@ import { Input } from '@/components/ui/input';
 import { ScrollArea } from '@/components/ui/scroll-area';
 import { useGmailAuth, useSettings } from '@/lib/data';
 import { repairTextEncoding } from '@/lib/email-text';
+import { extractMappedFeishuChannelUrl } from '@/lib/feishu-field-value';
 import type { FeishuFieldMapping } from '@/lib/feishu-mapping';
 import {
   getGmailThreadContact,
@@ -962,7 +963,7 @@ export function GmailInbox({
             const matchedEmails = emails.filter((email) => targetEmails.has(email));
             const candidate = {
               channelName: getMappedFeishuValue(record, mapping, 'channelName'),
-              channelUrl: getMappedFeishuValue(record, mapping, 'channelUrl'),
+              channelUrl: extractMappedFeishuChannelUrl(record.fields, mapping),
               channelId: getMappedFeishuValue(record, mapping, 'channelId'),
             };
             matchedEmails.forEach((matchedEmail) => {
@@ -997,7 +998,7 @@ export function GmailInbox({
             if (!lookup) {
               nextAvatars[threadId] = {
                 status: 'failed',
-                error: '飞书记录缺少 YouTube Channel ID、频道链接和有效频道名。',
+                error: '已匹配飞书记录，但未能从频道链接或红人频道名字段提取有效的 YouTube 链接。',
               };
               return;
             }

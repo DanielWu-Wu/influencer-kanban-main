@@ -18,6 +18,7 @@ import { NewEmailComposer } from './new-email-composer';
 import { YouTubeChannelAvatar } from './youtube-channel-avatar';
 import { textToEmailHtml } from '@/lib/email-content';
 import { repairTextEncoding, splitEmailForTranslation } from '@/lib/email-text';
+import { extractMappedFeishuChannelUrl } from '@/lib/feishu-field-value';
 import type { FeishuFieldKey, FeishuFieldMapping } from '@/lib/feishu-mapping';
 import { getGmailThreadContact } from '@/lib/gmail-thread-contact';
 import {
@@ -383,7 +384,7 @@ export function EmailDetail({
             const profile = matchedEmail
               ? {
                   channelName: getMappedFeishuValue(record, mapping, 'channelName') || '未填写频道名',
-                  channelUrl: getMappedFeishuValue(record, mapping, 'channelUrl'),
+                  channelUrl: extractMappedFeishuChannelUrl(record.fields, mapping),
                   channelId: getMappedFeishuValue(record, mapping, 'channelId'),
                 }
               : null;
