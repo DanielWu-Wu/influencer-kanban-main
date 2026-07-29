@@ -6,6 +6,7 @@
     "build": "next build",
     "dev": "next dev -p 5000",
     "lint": "eslint",
+    "test:logic": "node --import tsx tests/run-tests.ts",
     "start": "next start -p 5000",
     "ts-check": "tsc -p tsconfig.json"
   },

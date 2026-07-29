@@ -22,6 +22,7 @@ export type ProspectDedupeStatus =
   | 'checking'
   | 'unique'
   | 'suspected'
+  | 'conflict'
   | 'duplicate'
   | 'error';
 export type ProspectResourceStatus =
@@ -29,6 +30,7 @@ export type ProspectResourceStatus =
   | 'checking'
   | 'exists'
   | 'suspected'
+  | 'conflict'
   | 'missing'
   | 'error';
 export type ProspectDevelopmentStatus =
@@ -37,6 +39,7 @@ export type ProspectDevelopmentStatus =
   | 'exists'
   | 'history_exists'
   | 'suspected'
+  | 'conflict'
   | 'missing'
   | 'error';
 export type ProspectPriority = 'high' | 'medium' | 'low';
@@ -181,6 +184,7 @@ export const DEDUPE_META: Record<ProspectDedupeStatus, { label: string; classNam
   checking: { label: '查重中', className: 'text-blue-600' },
   unique: { label: '未记录', className: 'text-emerald-700' },
   suspected: { label: '疑似重复', className: 'text-amber-700' },
+  conflict: { label: '匹配冲突', className: 'text-red-700' },
   duplicate: { label: '已存在', className: 'text-red-700' },
   error: { label: '查重失败', className: 'text-red-700' },
 };
@@ -190,6 +194,7 @@ export const RESOURCE_STATUS_META: Record<ProspectResourceStatus, { label: strin
   checking: { label: '资源库查重中', className: 'text-blue-600' },
   exists: { label: '资源库已收录', className: 'text-emerald-700' },
   suspected: { label: '资源库疑似收录', className: 'text-amber-700' },
+  conflict: { label: '资源库匹配冲突', className: 'text-red-700' },
   missing: { label: '资源库未收录', className: 'text-amber-700' },
   error: { label: '资源库读取失败', className: 'text-red-700' },
 };
@@ -200,6 +205,7 @@ export const DEVELOPMENT_STATUS_META: Record<ProspectDevelopmentStatus, { label:
   exists: { label: '已有开发记录', className: 'text-emerald-700' },
   history_exists: { label: '已有历史记录，本次将新建', className: 'text-amber-700' },
   suspected: { label: '疑似已有开发记录', className: 'text-amber-700' },
+  conflict: { label: '开发记录匹配冲突', className: 'text-red-700' },
   missing: { label: '可新建开发记录', className: 'text-blue-700' },
   error: { label: '开发记录读取失败', className: 'text-red-700' },
 };

@@ -13,6 +13,7 @@ import {
   Trash2,
   UserCheck,
   UserPlus,
+  Zap,
   Youtube,
 } from 'lucide-react';
 import { toast } from 'sonner';
@@ -63,6 +64,7 @@ type Props = {
   writingFeishu: boolean;
   preparingResourcePreview: boolean;
   preparingDevelopmentPreview: boolean;
+  preparingQuickPreview: boolean;
   deletingProspects: boolean;
   onInputChange: (value: string) => void;
   onPreferenceChange: (value: string) => void;
@@ -70,6 +72,7 @@ type Props = {
   onCheckDedupe: (items: Prospect[]) => void;
   onAddResources: (items: Prospect[]) => void;
   onCreateRecords: (items: Prospect[]) => void;
+  onQuickOnboard: (items: Prospect[]) => void;
   onConfirmInvitation: (items: Prospect[]) => void;
   onPatch: (id: string, patch: Partial<Prospect>) => void;
   onToggleSelected: (id: string, checked: boolean) => void;
@@ -218,6 +221,7 @@ export function InfluencerImportTab({
   writingFeishu,
   preparingResourcePreview,
   preparingDevelopmentPreview,
+  preparingQuickPreview,
   deletingProspects,
   onInputChange,
   onPreferenceChange,
@@ -225,6 +229,7 @@ export function InfluencerImportTab({
   onCheckDedupe,
   onAddResources,
   onCreateRecords,
+  onQuickOnboard,
   onConfirmInvitation,
   onPatch,
   onToggleSelected,
@@ -260,6 +265,11 @@ export function InfluencerImportTab({
   const canCreate = selected.some(canCreateFeishuRecord);
   const canAddResource = selected.some((item) => item.resourceStatus === 'missing' && !item.resourceRecordId);
   const canConfirm = selected.some(canConfirmInvitation);
+  const canQuickOnboard = selected.some((item) => (
+    item.workflowStatus === 'resolved'
+    || item.resourceStatus === 'missing'
+    || canCreateFeishuRecord(item)
+  ));
 
   return (
     <div className="flex min-h-0 flex-1 flex-col gap-3">
@@ -314,6 +324,17 @@ export function InfluencerImportTab({
         >
           {preparingDevelopmentPreview ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <UserPlus className="mr-2 h-4 w-4" />}
           {preparingDevelopmentPreview ? '准备预览中…' : '新建开发记录'}
+        </Button>
+        <Button
+          variant="outline"
+          onClick={() => onQuickOnboard(selected)}
+          disabled={!canQuickOnboard || preparingQuickPreview || checkingDedupe || writingFeishu}
+          className="border-sky-200 bg-sky-50/70 text-sky-800 hover:bg-sky-100 hover:text-sky-900"
+        >
+          {preparingQuickPreview
+            ? <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+            : <Zap className="mr-2 h-4 w-4" />}
+          {preparingQuickPreview ? '准备快速建档…' : '快速建档'}
         </Button>
         <Button variant="outline" onClick={() => onConfirmInvitation(selected)} disabled={!canConfirm}>
           <UserCheck className="mr-2 h-4 w-4" />

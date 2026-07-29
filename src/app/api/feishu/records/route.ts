@@ -1,5 +1,14 @@
 import { NextRequest, NextResponse } from 'next/server';
+import { createHash } from 'node:crypto';
 import { requestFeishuApi, resolveFeishuBaseUrl } from '@/lib/feishu-base';
+import {
+  chunkFeishuItems,
+  normalizeBatchOperationId,
+  normalizeFeishuFieldsWithTypes,
+  type FeishuBatchCreateItem,
+  type FeishuBatchResult,
+  type FeishuBatchUpdateItem,
+} from '@/lib/feishu-batch';
 import { refreshStoredFeishuAuth } from '@/lib/feishu-cloud-auth';
 import {
   cacheFeishuFieldTypes,
@@ -31,8 +40,6 @@ type FieldList = {
   items?: Array<{ field_name: string; type: number }>;
 };
 
-const FEISHU_MULTI_SELECT_FIELD_TYPE = 4;
-
 async function resolveTableId(
   appToken: string,
   tableId: string | undefined,
@@ -55,6 +62,21 @@ async function normalizeFieldsForWrite(
   fields: Record<string, unknown>,
   cacheKey: string,
 ) {
+  const fieldTypes = await loadFieldTypes(
+    appToken,
+    tableId,
+    accessToken,
+    cacheKey,
+  );
+  return normalizeFeishuFieldsWithTypes(fields, fieldTypes);
+}
+
+async function loadFieldTypes(
+  appToken: string,
+  tableId: string,
+  accessToken: string,
+  cacheKey: string,
+) {
   let fieldTypes = readCachedFeishuFieldTypes(cacheKey);
   if (!fieldTypes) {
     const fieldsData = await requestFeishuApi<FieldList>(
@@ -65,24 +87,43 @@ async function normalizeFieldsForWrite(
     fieldTypes = readCachedFeishuFieldTypes(cacheKey);
   }
   if (!fieldTypes) throw new Error('飞书字段类型缓存失败。');
-  const missingFieldNames = Object.keys(fields).filter((fieldName) => !fieldTypes.has(fieldName));
-  if (missingFieldNames.length) {
-    throw new Error(
-      `飞书中找不到字段“${missingFieldNames.join('、')}”。字段可能已改名或删除，请到设置中对目标子表执行“只读检查子表”，确认映射后重新保存。`,
-    );
-  }
-  return Object.fromEntries(
-    Object.entries(fields).map(([fieldName, value]) => {
-      if (fieldTypes.get(fieldName) !== FEISHU_MULTI_SELECT_FIELD_TYPE) {
-        return [fieldName, value];
-      }
-      if (Array.isArray(value)) return [fieldName, value];
-      if (typeof value === 'string' || typeof value === 'number' || typeof value === 'boolean') {
-        return [fieldName, [String(value)]];
-      }
-      return [fieldName, value];
-    }),
-  );
+  return fieldTypes;
+}
+
+function stableClientToken(seed: string) {
+  const hash = createHash('sha256').update(seed).digest('hex').slice(0, 32).split('');
+  hash[12] = '4';
+  hash[16] = ['8', '9', 'a', 'b'][Number.parseInt(hash[16], 16) % 4];
+  const hex = hash.join('');
+  return `${hex.slice(0, 8)}-${hex.slice(8, 12)}-${hex.slice(12, 16)}-${hex.slice(16, 20)}-${hex.slice(20)}`;
+}
+
+function validateBatchItems(
+  action: 'batchCreate' | 'batchUpdate',
+  items: unknown,
+): Array<FeishuBatchCreateItem | FeishuBatchUpdateItem> {
+  if (!Array.isArray(items) || !items.length) throw new Error('缺少需要批量写入的记录。');
+  if (items.length > 1_000) throw new Error('单次批量操作最多支持 1,000 条记录。');
+  const clientIds = new Set<string>();
+  return items.map((item, index) => {
+    if (!item || typeof item !== 'object') throw new Error(`第 ${index + 1} 条批量记录格式不正确。`);
+    const candidate = item as Partial<FeishuBatchUpdateItem>;
+    if (!candidate.clientId?.trim()) throw new Error(`第 ${index + 1} 条记录缺少 clientId。`);
+    const clientId = candidate.clientId.trim();
+    if (clientIds.has(clientId)) throw new Error(`批量记录 clientId“${clientId}”重复。`);
+    clientIds.add(clientId);
+    if (!candidate.fields || typeof candidate.fields !== 'object') {
+      throw new Error(`第 ${index + 1} 条记录缺少写入字段。`);
+    }
+    if (action === 'batchUpdate' && !candidate.recordId?.trim()) {
+      throw new Error(`第 ${index + 1} 条更新记录缺少 recordId。`);
+    }
+    return {
+      clientId,
+      fields: candidate.fields,
+      ...(action === 'batchUpdate' ? { recordId: candidate.recordId!.trim() } : {}),
+    };
+  });
 }
 
 export async function POST(request: NextRequest) {
@@ -91,10 +132,12 @@ export async function POST(request: NextRequest) {
 
   try {
     const body = await request.json() as {
-      action?: 'list' | 'search' | 'get' | 'create' | 'update';
+      action?: 'list' | 'search' | 'get' | 'create' | 'update' | 'batchCreate' | 'batchUpdate';
       url?: string;
       recordId?: string;
       fields?: Record<string, unknown>;
+      operationId?: string;
+      items?: unknown[];
       pageSize?: number;
       pageToken?: string;
       filter?: RecordSearchFilter;
@@ -153,6 +196,82 @@ export async function POST(request: NextRequest) {
         auth.accessToken,
       );
       return NextResponse.json({ success: true, data });
+    }
+
+    if (body.action === 'batchCreate' || body.action === 'batchUpdate') {
+      const operationId = normalizeBatchOperationId(body.operationId || '');
+      const items = validateBatchItems(body.action, body.items);
+      const fieldTypes = await loadFieldTypes(
+        location.appToken,
+        tableId,
+        auth.accessToken,
+        `${appAuth.user.id}:${location.appToken}:${tableId}`,
+      );
+      const normalizedItems = items.map((item) => ({
+        ...item,
+        fields: normalizeFeishuFieldsWithTypes(item.fields, fieldTypes),
+      }));
+      const results: FeishuBatchResult[] = [];
+      const batches = chunkFeishuItems(normalizedItems);
+
+      for (let batchIndex = 0; batchIndex < batches.length; batchIndex += 1) {
+        const batch = batches[batchIndex];
+        const clientIds = batch.map((item) => item.clientId).sort().join(',');
+        const clientToken = stableClientToken(
+          `${appAuth.user.id}:${operationId}:${location.appToken}:${tableId}:${batchIndex}:${clientIds}`,
+        );
+        try {
+          const endpoint = body.action === 'batchCreate' ? 'batch_create' : 'batch_update';
+          const data = await requestFeishuApi<{
+            records?: Array<{ record_id?: string; id?: string }>;
+          }>(
+            `${basePath}/${endpoint}?client_token=${encodeURIComponent(clientToken)}`,
+            auth.accessToken,
+            {
+              method: 'POST',
+              headers: {
+                Authorization: `Bearer ${auth.accessToken}`,
+                'Content-Type': 'application/json; charset=utf-8',
+              },
+              body: JSON.stringify({
+                records: batch.map((item) => ({
+                  ...(body.action === 'batchUpdate'
+                    ? { record_id: (item as FeishuBatchUpdateItem).recordId }
+                    : {}),
+                  fields: item.fields,
+                })),
+              }),
+            },
+          );
+          const records = data.records || [];
+          batch.forEach((item, itemIndex) => {
+            const returned = records[itemIndex];
+            const recordId = returned?.record_id
+              || returned?.id
+              || (body.action === 'batchUpdate' ? (item as FeishuBatchUpdateItem).recordId : '');
+            results.push(recordId
+              ? { clientId: item.clientId, status: 'success', recordId }
+              : { clientId: item.clientId, status: 'failed', error: '飞书未返回记录 ID。' });
+          });
+        } catch (error) {
+          const message = error instanceof Error ? error.message : '飞书批量写入失败。';
+          batch.forEach((item) => {
+            results.push({ clientId: item.clientId, status: 'failed', error: message });
+          });
+        }
+      }
+
+      const orderedResults = items.map((item) => (
+        results.find((result) => result.clientId === item.clientId)
+        || { clientId: item.clientId, status: 'failed' as const, error: '飞书未返回该记录的处理结果。' }
+      ));
+      return NextResponse.json({
+        success: true,
+        data: {
+          complete: orderedResults.every((result) => result.status === 'success'),
+          results: orderedResults,
+        },
+      });
     }
 
     if (!body.fields || typeof body.fields !== 'object') {

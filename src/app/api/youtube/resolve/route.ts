@@ -104,6 +104,24 @@ type ResolvedInput = {
   resolution: 'direct' | 'handle' | 'username' | 'video' | 'search';
 };
 
+async function mapWithConcurrency<T, R>(
+  items: T[],
+  limit: number,
+  worker: (item: T, index: number) => Promise<R>,
+) {
+  const results = new Array<R>(items.length);
+  let nextIndex = 0;
+  const workers = Array.from({ length: Math.min(limit, items.length) }, async () => {
+    while (nextIndex < items.length) {
+      const index = nextIndex;
+      nextIndex += 1;
+      results[index] = await worker(items[index], index);
+    }
+  });
+  await Promise.all(workers);
+  return results;
+}
+
 async function resolveYouTubeKey(request: NextRequest, providedKey?: string) {
   if (providedKey?.trim()) return providedKey.trim();
   if (process.env.YOUTUBE_API_KEY) return process.env.YOUTUBE_API_KEY;
@@ -530,11 +548,10 @@ export async function POST(request: NextRequest) {
   const errors: Array<{ sourceUrl: string; error: string }> = [];
 
   try {
-    const resolvedInputs: ResolvedInput[] = [];
-    for (const item of parsedInputs) {
+    const resolvedOutcomes = await mapWithConcurrency(parsedInputs, 4, async (item) => {
       if (!item.parsed) {
         errors.push({ sourceUrl: item.input, error: '无法识别为 YouTube 频道链接。' });
-        continue;
+        return null;
       }
       try {
         const channelId = await resolveChannelId(
@@ -546,26 +563,36 @@ export async function POST(request: NextRequest) {
         );
         if (!channelId) {
           errors.push({ sourceUrl: item.input, error: '没有找到匹配的 YouTube 频道。' });
-          continue;
+          return null;
         }
-        resolvedInputs.push({ ...item.parsed, channelId });
+        return { ...item.parsed, channelId };
       } catch (error) {
         errors.push({
           sourceUrl: item.input,
           error: error instanceof Error ? error.message : '频道搜索失败。',
         });
+        return null;
       }
-    }
+    });
+    const resolvedInputs = resolvedOutcomes.filter(
+      (item): item is ResolvedInput & { channelId: string } => Boolean(item?.channelId),
+    );
 
     const uniqueInputs = Array.from(
       new Map(resolvedInputs.map((item) => [item.channelId, item])).values(),
     );
     const channels = await fetchChannels(apiKey, uniqueInputs.map((item) => item.channelId!).filter(Boolean));
-    const inputByChannelId = new Map(uniqueInputs.map((item) => [item.channelId, item]));
+    const channelById = new Map(channels.map((channel) => [channel.id, channel]));
 
-    const results = await Promise.all(
-      channels.map(async (channel) => {
-        const source = inputByChannelId.get(channel.id);
+    const orderedResults = await mapWithConcurrency(
+      uniqueInputs,
+      4,
+      async (source) => {
+        const channel = channelById.get(source.channelId);
+        if (!channel) {
+          errors.push({ sourceUrl: source.sourceUrl, error: 'YouTube 未返回频道详情。' });
+          return null;
+        }
         let recentVideos: Awaited<ReturnType<typeof fetchRecentVideos>>['videos'] = [];
         let recentVideosStatus: 'ready' | 'empty' | 'error' = 'empty';
         const youtubeDataWarnings: string[] = [];
@@ -617,8 +644,9 @@ export async function POST(request: NextRequest) {
           resolution: source?.resolution || 'direct',
           confidence: source?.resolution === 'search' ? 'medium' : 'high',
         };
-      }),
+      },
     );
+    const results = orderedResults.filter((item): item is NonNullable<typeof item> => Boolean(item));
 
     return NextResponse.json({ success: true, channels: results, errors });
   } catch (error) {
