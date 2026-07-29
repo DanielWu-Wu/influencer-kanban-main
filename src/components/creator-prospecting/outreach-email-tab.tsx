@@ -1,6 +1,6 @@
 'use client';
 
-import { useMemo, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import {
   AlertTriangle,
   ArrowLeft,
@@ -305,8 +305,11 @@ export function OutreachEmailTab({
 }: Props) {
   const [query, setQuery] = useState('');
   const [editingIds, setEditingIds] = useState<string[]>([]);
-  const [expandedIds, setExpandedIds] = useState<string[]>([]);
+  const [expandedIds, setExpandedIds] = useState<string[]>(() => (
+    prospects[0] ? [prospects[0].id] : []
+  ));
   const [confirmDraftId, setConfirmDraftId] = useState<string | null>(null);
+  const prospectIdsKey = prospects.map((prospect) => prospect.id).join('\u0000');
   const filtered = useMemo(() => {
     const normalized = query.trim().toLowerCase();
     if (!normalized) return prospects;
@@ -318,6 +321,16 @@ export function OutreachEmailTab({
     ].some((value) => String(value || '').toLowerCase().includes(normalized)));
   }, [prospects, query]);
   const confirmProspect = prospects.find((item) => item.id === confirmDraftId);
+
+  useEffect(() => {
+    const prospectIds = prospectIdsKey ? prospectIdsKey.split('\u0000') : [];
+    const currentIdSet = new Set(prospectIds);
+    setExpandedIds((current) => {
+      const retained = current.filter((id) => currentIdSet.has(id));
+      if (retained.length > 0 || prospectIds.length === 0) return retained;
+      return [prospectIds[0]];
+    });
+  }, [prospectIdsKey]);
 
   if (!prospects.length) {
     return (

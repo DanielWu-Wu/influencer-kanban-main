@@ -2208,12 +2208,16 @@ export function CreatorProspectingPage() {
       }
     }
 
+    const submittedQuickItems = quickPreviewItems;
+    resourcePreviewRunRef.current += 1;
+    setQuickPreviewItems([]);
     setWritingFeishu(true);
+    toast.info(`已提交 ${submittedQuickItems.length} 个红人，正在后台快速建档。`);
     const operationId = quickOperationIdRef.current || crypto.randomUUID();
-    const resourceItems = quickPreviewItems.filter((item) => (
+    const resourceItems = submittedQuickItems.filter((item) => (
       item.resourceAction === 'create' && item.resourceStatus !== 'success'
     ));
-    const developmentItems = quickPreviewItems.filter((item) => (
+    const developmentItems = submittedQuickItems.filter((item) => (
       item.developmentAction === 'create' && item.developmentWriteStatus !== 'success'
     ));
     const [resourceOutcome, developmentOutcome] = await Promise.allSettled([
@@ -2268,7 +2272,7 @@ export function CreatorProspectingPage() {
     if (resourceSuccesses.size) invalidateFeishuRecordsCache(settings.feishuUrl);
     if (developmentSuccesses.size) invalidateFeishuRecordsCache(settings.feishuProspectingUrl);
 
-    const emailItems = quickPreviewItems.filter((item) => (
+    const emailItems = submittedQuickItems.filter((item) => (
       (developmentSuccesses.has(item.prospect.id) || item.developmentWriteStatus === 'success')
       && item.resourceAction === 'skip'
       && item.resourceEmailSync?.status === 'will_update'
@@ -2332,7 +2336,7 @@ export function CreatorProspectingPage() {
       };
     }));
 
-    setQuickPreviewItems((current) => current.map((item) => {
+    const failedQuickItems = submittedQuickItems.map((item) => {
       const resourceResult = resourceResults.find((result) => result.clientId === item.prospect.id);
       const developmentResult = developmentResults.find((result) => result.clientId === item.prospect.id);
       const emailResult = emailResults.find((result) => result.clientId === item.prospect.id);
@@ -2351,13 +2355,18 @@ export function CreatorProspectingPage() {
           ? emailResult.status === 'success' ? 'success' : 'failed'
           : item.emailSyncStatus,
       };
-    }));
+    }).filter((item) => (
+      item.resourceStatus === 'failed'
+      || item.developmentWriteStatus === 'failed'
+      || item.emailSyncStatus === 'failed'
+    ));
+    setQuickPreviewItems(failedQuickItems);
     setWritingFeishu(false);
 
     const failureCount = [...resourceResults, ...developmentResults, ...emailResults]
       .filter((result) => result.status === 'failed').length;
     if (failureCount) {
-      toast.warning(`快速建档已保留成功结果，仍有 ${failureCount} 项失败，可仅重试失败项。`);
+      toast.warning(`快速建档已保留成功结果，仍有 ${failureCount} 项失败；失败项已重新打开。`);
     } else {
       toast.success(`快速建档完成：资源记录 ${resourceSuccesses.size} 条，开发记录 ${developmentSuccesses.size} 条。`);
       closeQuickPreview();
@@ -2436,11 +2445,15 @@ export function CreatorProspectingPage() {
       }
     }
 
+    const submittedItems = previewItems;
+    resourcePreviewRunRef.current += 1;
+    setPreviewItems([]);
     setWritingFeishu(true);
-    const activeItems = previewItems.filter((item) => item.writeStatus !== 'success');
+    toast.info(`已提交 ${submittedItems.length} 条记录，正在后台写入飞书。`);
+    const activeItems = submittedItems.filter((item) => item.writeStatus !== 'success');
     const successes: Array<{ id: string; recordId: string }> = [];
     const failures: Array<{ id: string; error: string }> = [];
-    const resourceEmailFailures: string[] = [];
+    const resourceEmailFailures: Array<{ id: string; error: string }> = [];
     let resourceEmailSyncCount = 0;
     try {
       const results = await requestFeishuBatch(
@@ -2473,8 +2486,8 @@ export function CreatorProspectingPage() {
     }
     if (target === 'development' && settings.feishuUrl) {
       const successIds = new Set(successes.map((item) => item.id));
-      const emailSyncItems = activeItems.filter((item) => (
-        successIds.has(item.prospect.id)
+      const emailSyncItems = submittedItems.filter((item) => (
+        (successIds.has(item.prospect.id) || item.writeStatus === 'success')
         && item.resourceEmailSync?.status === 'will_update'
       ));
       if (emailSyncItems.length) {
@@ -2499,7 +2512,10 @@ export function CreatorProspectingPage() {
               resourceEmailSyncCount += 1;
             } else {
               resourceEmailFailures.push(
-                `${item.prospect.title || item.prospect.inputUrl}：${result?.error || '资源库邮箱同步失败'}`,
+                {
+                  id: item.prospect.id,
+                  error: `${item.prospect.title || item.prospect.inputUrl}：${result?.error || '资源库邮箱同步失败'}`,
+                },
               );
             }
           }
@@ -2507,7 +2523,10 @@ export function CreatorProspectingPage() {
         } catch (error) {
           const message = error instanceof Error ? error.message : '资源库邮箱同步失败';
           emailSyncItems.forEach((item) => {
-            resourceEmailFailures.push(`${item.prospect.title || item.prospect.inputUrl}：${message}`);
+            resourceEmailFailures.push({
+              id: item.prospect.id,
+              error: `${item.prospect.title || item.prospect.inputUrl}：${message}`,
+            });
           });
         }
       }
@@ -2537,12 +2556,36 @@ export function CreatorProspectingPage() {
         : item;
     }));
     const failureById = new Map(failures.map((failure) => [failure.id, failure.error]));
-    setPreviewItems((current) => current.flatMap((item) => {
-      if (successes.some((success) => success.id === item.prospect.id)) return [];
+    const emailFailureById = new Map(
+      resourceEmailFailures.map((failure) => [failure.id, failure.error]),
+    );
+    const successById = new Map(successes.map((success) => [success.id, success.recordId]));
+    const failedItems: FeishuWritePreview[] = [];
+    for (const item of submittedItems) {
       const error = failureById.get(item.prospect.id);
-      return [{ ...item, writeStatus: 'failed', writeError: error }];
-    }));
-    if (!failures.length) {
+      if (error) {
+        failedItems.push({ ...item, writeStatus: 'failed', writeError: error });
+        continue;
+      }
+      const emailError = emailFailureById.get(item.prospect.id);
+      if (!emailError) continue;
+      const recordId = successById.get(item.prospect.id);
+      failedItems.push({
+        ...item,
+        prospect: recordId
+          ? {
+              ...item.prospect,
+              workflowStatus: 'dedupe_completed' as const,
+              developmentStatus: 'exists' as const,
+              feishuRecordId: recordId,
+            }
+          : item.prospect,
+        writeStatus: 'success' as const,
+        writeError: `开发记录已创建；${emailError}`,
+      });
+    }
+    setPreviewItems(failedItems);
+    if (!failedItems.length) {
       setResourceContentTypeOptions([]);
       setResourceContentTypeStatus('idle');
     }
@@ -2550,7 +2593,7 @@ export function CreatorProspectingPage() {
     if (failures.length) {
       toast.error(`已创建 ${successes.length} 个，失败 ${failures.length} 个。${failures[0].error}`);
     } else if (resourceEmailFailures.length) {
-      toast.warning(`开发记录已创建 ${successes.length} 条，但资源库邮箱同步失败 ${resourceEmailFailures.length} 条。${resourceEmailFailures[0]}`);
+      toast.warning(`开发记录已创建 ${successes.length} 条，但资源库邮箱同步失败 ${resourceEmailFailures.length} 条；失败项已重新打开。${resourceEmailFailures[0].error}`);
     } else {
       toast.success(
         target === 'resource'
@@ -3502,6 +3545,9 @@ export function CreatorProspectingPage() {
                       {item.target === 'development' && item.prospect.previousDevelopmentRecordId ? (
                         <Badge variant="outline" className="border-amber-200 bg-amber-50 text-amber-700">重复开发 · 将新建</Badge>
                       ) : null}
+                      {item.writeStatus === 'success' && item.writeError ? (
+                        <Badge variant="outline" className="border-amber-200 bg-amber-50 text-amber-700">记录已创建 · 仅重试同步</Badge>
+                      ) : null}
                     </div>
                     <Badge variant="outline" className="shrink-0">{Object.keys(item.fields).length} 个字段</Badge>
                   </div>
@@ -3627,7 +3673,7 @@ export function CreatorProspectingPage() {
                 ? '正在检查邮箱同步…'
                 : writingFeishu
                   ? '正在写入飞书…'
-                  : previewItems.some((item) => item.writeStatus === 'failed')
+                  : previewItems.some((item) => item.writeStatus === 'failed' || item.writeError)
                     ? `仅重试失败项（${previewItems.length}）`
                     : `确认新建 ${previewItems.length} 条`}
             </Button>
