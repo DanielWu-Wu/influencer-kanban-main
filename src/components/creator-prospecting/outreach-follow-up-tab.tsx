@@ -47,11 +47,25 @@ import {
   textToEmailHtml,
 } from '@/lib/email-content';
 import type { AppSettings } from '@/lib/data';
+import { chunkFeishuItems, type FeishuBatchResult } from '@/lib/feishu-batch';
+import { extractMappedFeishuChannelUrl } from '@/lib/feishu-field-value';
 import type { FeishuFieldKey, FeishuFieldMapping } from '@/lib/feishu-mapping';
+import { fetchFeishuRecordsCached } from '@/lib/feishu-record-cache';
+import { buildFollowUpWriteChanges } from '@/lib/outreach-follow-up-sync';
 import type { GmailAuth } from '@/lib/types';
-import { buildChannelAvatarLookup, resolveChannelAvatar } from '@/lib/youtube-channel-avatar';
+import {
+  buildChannelAvatarLookup,
+  channelAvatarLookupPriority,
+  resolveChannelAvatars,
+} from '@/lib/youtube-channel-avatar';
 
 type FeishuRecord = { record_id: string; fields: Record<string, unknown> };
+type ResourceAvatarProfile = {
+  avatarUrl: string;
+  channelName: string;
+  channelUrl: string;
+  channelId: string;
+};
 type GmailMessage = {
   id: string;
   threadId: string;
@@ -183,6 +197,42 @@ function getFeishuImageUrl(value: unknown): string {
   return '';
 }
 
+function stringifyFeishuValue(value: unknown): string {
+  if (value === null || value === undefined) return '';
+  if (typeof value === 'string' || typeof value === 'number' || typeof value === 'boolean') {
+    return String(value);
+  }
+  if (Array.isArray(value)) return value.map(stringifyFeishuValue).filter(Boolean).join(' ');
+  if (typeof value === 'object') {
+    return Object.values(value as Record<string, unknown>)
+      .map(stringifyFeishuValue)
+      .filter(Boolean)
+      .join(' ');
+  }
+  return '';
+}
+
+function extractEmailAddresses(value: unknown) {
+  const matches = stringifyFeishuValue(value).match(/[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}/gi) || [];
+  return Array.from(new Set(matches.map((email) => email.toLowerCase())));
+}
+
+function avatarProfilePriority(profile: ResourceAvatarProfile) {
+  return profile.avatarUrl ? 4 : channelAvatarLookupPriority(profile);
+}
+
+function keepBestAvatarProfile(
+  profiles: Map<string, ResourceAvatarProfile>,
+  key: string,
+  candidate: ResourceAvatarProfile,
+) {
+  if (!key) return;
+  const current = profiles.get(key);
+  if (!current || avatarProfilePriority(candidate) > avatarProfilePriority(current)) {
+    profiles.set(key, candidate);
+  }
+}
+
 function channelInitials(name: string) {
   return name.trim().slice(0, 2).toUpperCase() || '红人';
 }
@@ -263,26 +313,8 @@ function buildWritePreview(
   record: FollowUpRecord,
   mapping: FeishuFieldMapping,
 ): WritePreview | null {
-  if (!record.check || record.check.outbound.length === 0) return null;
-  const fields: Array<{ label: string; value: string }> = [];
-  const payload: Record<string, unknown> = {};
-  const append = (key: FeishuFieldKey, label: string, value: string | number) => {
-    const fieldName = mapping[key];
-    if (!fieldName) return;
-    payload[fieldName] = value;
-    fields.push({ label, value: typeof value === 'number' ? formatDate(value) : value });
-  };
-  append('firstOutreach', '初次开发信', '已发');
-  if (record.check.outbound.length >= 2) {
-    append('secondOutreachDate', '一次 Follow Up 日期', new Date(record.check.outbound[1].date).getTime());
-    append('secondOutreach', '一次 Follow Up', '已发');
-  }
-  if (record.check.outbound.length >= 3) {
-    append('thirdOutreachDate', '二次 Follow Up 日期', new Date(record.check.outbound[2].date).getTime());
-    append('thirdOutreach', '二次 Follow Up', '已发');
-  }
-  append('hasReply', '是否回复', record.check.reply ? '已回复' : '未回复');
-  return fields.length ? { record, fields, payload } : null;
+  const changes = buildFollowUpWriteChanges(record, mapping);
+  return changes ? { record, ...changes } : null;
 }
 
 function followUpStatus(record: FollowUpRecord) {
@@ -515,6 +547,7 @@ export function OutreachFollowUpTab({ settings, auth, onAuthRefresh }: Props) {
   const [writingId, setWritingId] = useState<string | null>(null);
   const avatarLookupIdsRef = useRef(new Set<string>());
   const skipDraftCacheSaveRef = useRef(false);
+  const writeAllOperationIdRef = useRef('');
   const resourceMapping = useMemo(
     () => settings.feishuFieldMapping || {},
     [settings.feishuFieldMapping],
@@ -617,7 +650,7 @@ export function OutreachFollowUpTab({ settings, auth, onAuthRefresh }: Props) {
         channelName: mappedValue(record, mapping, 'channelName') || '未填写红人名称',
         avatarUrl: getFeishuImageUrl(mapping.avatar ? record.fields[mapping.avatar] : undefined),
         email: mappedValue(record, mapping, 'email').toLowerCase(),
-        channelUrl: mappedValue(record, mapping, 'channelUrl'),
+        channelUrl: extractMappedFeishuChannelUrl(record.fields, mapping),
         channelId: mappedValue(record, mapping, 'channelId'),
         developmentDate: parseFeishuDate(record.fields[mapping.developmentDate || '']),
         firstOutreach: mappedValue(record, mapping, 'firstOutreach'),
@@ -667,79 +700,76 @@ export function OutreachFollowUpTab({ settings, auth, onAuthRefresh }: Props) {
     ].filter(Boolean))) as string[];
 
     const loadResourceProfiles = async () => {
-      const profiles = new Map<string, { avatarUrl: string; channelUrl: string; channelId: string }>();
+      const profiles = new Map<string, ResourceAvatarProfile>();
       if (!settings.feishuUrl || !resourceFieldNames.length) return profiles;
-      const remainingEmails = new Set(targets.map((record) => record.email).filter(Boolean));
-      const remainingNames = new Set(targets.map((record) => record.channelName).filter(Boolean));
-      let pageToken = '';
-      for (let page = 0; page < 10 && (remainingEmails.size || remainingNames.size); page += 1) {
-        const response = await fetch('/api/feishu/records', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({
-            action: 'search',
-            url: settings.feishuUrl,
-            pageSize: 500,
-            pageToken,
-            fieldNames: resourceFieldNames,
-          }),
-        });
-        const result = await response.json();
-        if (!response.ok || !result.success) break;
-        const data = result.data as { items?: FeishuRecord[]; has_more?: boolean; page_token?: string };
-        for (const item of data.items || []) {
-          const email = mappedValue(item, resourceMapping, 'email').toLowerCase();
-          const channelName = mappedValue(item, resourceMapping, 'channelName');
-          if (!remainingEmails.has(email) && !remainingNames.has(channelName)) continue;
-          const profile = {
-            avatarUrl: getFeishuImageUrl(resourceMapping.avatar ? item.fields[resourceMapping.avatar] : undefined),
-            channelUrl: mappedValue(item, resourceMapping, 'channelUrl'),
-            channelId: mappedValue(item, resourceMapping, 'channelId'),
-          };
-          if (email) profiles.set(`email:${email}`, profile);
-          if (channelName) profiles.set(`name:${channelName}`, profile);
-          remainingEmails.delete(email);
-          remainingNames.delete(channelName);
-        }
-        if (!data.has_more || !data.page_token) break;
-        pageToken = data.page_token;
+      const targetEmails = new Set(targets.map((record) => record.email).filter(Boolean));
+      const targetNames = new Set(
+        targets.map((record) => record.channelName.trim().toLocaleLowerCase()).filter(Boolean),
+      );
+      const items = await fetchFeishuRecordsCached(settings.feishuUrl, {
+        fieldNames: resourceFieldNames,
+      });
+      for (const item of items) {
+        const emails = extractEmailAddresses(
+          resourceMapping.email ? item.fields[resourceMapping.email] : undefined,
+        );
+        const channelName = mappedValue(item, resourceMapping, 'channelName');
+        const normalizedName = channelName.trim().toLocaleLowerCase();
+        const matchedEmails = emails.filter((email) => targetEmails.has(email));
+        if (!matchedEmails.length && !targetNames.has(normalizedName)) continue;
+        const profile: ResourceAvatarProfile = {
+          avatarUrl: getFeishuImageUrl(
+            resourceMapping.avatar ? item.fields[resourceMapping.avatar] : undefined,
+          ),
+          channelName,
+          channelUrl: extractMappedFeishuChannelUrl(item.fields, resourceMapping),
+          channelId: mappedValue(item, resourceMapping, 'channelId'),
+        };
+        matchedEmails.forEach((email) => keepBestAvatarProfile(profiles, `email:${email}`, profile));
+        if (normalizedName) keepBestAvatarProfile(profiles, `name:${normalizedName}`, profile);
       }
       return profiles;
-    };
-
-    const enrichAvatar = async (
-      record: FollowUpRecord,
-      resourceProfiles: Map<string, { avatarUrl: string; channelUrl: string; channelId: string }>,
-    ) => {
-      const resourceProfile = resourceProfiles.get(`email:${record.email}`)
-        || resourceProfiles.get(`name:${record.channelName}`)
-        || null;
-      if (resourceProfile?.avatarUrl) return { recordId: record.recordId, avatarUrl: resourceProfile.avatarUrl };
-
-      const lookup = buildChannelAvatarLookup({
-        channelId: resourceProfile?.channelId || record.channelId,
-        channelUrl: resourceProfile?.channelUrl || record.channelUrl,
-      });
-      if (!lookup) return null;
-      const resolved = await resolveChannelAvatar(lookup);
-      return resolved.status === 'ready' && resolved.avatarUrl
-        ? { recordId: record.recordId, avatarUrl: resolved.avatarUrl }
-        : null;
     };
 
     const resolveAll = async () => {
       const resourceProfiles = await loadResourceProfiles().catch(() => new Map());
       if (cancelled) return;
-      let nextIndex = 0;
       const resolved = new Map<string, string>();
-      const worker = async () => {
-        while (nextIndex < targets.length) {
-          const target = targets[nextIndex++];
-          const result = await enrichAvatar(target, resourceProfiles).catch(() => null);
-          if (result) resolved.set(result.recordId, result.avatarUrl);
+      const pendingByLookup = new Map<string, {
+        lookup: NonNullable<ReturnType<typeof buildChannelAvatarLookup>>;
+        recordIds: string[];
+      }>();
+      targets.forEach((record) => {
+        const resourceProfile = resourceProfiles.get(`email:${record.email}`)
+          || resourceProfiles.get(`name:${record.channelName.trim().toLocaleLowerCase()}`)
+          || null;
+        if (resourceProfile?.avatarUrl) {
+          resolved.set(record.recordId, resourceProfile.avatarUrl);
+          return;
         }
-      };
-      await Promise.all(Array.from({ length: Math.min(3, targets.length) }, worker));
+        const lookup = buildChannelAvatarLookup({
+          channelId: resourceProfile?.channelId || record.channelId,
+          channelUrl: resourceProfile?.channelUrl || record.channelUrl,
+          channelName: resourceProfile?.channelName || record.channelName,
+        });
+        if (!lookup) return;
+        const pending = pendingByLookup.get(lookup.key);
+        if (pending) pending.recordIds.push(record.recordId);
+        else pendingByLookup.set(lookup.key, { lookup, recordIds: [record.recordId] });
+      });
+      const pendingItems = Array.from(pendingByLookup.values());
+      const avatarResults = await resolveChannelAvatars(
+        pendingItems.map((item) => item.lookup),
+        {
+          regionCode: settings.youtubeDefaultRegion || '',
+          relevanceLanguage: settings.youtubeDefaultLanguage || '',
+        },
+      );
+      pendingItems.forEach((item) => {
+        const avatar = avatarResults.get(item.lookup.key);
+        if (avatar?.status !== 'ready' || !avatar.avatarUrl) return;
+        item.recordIds.forEach((recordId) => resolved.set(recordId, avatar.avatarUrl || ''));
+      });
       if (cancelled || !resolved.size) return;
       setRecords((current) => current.map((record) => (
         resolved.has(record.recordId) ? { ...record, avatarUrl: resolved.get(record.recordId) || record.avatarUrl } : record
@@ -748,7 +778,13 @@ export function OutreachFollowUpTab({ settings, auth, onAuthRefresh }: Props) {
 
     void resolveAll();
     return () => { cancelled = true; };
-  }, [records, resourceMapping, settings.feishuUrl]);
+  }, [
+    records,
+    resourceMapping,
+    settings.feishuUrl,
+    settings.youtubeDefaultLanguage,
+    settings.youtubeDefaultRegion,
+  ]);
 
   const requestCheck = useCallback(async (record: FollowUpRecord, token: string) => {
     if (!record.email) throw new Error('该红人没有可用于 Gmail 检查的邮箱。');
@@ -1081,7 +1117,7 @@ export function OutreachFollowUpTab({ settings, auth, onAuthRefresh }: Props) {
     }
     const preview = buildWritePreview(record, mapping);
     if (!preview) {
-      toast.error('当前飞书字段映射中没有可写回的跟进字段。');
+      toast.info('Gmail 检查结果与飞书现有内容一致，无需写回；若字段未配置，请检查飞书映射。');
       return;
     }
     setWritePreview(preview);
@@ -1117,57 +1153,74 @@ export function OutreachFollowUpTab({ settings, auth, onAuthRefresh }: Props) {
 
   const confirmWriteAll = async () => {
     if (!settings.feishuProspectingUrl || !writeAllTargets.length || writeAllProgress) return;
+    const operationId = writeAllOperationIdRef.current || crypto.randomUUID();
+    writeAllOperationIdRef.current = operationId;
     setWriteAllProgress({
       completed: 0,
       total: writeAllTargets.length,
       success: 0,
       failed: 0,
     });
-    let nextIndex = 0;
     let successCount = 0;
     let failedCount = 0;
     const successfulIds = new Set<string>();
-    const worker = async () => {
-      while (nextIndex < writeAllTargets.length) {
-        const preview = writeAllTargets[nextIndex];
-        nextIndex += 1;
-        let success = false;
-        try {
-          const response = await fetch('/api/feishu/records', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({
-              action: 'update',
-              url: settings.feishuProspectingUrl,
+    const batches = chunkFeishuItems(writeAllTargets);
+    for (const batch of batches) {
+      let batchResults: FeishuBatchResult[] = [];
+      try {
+        const response = await fetch('/api/feishu/records', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            action: 'batchUpdate',
+            url: settings.feishuProspectingUrl,
+            operationId,
+            items: batch.map((preview) => ({
+              clientId: preview.record.recordId,
               recordId: preview.record.recordId,
               fields: preview.payload,
-            }),
-          });
-          const result = await response.json();
-          if (!response.ok || !result.success) throw new Error(String(result.error || '写回飞书失败。'));
-          successfulIds.add(preview.record.recordId);
-          successCount += 1;
-          success = true;
-        } catch {
-          // 单条失败不会中断整批，完成后统一汇总。
-          failedCount += 1;
-        } finally {
-          setWriteAllProgress((current) => current ? {
-            ...current,
-            completed: current.completed + 1,
-            success: current.success + (success ? 1 : 0),
-            failed: current.failed + (success ? 0 : 1),
-          } : null);
+            })),
+          }),
+        });
+        const result = await response.json();
+        if (!response.ok || !result.success) {
+          throw new Error(String(result.error || '批量写回飞书失败。'));
         }
+        batchResults = (result.data?.results || []) as FeishuBatchResult[];
+      } catch (error) {
+        const message = error instanceof Error ? error.message : '批量写回飞书失败。';
+        batchResults = batch.map((preview) => ({
+          clientId: preview.record.recordId,
+          status: 'failed',
+          error: message,
+        }));
       }
-    };
-    await Promise.all(Array.from(
-      { length: Math.min(2, writeAllTargets.length) },
-      worker,
-    ));
+
+      const resultsById = new Map(batchResults.map((result) => [result.clientId, result]));
+      let batchSuccess = 0;
+      let batchFailed = 0;
+      batch.forEach((preview) => {
+        const result = resultsById.get(preview.record.recordId);
+        if (result?.status === 'success') {
+          successfulIds.add(preview.record.recordId);
+          batchSuccess += 1;
+        } else {
+          batchFailed += 1;
+        }
+      });
+      successCount += batchSuccess;
+      failedCount += batchFailed;
+      setWriteAllProgress((current) => current ? {
+        ...current,
+        completed: current.completed + batch.length,
+        success: current.success + batchSuccess,
+        failed: current.failed + batchFailed,
+      } : null);
+    }
     setRecords((current) => current.map((record) => (
       successfulIds.has(record.recordId) ? { ...record, synced: true } : record
     )));
+    if (failedCount === 0) writeAllOperationIdRef.current = '';
     setWriteAllProgress(null);
     const summary = `成功 ${successCount}，失败 ${failedCount}`;
     if (failedCount) toast.warning(`批量写回完成：${summary}。失败记录可在列表中重试。`);
@@ -1454,7 +1507,15 @@ export function OutreachFollowUpTab({ settings, auth, onAuthRefresh }: Props) {
                     <td className="px-4 py-4">
                       <div className="flex min-w-[220px] items-start gap-3">
                         <Avatar className="h-10 w-10 shrink-0 rounded-md">
-                          <AvatarImage src={record.avatarUrl} alt={`${record.channelName} 频道头像`} />
+                          <AvatarImage
+                            src={record.avatarUrl}
+                            alt={`${record.channelName} 频道头像`}
+                            onError={() => {
+                              setRecords((current) => current.map((item) => (
+                                item.recordId === record.recordId ? { ...item, avatarUrl: '' } : item
+                              )));
+                            }}
+                          />
                           <AvatarFallback className="rounded-md bg-sky-100 text-xs font-medium text-sky-800">{channelInitials(record.channelName)}</AvatarFallback>
                         </Avatar>
                         <div className="min-w-0">
@@ -1565,7 +1626,7 @@ export function OutreachFollowUpTab({ settings, auth, onAuthRefresh }: Props) {
             <AlertDialogTitle>确认写回全部检查结果</AlertDialogTitle>
             <AlertDialogDescription>
               将把当前日期范围内已完成 Gmail 检查的 {writeAllTargets.length} 条结果同步到“红人开发情况表”。
-              未检查、检查失败或没有找到初次开发信的记录不会写入。
+              与飞书现有内容完全一致、未检查、检查失败或没有找到初次开发信的记录不会写入。
             </AlertDialogDescription>
           </AlertDialogHeader>
           <div className="rounded-md border border-border bg-slate-50 p-3 text-sm">

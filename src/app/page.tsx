@@ -244,7 +244,7 @@ export default function DashboardPage() {
   );
 
   return (
-    <div className="workspace-shell min-h-screen">
+    <div className="workspace-shell h-dvh overflow-hidden">
       <header className="app-topbar sticky top-0 z-50">
         <div className="flex h-15 items-center justify-between px-4 md:px-5">
           <div className="flex items-center gap-3">
@@ -315,10 +315,10 @@ export default function DashboardPage() {
         </div>
       </header>
 
-      <div className="flex p-2.5 pt-3 md:p-3">
+      <div className="flex h-[calc(100dvh-3.75rem)] p-2.5 pt-3 md:p-3">
         <aside
           id="desktop-sidebar"
-          className={`app-sidebar sticky top-[4.5rem] hidden h-[calc(100vh-4.75rem)] shrink-0 flex-col overflow-hidden rounded-xl transition-[width,padding] duration-200 ease-out motion-reduce:transition-none md:flex ${
+          className={`app-sidebar hidden h-full shrink-0 flex-col overflow-hidden rounded-xl transition-[width,padding] duration-200 ease-out motion-reduce:transition-none md:flex ${
             sidebarCollapsed
               ? 'relative w-13 p-1.5'
               : 'relative w-56 p-3'
@@ -392,7 +392,7 @@ export default function DashboardPage() {
         </Sheet>
 
         <main
-          className={`ml-0 flex h-[calc(100vh-4.75rem)] min-h-0 flex-1 flex-col overflow-hidden transition-[margin] duration-200 ease-out motion-reduce:transition-none ${
+          className={`ml-0 flex h-full min-h-0 flex-1 flex-col overflow-hidden transition-[margin] duration-200 ease-out motion-reduce:transition-none ${
             sidebarCollapsed ? 'md:ml-2.5' : 'md:ml-3'
           }`}
         >
