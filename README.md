@@ -35,7 +35,7 @@ http://localhost:5000/
 本机 Codex 环境有时没有系统 `pnpm/node/git` PATH，可使用 Codex bundled runtime：
 
 ```powershell
-C:\Users\Admin\.cache\codex-runtimes\codex-primary-runtime\dependencies\bin\pnpm.cmd dev
+C:\Users\Admin\.cache\codex-runtimes\codex-primary-runtime\dependencies\bin\fallback\pnpm.cmd dev
 C:\Users\Admin\.cache\codex-runtimes\codex-primary-runtime\dependencies\node\bin\node.exe node_modules\typescript\bin\tsc -p tsconfig.json --noEmit
 ```
 
@@ -104,8 +104,8 @@ docs
   - 支持 3 个备选标题及中文翻译。
   - 支持单独重新生成标题或正文。
   - 邮件预览支持产品型号链接、产品主图、签名链接。
-  - 当前代码在保存 Gmail 草稿后，会把线索移出开发信队列，并自动把飞书双表“初次开发信”标为“已发”。
-  - 这里仍有业务语义风险：Gmail 草稿不等于真实发送。下一步应统一首封邮件的“真实已发送”确认机制。
+  - 保存 Gmail 草稿后，会按当前已确认的单人工作流把线索移出开发信队列，并同步飞书双表状态；
+    用户随后前往 Gmail 手动发送。未来改为多人协作时再拆分“草稿已保存”和“真实已发送”。
   - Gmail 只创建草稿，不自动发送。
 - **开发信跟进**
   - 可查看最近 7、10、14、30 天的飞书开发记录。
@@ -117,6 +117,9 @@ docs
   - 支持邮件翻译、AI 辅助回复、草稿/发送相关操作。
   - 翻译默认优先当前邮件正文，避免无谓翻译引用历史。
   - Gmail 红人头像支持浏览器本地缓存和当前列表页预取。
+  - 来信“原文”旁显示本地检测的语言名称。
+  - AI 辅助回复读取同一联系人最近 10 封邮件，复用当前线程正文，并缓存联系人历史和分析结果 5 分钟。
+  - AI 回复正文支持流式显示，随后补充中文对照；模型不支持流式时自动回退兼容模式。
 - **产品资料**
   - 设置页产品数据库已简化为产品资料卡。
   - 核心字段：产品名称、型号、产品页面链接、产品描述/卖点、主图、状态。
@@ -133,7 +136,8 @@ docs
 ## 后续开发注意事项
 
 - 不要自动发送 Gmail 邮件。开发信流程只能创建 Gmail 草稿。
-- 不要把 Gmail 草稿等同于真实发送。首封邮件当前仍存在“保存草稿后写已发”的历史行为，后续应优先统一。
+- 首封开发信沿用当前单人工作流约定：保存草稿后由用户立即前往 Gmail 手动发送；
+  系统仍不得自动发送，未来改为多人协作时再重新设计发送状态。
 - 不要硬编码飞书字段名。所有飞书写入必须使用设置里保存的字段映射。
 - 不要修改 Supabase 表结构或新增飞书字段，除非用户明确确认。
 - 不要把 YouTube API 当作邮箱来源。它只能读取公开频道资料，邮箱只能从公开简介文本中提取。

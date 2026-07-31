@@ -81,7 +81,7 @@ pnpm build
 本机 Codex 环境可能没有系统 `pnpm/node/git` PATH，可使用 Codex bundled runtime：
 
 ```powershell
-C:\Users\Admin\.cache\codex-runtimes\codex-primary-runtime\dependencies\bin\pnpm.cmd ts-check
+C:\Users\Admin\.cache\codex-runtimes\codex-primary-runtime\dependencies\bin\fallback\pnpm.cmd ts-check
 C:\Users\Admin\.cache\codex-runtimes\codex-primary-runtime\dependencies\node\bin\node.exe node_modules\typescript\bin\tsc -p tsconfig.json
 C:\Users\Admin\.cache\codex-runtimes\codex-primary-runtime\dependencies\native\git\cmd\git.exe status --short
 ```

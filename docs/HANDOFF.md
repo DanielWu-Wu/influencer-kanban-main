@@ -2,10 +2,10 @@
 
 > **唯一现役交接版本**
 >
-> 更新时间：2026-07-29
+> 更新时间：2026-07-31
 >
-> 当前已提交基线：`main` / `471422c`（优化 Gmail 匹配抓取 YouTube 头像），与
-> `origin/main` 一致；工作区包含尚未提交的“红人开发台全链路提速”改动，详见第 6 节。
+> 当前已提交基线：`main` / `3114ba8`（加快 AI 邮件辅助回复功能），与
+> `origin/main` 一致；代码工作区在本次文档收尾前干净，收尾文档改动详见第 6 节。
 >
 > 本文件是当前状态、风险、待验证项和下一任务的唯一交接依据。根目录
 > `HANDOFF.md`、`PROJECT_HANDOFF.md`、`docs/AI_HANDOFF.md` 和 `TODO.md`
@@ -80,6 +80,19 @@
 - 鼠标悬停/聚焦线程约 180ms 后预取；点击后先显示详情骨架，不再等待完整请求才切换。
 - 正文优先加载，内联图片后台补齐，普通附件按需加载；已读写回改为后台执行。
 - 有过期响应保护，快速切换线程时旧请求不会覆盖当前线程。
+- 每封来信的“原文”标签旁会显示本地检测到的语言名称；德语、西班牙语、荷兰语、
+  葡萄牙语、波兰语、英语及常见非拉丁文字已有纯逻辑测试，识别结果用于界面提示和翻译上下文。
+- AI 辅助回复固定读取同一联系人最近 10 封来往邮件；当前线程已加载的正文直接复用，
+  Gmail API 只补读缺失邮件。联系人历史和分析结果采用 5 分钟、最多 100 项的内存缓存，
+  相同进行中请求会合并；新线程版本、模型或提示词变化会生成不同缓存键，“重新分析”强制刷新。
+- 发送给 AI 前会清理明显 HTML、重复引用和旧邮件块；单封超长邮件同时保留开头和结尾，
+  最近 10 封的分析上下文最多约 30,000 字符。草稿阶段最多选择 6 封相关邮件，优先保留
+  最新来信、最近我方邮件和包含报价、日期、物流、产品等商务条件的邮件。
+- Gmail 回复正文使用专用 SSE 接口流式显示，前端最多每 80ms 刷新一次；正文完成后补充
+  中文对照和回复要点。模型不支持流式输出或流式失败时自动回退原 `/api/ai` 草稿接口；
+  两条路径都失败时恢复生成前草稿，不允许把半封流式正文当作可保存结果。
+- Gmail 历史、AI 分析和草稿生成记录阶段耗时、消息数量、压缩字符数与缓存命中，
+  不记录邮件正文或 API Key；保存草稿、直接发送、签名、语言、语气和中文编辑规则未改变。
 
 ### 合作项目
 
@@ -99,11 +112,11 @@
 
 | 验证面 | 状态 | 结果 |
 | --- | --- | --- |
-| TypeScript | 已验证 | `tsc --noEmit` 通过 |
-| 纯逻辑测试 | 已验证 | 14 项通过：索引优先级、超链接、多邮箱、冲突、1,000 行/10 目标性能、快照复用/TTL/失效/并发去重、1/49/50/51 切块和字段类型转换 |
-| ESLint | 已验证 | 0 error，9 个既有 warning；本轮相关文件无新增 warning |
-| 生产构建 | 已验证 | 沙箱内编译成功后遇到 `spawn EPERM`；获准在本机运行后完整通过，28 个页面/路由生成成功 |
-| 浏览器基础检查 | 部分验证 | 生产版本可加载，无框架错误覆盖层和控制台 error/warn；登录/注册切换正常。验收浏览器没有账号登录态，未进入红人开发台 |
+| TypeScript | 已验证 | 2026-07-31：`tsc --noEmit` 通过 |
+| 纯逻辑测试 | 已验证 | 22 项通过：原 14 项飞书索引/缓存/批量测试、3 项来信语言测试、5 项 Gmail AI 历史合并/清洗/上下文/关键邮件/缓存测试（部分测试覆盖多个断言场景） |
+| ESLint | 已验证 | 0 error，9 个既有 warning；Gmail AI 回复相关文件无新增 warning |
+| 生产构建 | 部分验证 | Next.js 代码编译成功，独立 TypeScript 通过；完整构建在“15 workers 收集页面数据”阶段因本机 `spawn EPERM` / Node 内存不足中止，不能写成完整构建通过 |
+| 浏览器基础检查 | 部分验证 | `http://127.0.0.1:5000` 可加载，登录/注册切换正常；新增 SSE 路由返回 `text/event-stream`。无 Gmail 登录态，未执行真实 AI/Gmail 流程；仍观察到既有悬浮助手 hydration warning |
 | Gmail 详情性能 | 部分真实验证 | 本地登录态验证了即时骨架、长线程正文加载和重复打开缓存；未发送邮件、未创建草稿 |
 | 外部写入 | 未执行 | 本轮没有 Gmail 发送、飞书写回、部署或数据结构变更 |
 
@@ -130,24 +143,33 @@
    网络结果不明确后的幂等重试、邮箱补全失败是否只保留失败项。
 9. 快速建档的全新红人、已有资源、历史开发轮次、疑似记录、匹配冲突和快照过期后二次确认。
 10. YouTube 4 并发限制、识别结果即时显示，以及 AI 流式生成期间页面输入和切换是否持续响应。
+11. Gmail AI 辅助回复在短、中、长真实线程中的首次耗时、5 分钟缓存命中耗时和重新分析强制刷新；
+    重点核对最近 10 封邮件是否完整保留报价、日期、地址、物流和承诺。
+12. 当前配置的 OpenAI-compatible 模型是否支持 SSE；支持时首段正文是否约 1～3 秒出现，
+    不支持时是否自动进入兼容模式并生成完整草稿、中文对照和要点。
+13. 德语、西班牙语、荷兰语、葡萄牙语、波兰语及混合语言真实来信的语言标签是否符合人工判断。
 
 真实验收涉及外部写入时，必须由用户明确点击并确认；不要在自动测试里发送邮件或批量写表。
 
 ## 6. Git 与工作区现况
 
-- 本轮开始时主工作区干净：`main...origin/main`，HEAD 为 `471422c`。
-- 当前未提交改动是本轮红人开发台全链路提速实现：
-  `creator-prospecting-page.tsx`、`influencer-import-tab.tsx`、飞书 records API、
-  YouTube resolve API、飞书快照/索引/批量工具、红人状态类型、纯逻辑测试和本文件。
-- 本轮不提交、不部署、不删除文件；继续开发或验收时必须保留这些改动。
+- 当前主工作区为 `main...origin/main`，已提交基线 `3114ba8` 与远端一致。
+- `94b5a2d`、`22bd098` 已提交红人开发台全链路提速和交互优化；不再把这些文件描述为未提交。
+- `3114ba8` 已提交来信语言标签、最近 10 封联系人历史、Gmail AI 缓存/清洗、
+  专用流式回复接口和纯逻辑测试。
+- 本次 neat-freak 收尾只修改 `AGENTS.md`、`README.md` 与本文件，不修改代码、不提交、
+  不部署、不发送 Gmail、不写飞书；后续会话必须保留这三份尚未提交的文档改动。
 - 另有一个 Codex detached worktree：
   `C:/Users/Admin/.codex/worktrees/347c/influencer-kanban-main`，HEAD 为 `de11118`。
-  本轮没有修改或清理它；在确认不再需要前不要删除。
-- 完成本次收尾后，以 `git status --short` 显示的文档改动为准，继续开发时必须保留。
+  本轮仅做只读核对，没有修改或清理；在用户看完清场预览并明确确认前不要删除。
 
 ## 7. 已知注意事项
 
 - Gmail 冷启动线程仍受 Google API、网络和邮件数量影响；当前优化主要改善首屏反馈、预取和重复打开。
+- Gmail AI 分析与回复的实际总耗时仍受用户配置的模型服务影响；代码已提供分阶段日志，
+  但真实账号的首次/缓存/流式回退性能仍是 `pending`。
+- 当前完整生产构建会在本机 15 个页面数据 worker 阶段触发内存不足；代码编译和独立
+  TypeScript 已通过，不应把该环境失败误写成业务代码构建错误，也不能写成完整构建成功。
 - 飞书批量创建使用稳定的 UUIDv4 `client_token` 做幂等保护；同表每 50 条串行，
   不要退回为并发单条创建，也不要在网络结果不明确时换新操作标识重试。
 - 快速建档和原有分步流程均保留人工确认；自动测试不得创建或更新真实飞书记录。
@@ -161,8 +183,8 @@
 
 ```powershell
 C:\Users\Admin\.cache\codex-runtimes\codex-primary-runtime\dependencies\node\bin\node.exe node_modules\typescript\bin\tsc -p tsconfig.json --noEmit
-C:\Users\Admin\.cache\codex-runtimes\codex-primary-runtime\dependencies\bin\pnpm.cmd lint
-C:\Users\Admin\.cache\codex-runtimes\codex-primary-runtime\dependencies\bin\pnpm.cmd build
+C:\Users\Admin\.cache\codex-runtimes\codex-primary-runtime\dependencies\bin\fallback\pnpm.cmd lint
+C:\Users\Admin\.cache\codex-runtimes\codex-primary-runtime\dependencies\bin\fallback\pnpm.cmd build
 C:\Users\Admin\.cache\codex-runtimes\codex-primary-runtime\dependencies\native\git\cmd\git.exe status --short --branch
 ```
 
