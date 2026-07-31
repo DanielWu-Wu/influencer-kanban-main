@@ -37,6 +37,15 @@ import {
   getGmailThreadContact,
   isIgnoredGmailThreadSender,
 } from '@/lib/gmail-thread-contact';
+import {
+  buildGmailAIAnalysisCacheKey,
+  buildGmailAIHistoryCacheKey,
+  getOrLoadGmailAIAnalysis,
+  getOrLoadGmailAIHistory,
+  GMAIL_AI_HISTORY_LIMIT,
+  mergeRecentGmailAIMessages,
+  type GmailAIHistoryMessage,
+} from '@/lib/gmail-ai-reply';
 import { GmailThread } from '@/lib/types';
 import { RichEmailEditor } from './rich-email-editor';
 import { useDelayedEmailSender } from './delayed-email-provider';
@@ -82,16 +91,6 @@ type TranslatedDraftResult = {
 };
 
 type ReplyTone = AISuggestion['tone'];
-
-type AIHistoryMessage = {
-  id?: string;
-  threadId?: string;
-  subject?: string;
-  from?: string;
-  to?: string;
-  date?: string;
-  body?: string;
-};
 
 const LANGUAGE_OPTIONS = [
   ['en', '英语'],
@@ -144,7 +143,6 @@ const REPLY_TONE_OPTIONS: ReadonlyArray<{
 ];
 
 const MAX_ATTACHMENT_BYTES = 18 * 1024 * 1024;
-const GMAIL_AI_HISTORY_LIMIT = 15;
 const QUICK_REPLY_IDEAS = [
   ['接受报价', '可以接受对方的报价和合作条件。'],
   ['需要降价', '当前报价超出预算，请礼貌协商更合适的价格。'],
@@ -185,7 +183,7 @@ export function EmailComposer({
   const [analysis, setAnalysis] = useState<CollaborationAnalysis | null>(null);
   const [analysisLoading, setAnalysisLoading] = useState(mode === 'ai');
   const [analysisError, setAnalysisError] = useState('');
-  const [historyMessages, setHistoryMessages] = useState<AIHistoryMessage[]>([]);
+  const [historyMessages, setHistoryMessages] = useState<GmailAIHistoryMessage[]>([]);
   const [targetLang, setTargetLang] = useState('en');
   const [targetLangName, setTargetLangName] = useState('英语');
   const [replyTone, setReplyTone] = useState<ReplyTone>('friendly');
@@ -205,7 +203,11 @@ export function EmailComposer({
   const [editedChineseReply, setEditedChineseReply] = useState('');
   const [translatingEditedReply, setTranslatingEditedReply] = useState(false);
   const [translationUpdated, setTranslationUpdated] = useState(false);
+  const [generationStage, setGenerationStage] = useState('');
   const fileInputRef = useRef<HTMLInputElement>(null);
+  const analysisRunRef = useRef(0);
+  const generationRunRef = useRef(0);
+  const generationControllerRef = useRef<AbortController | null>(null);
 
   const threadMessages = useMemo(() => buildThreadMessages(thread), [thread]);
   const lastConversationMessage = useMemo(
@@ -223,7 +225,7 @@ export function EmailComposer({
 
   const invokeAI = async (
     payload: Record<string, unknown>,
-    messages: AIHistoryMessage[] = historyMessages.length ? historyMessages : threadMessages,
+    messages: GmailAIHistoryMessage[] = historyMessages.length ? historyMessages : threadMessages,
   ) => {
     const response = await fetch('/api/ai', {
       method: 'POST',
@@ -244,78 +246,249 @@ export function EmailComposer({
     return result.data;
   };
 
-  const loadContactHistory = async () => {
+  const loadContactHistory = async (force = false) => {
     if (!recipientEmail) {
       throw new Error('未找到可用的红人邮箱；Mailsuite 等系统通知邮箱不会作为回复收件人。');
     }
-    const accessToken = await getAccessToken();
-    const response = await fetch('/api/gmail', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        action: 'contactHistory',
-        accessToken,
-        contactEmail: recipientEmail,
-        maxResults: GMAIL_AI_HISTORY_LIMIT,
-      }),
-    });
-    const result = await response.json();
-    if (!response.ok || !result.success) {
-      throw new Error(result.error || '读取联系人历史邮件失败');
-    }
-
-    const fetched = (result.data || []) as AIHistoryMessage[];
-    const byId = new Map<string, AIHistoryMessage>();
-    [...fetched, ...threadMessages].forEach((message, index) => {
-      const key = message.id || `${message.date}-${message.from}-${index}`;
-      byId.set(key, message);
-    });
-    return [...byId.values()]
+    const latestThreadMessage = [...threadMessages]
       .sort((a, b) => new Date(a.date || 0).getTime() - new Date(b.date || 0).getTime())
-      .slice(-GMAIL_AI_HISTORY_LIMIT);
+      .at(-1);
+    const historyKey = buildGmailAIHistoryCacheKey({
+      accountEmail: auth?.email,
+      contactEmail: recipientEmail,
+      latestMessageId: latestThreadMessage?.id,
+      latestMessageDate: latestThreadMessage?.date,
+    });
+    const startedAt = performance.now();
+    const loaded = await getOrLoadGmailAIHistory(historyKey, async () => {
+      const accessToken = await getAccessToken();
+      const response = await fetch('/api/gmail', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          action: 'contactHistory',
+          accessToken,
+          contactEmail: recipientEmail,
+          maxResults: GMAIL_AI_HISTORY_LIMIT,
+          knownMessageIds: threadMessages.map((message) => message.id).filter(Boolean),
+        }),
+      });
+      const result = await response.json();
+      if (!response.ok || !result.success) {
+        throw new Error(result.error || '读取联系人历史邮件失败');
+      }
+      return mergeRecentGmailAIMessages(
+        (result.data || []) as GmailAIHistoryMessage[],
+        threadMessages,
+      );
+    }, force);
+    console.info('[Gmail AI client history timing]', {
+      cacheHit: loaded.cacheHit,
+      messages: loaded.value.length,
+      totalMs: Math.round(performance.now() - startedAt),
+    });
+    return { messages: loaded.value, historyKey };
   };
 
-  const analyzeThread = async () => {
+  const analyzeThread = async (force = false) => {
+    const runId = analysisRunRef.current + 1;
+    analysisRunRef.current = runId;
     setAnalysisLoading(true);
     setAnalysisError('');
     setSuggestion(null);
 
     try {
-      const contactHistory = await loadContactHistory();
+      const { messages: contactHistory, historyKey } = await loadContactHistory(force);
+      if (runId !== analysisRunRef.current) return;
       setHistoryMessages(contactHistory);
-      const result = await invokeAI({ action: 'analyze' }, contactHistory) as CollaborationAnalysis;
+      const analysisKey = buildGmailAIAnalysisCacheKey(historyKey, {
+        modelProvider: settings.modelProvider,
+        customApiUrl: settings.customApiUrl,
+        customModelName: settings.customModelName,
+        analysisPrompt: settings.aiAnalysisPrompt,
+      });
+      const analysisStartedAt = performance.now();
+      const loaded = await getOrLoadGmailAIAnalysis(
+        analysisKey,
+        () => invokeAI({ action: 'analyze' }, contactHistory) as Promise<CollaborationAnalysis>,
+        force,
+      );
+      if (runId !== analysisRunRef.current) return;
+      const result = loaded.value;
+      console.info('[Gmail AI client analysis timing]', {
+        cacheHit: loaded.cacheHit,
+        totalMs: Math.round(performance.now() - analysisStartedAt),
+      });
       const language = result.language || 'en';
       const knownLanguage = LANGUAGE_OPTIONS.find(([code]) => code === language);
       setAnalysis(result);
       setTargetLang(language);
       setTargetLangName(result.languageName || knownLanguage?.[1] || language);
     } catch (error) {
+      if (runId !== analysisRunRef.current) return;
       setAnalysisError(error instanceof Error ? error.message : '邮件分析失败，请稍后重试');
     } finally {
-      setAnalysisLoading(false);
+      if (runId === analysisRunRef.current) setAnalysisLoading(false);
     }
   };
 
   useEffect(() => {
-    if (mode === 'ai' && !settingsLoading) analyzeThread();
+    if (mode === 'ai' && !settingsLoading) void analyzeThread();
     // The analysis should run once when the AI composer opens for this thread.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [mode, thread.id, settingsLoading]);
 
+  useEffect(() => () => {
+    analysisRunRef.current += 1;
+    generationRunRef.current += 1;
+    generationControllerRef.current?.abort();
+  }, [thread.id]);
+
   const generateReply = async () => {
     if (!userIdeas.trim() || !analysis) return;
+    const previousSuggestion = suggestion;
+    const previousReplyContent = replyContent;
+    generationControllerRef.current?.abort();
+    const controller = new AbortController();
+    generationControllerRef.current = controller;
+    const runId = generationRunRef.current + 1;
+    generationRunRef.current = runId;
     setAiLoading(true);
     setAiError('');
+    setGenerationStage('正在准备邮件上下文');
 
     try {
-      const result = await invokeAI({
-        action: 'draft',
-        analysis,
-        userIdeas,
-        targetLang,
-        targetLangName,
-        replyTone,
-      }, historyMessages) as AISuggestion;
+      const startedAt = performance.now();
+      let firstDeltaAt = 0;
+      let streamedBody = '';
+      let pendingBody = '';
+      let lastUiUpdateAt = 0;
+      let streamUiTimeout: number | undefined;
+      let finalResult: AISuggestion | null = null;
+      let streamError = '';
+
+      const flushStreamUi = () => {
+        if (runId !== generationRunRef.current) return;
+        streamUiTimeout = undefined;
+        lastUiUpdateAt = performance.now();
+        const visibleBody = pendingBody;
+        setReplyContent(visibleBody);
+        setSuggestion({
+          suggestedReply: visibleBody,
+          translatedReply: '',
+          tone: replyTone,
+          keyPoints: [],
+        });
+      };
+
+      try {
+        const response = await fetch('/api/ai/gmail-reply-stream', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          signal: controller.signal,
+          body: JSON.stringify({
+            threadSubject: thread.subject,
+            threadMessages: historyMessages,
+            analysis,
+            userIdeas,
+            targetLang,
+            targetLangName,
+            replyTone,
+            gmailAccountEmail: auth?.email || '',
+            draftPrompt: settings.aiDraftPrompt || settings.aiEmailPrompt || '',
+            modelProvider: settings.modelProvider || 'builtin',
+            customApiUrl: settings.customApiUrl || '',
+            customModelName: settings.customModelName || '',
+          }),
+        });
+        if (!response.ok || !response.body) {
+          throw new Error(`流式接口暂不可用 (${response.status})`);
+        }
+
+        const reader = response.body.getReader();
+        const decoder = new TextDecoder();
+        let buffer = '';
+        const handleEvent = (chunk: string) => {
+          const eventName = chunk.match(/^event:\s*(.+)$/m)?.[1]?.trim() || 'message';
+          const dataText = chunk
+            .split(/\r?\n/)
+            .filter((line) => line.startsWith('data:'))
+            .map((line) => line.replace(/^data:\s*/, ''))
+            .join('\n');
+          if (!dataText) return;
+          const event = JSON.parse(dataText) as Record<string, unknown>;
+          if (eventName === 'stage') {
+            setGenerationStage(String(event.label || '正在生成草稿'));
+            return;
+          }
+          if (eventName === 'delta') {
+            const text = String(event.text || '');
+            if (!text) return;
+            if (!firstDeltaAt) firstDeltaAt = performance.now();
+            streamedBody += text;
+            pendingBody = streamedBody;
+            const elapsed = performance.now() - lastUiUpdateAt;
+            if (elapsed >= 80) {
+              if (streamUiTimeout) window.clearTimeout(streamUiTimeout);
+              flushStreamUi();
+            } else if (!streamUiTimeout) {
+              streamUiTimeout = window.setTimeout(flushStreamUi, 80 - elapsed);
+            }
+            return;
+          }
+          if (eventName === 'final') {
+            finalResult = event as AISuggestion;
+            return;
+          }
+          if (eventName === 'error') {
+            streamError = String(event.message || '流式生成失败');
+          }
+        };
+
+        while (true) {
+          const { value, done } = await reader.read();
+          if (done) break;
+          buffer += decoder.decode(value, { stream: true });
+          const chunks = buffer.split(/\r?\n\r?\n/);
+          buffer = chunks.pop() || '';
+          chunks.forEach(handleEvent);
+        }
+        buffer += decoder.decode();
+        if (buffer.trim()) handleEvent(buffer);
+        if (streamUiTimeout) {
+          window.clearTimeout(streamUiTimeout);
+          flushStreamUi();
+        }
+        if (streamError) throw new Error(streamError);
+        if (!finalResult) throw new Error('流式生成未返回完整草稿');
+        console.info('[Gmail AI client draft timing]', {
+          mode: 'stream',
+          firstDeltaMs: firstDeltaAt ? Math.round(firstDeltaAt - startedAt) : null,
+          totalMs: Math.round(performance.now() - startedAt),
+        });
+      } catch (streamFailure) {
+        if (controller.signal.aborted) return;
+        if (streamUiTimeout) window.clearTimeout(streamUiTimeout);
+        console.warn('[Gmail AI reply stream fallback]', {
+          reason: streamFailure instanceof Error ? streamFailure.message : 'unknown',
+        });
+        setGenerationStage('流式生成不可用，正在使用兼容模式');
+        finalResult = await invokeAI({
+          action: 'draft',
+          analysis,
+          userIdeas,
+          targetLang,
+          targetLangName,
+          replyTone,
+        }, historyMessages) as AISuggestion;
+        console.info('[Gmail AI client draft timing]', {
+          mode: 'fallback',
+          totalMs: Math.round(performance.now() - startedAt),
+        });
+      }
+
+      if (runId !== generationRunRef.current || !finalResult) return;
+      const result = finalResult;
       const cleanSuggestedReply = stripConfiguredEmailSignature(
         result.suggestedReply,
         settings.emailSignature,
@@ -338,9 +511,22 @@ export function EmailComposer({
         status: 'pending',
       });
     } catch (error) {
+      if (controller.signal.aborted || runId !== generationRunRef.current) return;
+      setSuggestion(previousSuggestion);
+      setReplyContent(previousReplyContent);
+      if (previousSuggestion) {
+        setEditedChineseReply(previousSuggestion.translatedReply);
+        setGeneratedLangName(targetLangName);
+      }
       setAiError(error instanceof Error ? error.message : 'AI 生成失败，请稍后重试');
     } finally {
-      setAiLoading(false);
+      if (runId === generationRunRef.current) {
+        setAiLoading(false);
+        setGenerationStage('');
+      }
+      if (generationControllerRef.current === controller) {
+        generationControllerRef.current = null;
+      }
     }
   };
 
@@ -707,7 +893,7 @@ export function EmailComposer({
 
       {analysisError && (
         <ErrorMessage message={analysisError}>
-          <Button variant="outline" size="sm" onClick={analyzeThread}>重新分析</Button>
+          <Button variant="outline" size="sm" onClick={() => void analyzeThread(true)}>重新分析</Button>
         </ErrorMessage>
       )}
 
@@ -718,13 +904,26 @@ export function EmailComposer({
         <>
           <section className="overflow-hidden rounded-lg border border-gray-200 bg-white">
             <div className="border-b border-gray-100 px-4 py-3">
-              <div className="flex flex-wrap items-center gap-2">
-                <h3 className="text-sm font-semibold text-gray-900">核心分析</h3>
-                {analysis.stage && (
-                  <Badge variant="secondary" className="bg-gray-100 font-normal text-gray-700">
-                    {analysis.stage}
-                  </Badge>
-                )}
+              <div className="flex items-start justify-between gap-3">
+                <div className="flex flex-wrap items-center gap-2">
+                  <h3 className="text-sm font-semibold text-gray-900">核心分析</h3>
+                  {analysis.stage && (
+                    <Badge variant="secondary" className="bg-gray-100 font-normal text-gray-700">
+                      {analysis.stage}
+                    </Badge>
+                  )}
+                </div>
+                <Button
+                  type="button"
+                  variant="ghost"
+                  size="sm"
+                  className="h-7 shrink-0 px-2 text-xs font-normal text-gray-500"
+                  disabled={analysisLoading || aiLoading}
+                  onClick={() => void analyzeThread(true)}
+                >
+                  <RefreshCw className="size-3.5" />
+                  重新分析
+                </Button>
               </div>
               <p className="mt-1 line-clamp-2 text-sm leading-6 text-gray-600">
                 {analysis.latestSummary || '暂无明确摘要'}
@@ -833,6 +1032,12 @@ export function EmailComposer({
                   <Badge variant="secondary" className="bg-gray-100 font-normal text-gray-700">
                     {generatedLangName || targetLangName}
                   </Badge>
+                  {aiLoading && generationStage && (
+                    <Badge variant="outline" className="border-blue-200 bg-blue-50 font-normal text-blue-700">
+                      <Loader2 className="size-3 animate-spin" />
+                      {generationStage}
+                    </Badge>
+                  )}
                 </div>
                 <p className="mt-0.5 text-xs text-gray-500">可直接编辑正文，发送前请核对价格、时间和承诺。</p>
               </div>
@@ -841,12 +1046,14 @@ export function EmailComposer({
                 {copied ? '已复制' : '复制'}
               </Button>
             </div>
-            <AnalysisList
-              title="本次回复要点"
-              items={suggestion.keyPoints}
-              className="border-b border-gray-100 bg-gray-50/70"
-              compact
-            />
+            {suggestion.keyPoints.length > 0 && (
+              <AnalysisList
+                title="本次回复要点"
+                items={suggestion.keyPoints}
+                className="border-b border-gray-100 bg-gray-50/70"
+                compact
+              />
+            )}
             <RichEmailEditor
               value={replyContent}
               onChange={(value) => {
@@ -938,7 +1145,7 @@ export function EmailComposer({
                     </Button>
                   </div>
                   <div className="whitespace-pre-wrap px-4 py-3 text-sm leading-6 text-gray-700">
-                    {suggestion.translatedReply}
+                    {suggestion.translatedReply || (aiLoading ? '正文已生成，正在补充中文对照…' : '暂无中文对照')}
                   </div>
                 </div>
               )}

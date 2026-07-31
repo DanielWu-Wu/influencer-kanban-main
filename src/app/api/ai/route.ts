@@ -9,6 +9,10 @@ import {
   DEFAULT_OUTREACH_FOLLOW_UP_1_PROMPT,
   DEFAULT_OUTREACH_FOLLOW_UP_2_PROMPT,
 } from '@/lib/ai-prompts';
+import {
+  buildCompactGmailAIConversation,
+  type GmailAIHistoryMessage,
+} from '@/lib/gmail-ai-reply';
 import { sanitizeOutreachEmailBody } from '@/lib/outreach-draft-sanitizer';
 import { getRequestUser } from '@/lib/supabase/server';
 import { getUserSecret } from '@/lib/user-private-storage';
@@ -23,15 +27,6 @@ type ChatOptions = {
   apiKey?: string;
   modelName?: string;
   temperature?: number;
-};
-
-type ThreadMessage = {
-  id?: string;
-  subject?: string;
-  from?: string;
-  to?: string;
-  date?: string;
-  body?: string;
 };
 
 type OutreachVideo = {
@@ -114,28 +109,6 @@ function parseJson(content: string) {
   return JSON.parse(jsonMatch[0]);
 }
 
-function buildConversation(messages: ThreadMessage[]) {
-  const selectedMessages = [...messages]
-    .sort((a, b) => new Date(a.date || 0).getTime() - new Date(b.date || 0).getTime())
-    .slice(-50);
-  const charactersPerMessage = Math.max(
-    1_000,
-    Math.min(5_000, Math.floor(75_000 / Math.max(selectedMessages.length, 1))),
-  );
-
-  return selectedMessages
-    .map((message, index) => {
-      const body = String(message.body || '').slice(0, charactersPerMessage);
-      return `--- 邮件 ${index + 1} ---
-主题：${message.subject || '无主题'}
-时间：${message.date || '未知'}
-发件人：${message.from || '未知'}
-收件人：${message.to || '未知'}
-正文：${body}`;
-    })
-    .join('\n\n');
-}
-
 function getModelOptions(body: Record<string, unknown>, temperature: number): ChatOptions {
   return {
     apiUrl: body.modelProvider === 'custom' ? String(body.customApiUrl || '') : undefined,
@@ -181,7 +154,7 @@ export async function POST(request: NextRequest) {
     const action = String(body.action || 'draft');
     const threadSubject = String(body.threadSubject || '无主题');
     const threadMessages = Array.isArray(body.threadMessages)
-      ? body.threadMessages as ThreadMessage[]
+      ? body.threadMessages as GmailAIHistoryMessage[]
       : [];
 
     if (action === 'inferContactName') {
@@ -488,8 +461,8 @@ confidence 使用 0 到 100 的整数。
       const targetProduct = String(body.targetProduct || '').trim();
       const cooperationType = String(body.cooperationType || '').trim();
       const cooperationIdea = String(body.cooperationIdea || '').trim();
-      const initialEmail = (body.initialEmail || {}) as ThreadMessage;
-      const previousFollowUp = (body.previousFollowUp || {}) as ThreadMessage;
+      const initialEmail = (body.initialEmail || {}) as GmailAIHistoryMessage;
+      const previousFollowUp = (body.previousFollowUp || {}) as GmailAIHistoryMessage;
 
       if (!initialEmail.body?.trim()) {
         return NextResponse.json(
@@ -822,11 +795,13 @@ ${String(body.userPreference || '').trim() || '无'}
         DEFAULT_ANALYSIS_PROMPT,
       );
 
+      const conversation = buildCompactGmailAIConversation(threadMessages);
       const userPrompt = `当前邮件主题：${threadSubject}
 
-以下内容包含当前线程，以及与同一联系人最近最多 50 封历史邮件，已经按时间顺序排列：
-${buildConversation(threadMessages)}`;
+以下内容包含当前线程，以及与同一联系人最近 10 封历史邮件，已经按时间顺序排列：
+${conversation.text}`;
 
+      const modelStartedAt = performance.now();
       const result = parseJson(await invokeOpenAICompatibleApi(
         [
           { role: 'system', content: systemPrompt },
@@ -834,6 +809,12 @@ ${buildConversation(threadMessages)}`;
         ],
         getModelOptions(body, 0.25),
       ));
+      console.info('[Gmail AI analysis timing]', {
+        messages: conversation.messageCount,
+        inputCharacters: conversation.inputCharacters,
+        compactCharacters: conversation.outputCharacters,
+        modelMs: Math.round(performance.now() - modelStartedAt),
+      });
       return NextResponse.json({ success: true, data: result });
     }
 
@@ -875,10 +856,11 @@ ${buildConversation(threadMessages)}`;
       DEFAULT_DRAFT_PROMPT,
     );
 
+    const conversation = buildCompactGmailAIConversation(threadMessages);
     const userPrompt = `当前邮件主题：${threadSubject}
 
 与该联系人的最近邮件历史：
-${buildConversation(threadMessages)}
+${conversation.text}
 
 AI 对合作状态的分析：
 ${JSON.stringify(analysis)}
@@ -889,6 +871,7 @@ ${userIdeas}
 目标语言代码：${targetLang}
 目标语气代码：${replyTone}`;
 
+    const modelStartedAt = performance.now();
     const result = parseJson(await invokeOpenAICompatibleApi(
       [
         { role: 'system', content: systemPrompt },
@@ -896,6 +879,12 @@ ${userIdeas}
       ],
       getModelOptions(body, 0.55),
     ));
+    console.info('[Gmail AI draft fallback timing]', {
+      messages: conversation.messageCount,
+      inputCharacters: conversation.inputCharacters,
+      compactCharacters: conversation.outputCharacters,
+      modelMs: Math.round(performance.now() - modelStartedAt),
+    });
     return NextResponse.json({ success: true, data: result });
   } catch (error) {
     console.error('AI 邮件处理失败:', error);

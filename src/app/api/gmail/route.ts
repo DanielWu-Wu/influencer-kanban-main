@@ -392,6 +392,7 @@ export async function POST(request: NextRequest) {
       references,
       contactEmail,
       maxResults: requestedMaxResults,
+      knownMessageIds,
     } = body;
 
     if (!accessToken) {
@@ -407,12 +408,23 @@ export async function POST(request: NextRequest) {
       if (!contactEmail) {
         return NextResponse.json({ error: '缺少联系人邮箱' }, { status: 400 });
       }
-      const maxResults = Math.min(Number(requestedMaxResults || 50), 50);
+      const parsedMaxResults = Number(requestedMaxResults || 50);
+      const maxResults = Number.isFinite(parsedMaxResults)
+        ? Math.min(Math.max(Math.trunc(parsedMaxResults), 1), 50)
+        : 50;
+      const knownIds = new Set(
+        (Array.isArray(knownMessageIds) ? knownMessageIds : [])
+          .map((id) => String(id || '').trim())
+          .filter(Boolean)
+          .slice(0, 100),
+      );
       const q = `{from:${contactEmail} to:${contactEmail}}`;
+      const startedAt = performance.now();
       const listRes = await fetch(
         `https://gmail.googleapis.com/gmail/v1/users/me/messages?maxResults=${maxResults}&q=${encodeURIComponent(q)}`,
         { headers },
       );
+      const listMs = performance.now() - startedAt;
       if (!listRes.ok) {
         const details = await listRes.text();
         return NextResponse.json(
@@ -422,7 +434,9 @@ export async function POST(request: NextRequest) {
       }
 
       const listData = await listRes.json();
-      const messageRefs = (listData.messages || []) as Array<{ id: string }>;
+      const messageRefs = ((listData.messages || []) as Array<{ id: string }>)
+        .filter(({ id }) => !knownIds.has(id));
+      const messagesStartedAt = performance.now();
       const messages = await Promise.all(messageRefs.map(async ({ id }) => {
         const messageRes = await fetch(
           `https://gmail.googleapis.com/gmail/v1/users/me/messages/${id}?format=full`,
@@ -431,12 +445,30 @@ export async function POST(request: NextRequest) {
         if (!messageRes.ok) return null;
         return parseHistoryMessage(await messageRes.json());
       }));
+      const messagesMs = performance.now() - messagesStartedAt;
+      const totalMs = performance.now() - startedAt;
+      console.info('[Gmail AI history timing]', {
+        requested: maxResults,
+        reused: Math.max(0, ((listData.messages || []) as Array<{ id: string }>).length - messageRefs.length),
+        fetched: messageRefs.length,
+        listMs: Math.round(listMs),
+        messagesMs: Math.round(messagesMs),
+        totalMs: Math.round(totalMs),
+      });
 
       return NextResponse.json({
         success: true,
         data: messages
           .filter(Boolean)
           .sort((a, b) => new Date(a!.date || 0).getTime() - new Date(b!.date || 0).getTime()),
+        meta: {
+          requested: maxResults,
+          reused: Math.max(0, ((listData.messages || []) as Array<{ id: string }>).length - messageRefs.length),
+          fetched: messageRefs.length,
+          listMs: Math.round(listMs),
+          messagesMs: Math.round(messagesMs),
+          totalMs: Math.round(totalMs),
+        },
       });
     }
 

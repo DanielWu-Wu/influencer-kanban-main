@@ -17,10 +17,12 @@ import { EmailComposer } from './email-composer';
 import { NewEmailComposer } from './new-email-composer';
 import { YouTubeChannelAvatar } from './youtube-channel-avatar';
 import { textToEmailHtml } from '@/lib/email-content';
+import { detectEmailLanguage } from '@/lib/email-language';
 import { repairTextEncoding, splitEmailForTranslation } from '@/lib/email-text';
 import { extractMappedFeishuChannelUrl } from '@/lib/feishu-field-value';
 import type { FeishuFieldKey, FeishuFieldMapping } from '@/lib/feishu-mapping';
 import { getGmailThreadContact } from '@/lib/gmail-thread-contact';
+import { outreachLanguageLabel } from '@/lib/outreach-languages';
 import {
   fetchFeishuRecordsCached,
   type CachedFeishuRecord as FeishuRecord,
@@ -344,6 +346,17 @@ export function EmailDetail({
   const { settings } = useSettings();
   const { appendLog } = useRecordAssistant();
   const displayMessages = useMemo(() => sortMessagesNewestFirst(thread.messages), [thread.messages]);
+  const messageLanguageLabels = useMemo(() => new Map(
+    displayMessages.map((message) => {
+      const displayBody = repairTextEncoding(message.body);
+      const currentMessageText = splitEmailForTranslation(displayBody).currentText || displayBody;
+      const languageCode = detectEmailLanguage(currentMessageText);
+      return [
+        message.id,
+        languageCode ? outreachLanguageLabel(languageCode) : '语言未知',
+      ];
+    }),
+  ), [displayMessages]);
   const newestDisplayMessageId = displayMessages[0]?.id || '';
   const creatorYouTubeChannelUrl = getDirectYouTubeChannelUrl(creatorProfile);
 
@@ -608,7 +621,7 @@ export function EmailDetail({
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
         text,
-        sourceLang: detectLanguage(text),
+        sourceLang: detectEmailLanguage(text),
         customPrompt: settings.translatePrompt || '',
         modelProvider: settings.modelProvider || 'builtin',
         customApiUrl: settings.customApiUrl || '',
@@ -653,7 +666,7 @@ export function EmailDetail({
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           text: message.body,
-          sourceLang: detectLanguage(message.body),
+          sourceLang: detectEmailLanguage(message.body),
           customPrompt: settings.translatePrompt || '',
           modelProvider: settings.modelProvider || 'builtin',
           customApiUrl: settings.customApiUrl || '',
@@ -685,14 +698,6 @@ export function EmailDetail({
         return next;
       });
     }
-  };
-
-  // 语言检测
-  const detectLanguage = (text: string): string => {
-    if (/[\u4e00-\u9fa5]/.test(text)) return 'zh';
-    if (/[\u3040-\u309f\u30a0-\u30ff]/.test(text)) return 'ja';
-    if (/[\u0400-\u04ff]/.test(text)) return 'ru';
-    return 'en';
   };
 
   void handleTranslateLegacy;
@@ -1210,6 +1215,7 @@ export function EmailDetail({
             );
             const displayBody = repairTextEncoding(message.body);
             const displayHtmlBody = message.htmlBody ? repairTextEncoding(message.htmlBody) : '';
+            const sourceLanguage = messageLanguageLabels.get(message.id) || '语言未知';
             const isCreatorSender = creatorProfile
               ? normalizeEmail(sender.email) === normalizeEmail(creatorProfile.email)
               : false;
@@ -1314,9 +1320,14 @@ export function EmailDetail({
                   {isExpanded && (
                     <div className="mt-4 space-y-4" onClick={(e) => e.stopPropagation()}>
                       <div className="flex items-center justify-between">
-                        <Badge variant="outline" className="text-xs">
-                          {showingTranslationIds.has(message.id) ? '中文翻译' : '原文'}
-                        </Badge>
+                        <div className="flex items-center gap-1.5">
+                          <Badge variant="outline" className="text-xs">
+                            {showingTranslationIds.has(message.id) ? '中文翻译' : '原文'}
+                          </Badge>
+                          <Badge variant="secondary" className="bg-white/80 text-xs font-normal text-slate-600">
+                            {sourceLanguage}
+                          </Badge>
+                        </div>
                       </div>
 
                       {showingTranslationIds.has(message.id) && translation ? (
