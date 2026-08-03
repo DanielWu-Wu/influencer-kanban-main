@@ -5,6 +5,7 @@ import {
   useDeferredValue,
   useEffect,
   useMemo,
+  useRef,
   useState,
 } from 'react';
 import {
@@ -61,10 +62,9 @@ import {
 } from '@/components/ui/table';
 import { useSettings } from '@/lib/data';
 import {
-  loadCreatorResourceProfiles,
-  matchCreatorResourceProfiles,
-} from '@/lib/creator-resource-profile';
-import { fetchFeishuRecordsCached } from '@/lib/feishu-record-cache';
+  fetchFeishuRecordSnapshot,
+  type CachedFeishuRecord,
+} from '@/lib/feishu-record-cache';
 import {
   COOPERATION_STAGE_META,
   COOPERATION_STAGES,
@@ -631,11 +631,19 @@ function EmptyState({ onOpenSettings }: { onOpenSettings: () => void }) {
   );
 }
 
-export function CooperationProjectsPage({ onOpenSettings }: { onOpenSettings: () => void }) {
+const COOPERATION_BACKGROUND_REFRESH_MS = 5 * 60 * 1000;
+
+export function CooperationProjectsPage({
+  active,
+  onOpenSettings,
+}: {
+  active: boolean;
+  onOpenSettings: () => void;
+}) {
   const { settings, loading: settingsLoading } = useSettings();
   const url = settings.feishuCooperationUrl?.trim() || '';
   const mapping = settings.feishuCooperationFieldMapping || EMPTY_FEISHU_MAPPING;
-  const [records, setRecords] = useState<Awaited<ReturnType<typeof fetchFeishuRecordsCached>>>([]);
+  const [records, setRecords] = useState<CachedFeishuRecord[]>([]);
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
   const [error, setError] = useState('');
@@ -652,6 +660,8 @@ export function CooperationProjectsPage({ onOpenSettings }: { onOpenSettings: ()
   const [dateTo, setDateTo] = useState('');
   const [calendarMonth, setCalendarMonth] = useState(new Date());
   const [avatarByProjectId, setAvatarByProjectId] = useState<Record<string, string>>({});
+  const hasLoadedRef = useRef(false);
+  const lastLoadedAtRef = useRef(0);
 
   const loadRecords = useCallback(async (force = false) => {
     if (!url) {
@@ -660,12 +670,15 @@ export function CooperationProjectsPage({ onOpenSettings }: { onOpenSettings: ()
       return;
     }
     if (force) setRefreshing(true);
-    else setLoading(true);
+    else if (!hasLoadedRef.current) setLoading(true);
     setError('');
     try {
-      const nextRecords = await fetchFeishuRecordsCached(url, { force });
-      setRecords(nextRecords);
-      setUpdatedAt(Date.now());
+      const snapshot = await fetchFeishuRecordSnapshot(url, { force });
+      const loadedAt = snapshot.fetchedAt;
+      setRecords(snapshot.records);
+      setUpdatedAt(loadedAt);
+      hasLoadedRef.current = true;
+      lastLoadedAtRef.current = loadedAt;
     } catch (loadError) {
       setError(loadError instanceof Error ? loadError.message : '读取详细合作记录表失败。');
     } finally {
@@ -676,9 +689,19 @@ export function CooperationProjectsPage({ onOpenSettings }: { onOpenSettings: ()
   const refreshProjects = useCallback(() => loadRecords(true), [loadRecords]);
 
   useEffect(() => {
-    if (settingsLoading) return;
-    void loadRecords(false);
-  }, [loadRecords, settingsLoading]);
+    hasLoadedRef.current = false;
+    lastLoadedAtRef.current = 0;
+    setRecords([]);
+    setUpdatedAt(undefined);
+    setLoading(true);
+  }, [url]);
+
+  useEffect(() => {
+    if (settingsLoading || !active) return;
+    const needsRefresh = !hasLoadedRef.current
+      || Date.now() - lastLoadedAtRef.current >= COOPERATION_BACKGROUND_REFRESH_MS;
+    if (needsRefresh) void loadRecords(false);
+  }, [active, loadRecords, settingsLoading]);
 
   const baseProjects = useMemo(
     () => records
@@ -695,23 +718,13 @@ export function CooperationProjectsPage({ onOpenSettings }: { onOpenSettings: ()
     let cancelled = false;
 
     const enrichAvatars = async () => {
-      const resourceProfiles = await loadCreatorResourceProfiles(settings).catch(() => []);
-      if (cancelled) return;
       const nextAvatars: Record<string, string> = {};
       const lookupByProjectId = new Map<string, ReturnType<typeof buildChannelAvatarLookup>>();
       const lookups = [] as NonNullable<ReturnType<typeof buildChannelAvatarLookup>>[];
 
       for (const project of baseProjects) {
-        const match = matchCreatorResourceProfiles(project, resourceProfiles);
-        const profileWithAvatar = match.profiles.find((profile) => profile.avatarUrl);
-        if (profileWithAvatar?.avatarUrl) {
-          nextAvatars[project.id] = profileWithAvatar.avatarUrl;
-          continue;
-        }
-        const matchedProfile = match.profiles[0];
         const lookup = buildChannelAvatarLookup({
-          channelId: matchedProfile?.channelId || project.channelId,
-          channelUrl: matchedProfile?.channelUrl || project.channelUrl,
+          channelUrl: project.channelUrl,
         });
         if (!lookup) continue;
         lookupByProjectId.set(project.id, lookup);
@@ -729,7 +742,7 @@ export function CooperationProjectsPage({ onOpenSettings }: { onOpenSettings: ()
 
     void enrichAvatars();
     return () => { cancelled = true; };
-  }, [baseProjects, settings]);
+  }, [baseProjects]);
 
   const projects = useMemo(
     () => baseProjects.map((project) => ({

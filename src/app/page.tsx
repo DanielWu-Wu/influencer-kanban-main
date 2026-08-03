@@ -100,6 +100,8 @@ export default function DashboardPage() {
   const { user, loading: authLoading, configured, signOut } = useAuth();
   const [currentView, setCurrentView] = useState<View>('todo');
   const [gmailHasMounted, setGmailHasMounted] = useState(false);
+  const [cooperationHasMounted, setCooperationHasMounted] = useState(false);
+  const [influencerListHasMounted, setInfluencerListHasMounted] = useState(false);
   const [showAddDialog, setShowAddDialog] = useState(false);
   const [editingInfluencer, setEditingInfluencer] = useState<Influencer | null>(null);
   const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
@@ -128,6 +130,8 @@ export default function DashboardPage() {
 
   useEffect(() => {
     if (currentView === 'gmail') setGmailHasMounted(true);
+    if (currentView === 'kanban') setCooperationHasMounted(true);
+    if (currentView === 'list') setInfluencerListHasMounted(true);
   }, [currentView]);
 
   useEffect(() => {
@@ -396,12 +400,19 @@ export default function DashboardPage() {
             sidebarCollapsed ? 'md:ml-2.5' : 'md:ml-3'
           }`}
         >
-          {currentView === 'kanban' && (
-            <CooperationProjectsPage onOpenSettings={() => setCurrentView('settings')} />
+          {(currentView === 'kanban' || cooperationHasMounted) && (
+            <div className={currentView === 'kanban' ? 'min-h-0 flex-1' : 'hidden'}>
+              <CooperationProjectsPage
+                active={currentView === 'kanban'}
+                onOpenSettings={() => setCurrentView('settings')}
+              />
+            </div>
           )}
 
-          {currentView === 'list' && (
-            <div className="app-workbench min-h-0 flex-1 rounded-xl p-4">
+          {(currentView === 'list' || influencerListHasMounted) && (
+            <div className={currentView === 'list'
+              ? 'app-workbench min-h-0 flex-1 rounded-xl p-4'
+              : 'hidden'}>
               {settings.feishuUrl ? (
                 <div className="h-full flex flex-col">
                   <div className="flex items-center justify-between mb-4">
