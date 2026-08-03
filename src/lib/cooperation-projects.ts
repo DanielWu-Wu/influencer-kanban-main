@@ -72,6 +72,10 @@ export function matchesCooperationStageFilter(
   return selectedStages.length === 0 || selectedStages.includes(stage);
 }
 
+export function shouldShowStageDuration(stage: CooperationStage) {
+  return stage !== 'published';
+}
+
 export type CooperationRisk = {
   code: string;
   label: string;
@@ -565,6 +569,12 @@ export function formatCooperationFullDate(value?: number) {
     month: 'long',
     day: 'numeric',
   }).format(date);
+}
+
+export function normalizeCooperationDateSelection(value: Date) {
+  const date = new Date(value);
+  date.setHours(12, 0, 0, 0);
+  return date.getTime();
 }
 
 export function formatStageDuration(value?: number, now = Date.now()) {

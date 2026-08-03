@@ -7,6 +7,8 @@ import {
   useMemo,
   useRef,
   useState,
+  type Dispatch,
+  type SetStateAction,
 } from 'react';
 import {
   addMonths,
@@ -21,7 +23,7 @@ import {
   subMonths,
 } from 'date-fns';
 import { zhCN } from 'date-fns/locale';
-import { toast } from 'sonner';
+import { toast, Toaster } from 'sonner';
 import {
   AlertCircle,
   AlertTriangle,
@@ -36,6 +38,7 @@ import {
   Link2,
   List,
   LoaderCircle,
+  MailCheck,
   RefreshCw,
   Search,
   Settings,
@@ -45,9 +48,13 @@ import {
 import { Badge } from '@/components/ui/badge';
 import { Avatar, AvatarFallback, AvatarImage } from '@/components/ui/avatar';
 import { Button } from '@/components/ui/button';
+import { Calendar } from '@/components/ui/calendar';
 import { Checkbox } from '@/components/ui/checkbox';
 import { Input } from '@/components/ui/input';
-import { CooperationEmailActions } from '@/components/cooperation-email-actions';
+import {
+  CooperationEmailActions,
+  type NoticeDraft,
+} from '@/components/cooperation-email-actions';
 import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover';
 import { Separator } from '@/components/ui/separator';
 import {
@@ -79,6 +86,8 @@ import {
   formatStageDuration,
   mapFeishuCooperationRecord,
   matchesCooperationStageFilter,
+  normalizeCooperationDateSelection,
+  shouldShowStageDuration,
   type CooperationProject,
   type CooperationStage,
 } from '@/lib/cooperation-projects';
@@ -358,7 +367,9 @@ function ProjectsTable({ projects, selectedId, onSelect }: {
               </TableCell>
               <TableCell>
                 <p className="whitespace-nowrap text-xs text-slate-700">{formatCooperationFullDate(project.stageDate)}</p>
-                <p className="mt-1 text-[10px] text-slate-400">{formatStageDuration(project.stageDate)}</p>
+                {shouldShowStageDuration(project.stage) ? (
+                  <p className="mt-1 text-[10px] text-slate-400">{formatStageDuration(project.stageDate)}</p>
+                ) : null}
               </TableCell>
               <TableCell className="text-xs text-slate-700">{project.nextAction}</TableCell>
               <TableCell>
@@ -437,7 +448,9 @@ function ProjectsBoard({ projects, onSelect }: {
                     <ProjectIdentity project={project} compact />
                     <div className="mt-3 border-t border-slate-100 pt-2">
                       <p className="truncate text-xs font-medium text-slate-800">{project.product}</p>
-                      <p className="mt-2 text-right text-[11px] text-slate-500">{formatStageDuration(project.stageDate)}</p>
+                      {shouldShowStageDuration(project.stage) ? (
+                        <p className="mt-2 text-right text-[11px] text-slate-500">{formatStageDuration(project.stageDate)}</p>
+                      ) : null}
                       <div className="mt-2 flex items-center justify-between gap-2">
                         <span className="text-[11px] text-slate-500">预计 {formatCooperationDate(project.expectedPublishDate)}</span>
                         {project.risks.length ? <AlertTriangle className="h-3.5 w-3.5 text-amber-600" /> : null}
@@ -551,6 +564,41 @@ function DetailValue({ label, value }: { label: string; value: string }) {
 }
 
 type NotificationFieldKey = 'logisticsNotified' | 'discountNotified';
+type EditableDateFieldKey = 'shippingDate' | 'arrivalDate' | 'filmingCompleteDate' | 'actualPublishDate';
+
+const EDITABLE_DATE_LABELS: Record<EditableDateFieldKey, string> = {
+  shippingDate: '发货时间',
+  arrivalDate: '到货时间',
+  filmingCompleteDate: '拍摄完成',
+  actualPublishDate: '实际上线',
+};
+
+async function writeProjectFieldToFeishu({
+  url,
+  recordId,
+  fieldName,
+  value,
+}: {
+  url: string;
+  recordId: string;
+  fieldName: string;
+  value: boolean | number;
+}) {
+  const response = await fetch('/api/feishu/records', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      action: 'update',
+      url,
+      recordId,
+      fields: { [fieldName]: value },
+    }),
+  });
+  const result = await response.json();
+  if (!response.ok || !result.success) {
+    throw new Error(String(result.error || '写回飞书失败。'));
+  }
+}
 
 function NotificationCheck({
   checked,
@@ -576,23 +624,81 @@ function NotificationCheck({
   );
 }
 
+function EditableDateValue({
+  disabled,
+  label,
+  value,
+  onSelect,
+}: {
+  disabled: boolean;
+  label: string;
+  value?: number;
+  onSelect: (value: number) => void;
+}) {
+  const [open, setOpen] = useState(false);
+  const selectedDate = value ? new Date(value) : undefined;
+
+  return (
+    <div className="grid grid-cols-[88px_minmax(0,1fr)] items-center gap-2 py-0.5 text-xs">
+      <dt className="text-slate-500">{label}</dt>
+      <dd className="min-w-0">
+        <Popover open={open} onOpenChange={setOpen}>
+          <PopoverTrigger asChild>
+            <Button
+              type="button"
+              variant="ghost"
+              disabled={disabled}
+              className="h-7 max-w-full justify-start px-2 text-xs font-normal text-slate-800"
+              aria-label={`修改${label}，当前为${formatCooperationFullDate(value)}`}
+            >
+              <span className="truncate">{formatCooperationFullDate(value)}</span>
+              {disabled
+                ? <LoaderCircle data-icon="inline-end" className="animate-spin" />
+                : <CalendarDays data-icon="inline-end" />}
+            </Button>
+          </PopoverTrigger>
+          <PopoverContent align="end" className="w-auto p-0">
+            <Calendar
+              mode="single"
+              locale={zhCN}
+              selected={selectedDate}
+              defaultMonth={selectedDate || new Date()}
+              onSelect={(date) => {
+                if (!date) return;
+                setOpen(false);
+                onSelect(normalizeCooperationDateSelection(date));
+              }}
+            />
+          </PopoverContent>
+        </Popover>
+      </dd>
+    </div>
+  );
+}
+
 function ProjectDetail({
   project,
   settings,
   feishuUrl,
-  onNotificationUpdated,
+  noticeDraft,
+  setNoticeDraft,
+  onFieldUpdated,
   onProjectUpdated,
   onClose,
 }: {
   project: CooperationProject;
   settings: ReturnType<typeof useSettings>['settings'];
   feishuUrl: string;
-  onNotificationUpdated: (recordId: string, fieldName: string, checked: boolean) => void;
+  noticeDraft: NoticeDraft | null;
+  setNoticeDraft: Dispatch<SetStateAction<NoticeDraft | null>>;
+  onFieldUpdated: (recordId: string, fieldName: string, value: boolean | number) => void;
   onProjectUpdated: () => Promise<void>;
   onClose: () => void;
 }) {
   const [pendingValues, setPendingValues] = useState<Partial<Record<NotificationFieldKey, boolean>>>({});
   const [updatingFields, setUpdatingFields] = useState<Set<NotificationFieldKey>>(() => new Set());
+  const [pendingDateValues, setPendingDateValues] = useState<Partial<Record<EditableDateFieldKey, number>>>({});
+  const [updatingDateFields, setUpdatingDateFields] = useState<Set<EditableDateFieldKey>>(() => new Set());
 
   useEffect(() => {
     setPendingValues((current) => {
@@ -609,6 +715,33 @@ function ProjectDetail({
     });
   }, [project.discountNotified, project.logisticsNotified, updatingFields]);
 
+  useEffect(() => {
+    setPendingDateValues((current) => {
+      const next = { ...current };
+      if (!updatingDateFields.has('shippingDate') && current.shippingDate === project.shippingDate) {
+        delete next.shippingDate;
+      }
+      if (!updatingDateFields.has('arrivalDate') && current.arrivalDate === project.arrivalDate) {
+        delete next.arrivalDate;
+      }
+      if (
+        !updatingDateFields.has('filmingCompleteDate')
+        && current.filmingCompleteDate === project.filmingCompleteDate
+      ) delete next.filmingCompleteDate;
+      if (
+        !updatingDateFields.has('actualPublishDate')
+        && current.actualPublishDate === project.actualPublishDate
+      ) delete next.actualPublishDate;
+      return next;
+    });
+  }, [
+    project.actualPublishDate,
+    project.arrivalDate,
+    project.filmingCompleteDate,
+    project.shippingDate,
+    updatingDateFields,
+  ]);
+
   const updateNotification = async (key: NotificationFieldKey, checked: boolean) => {
     const label = key === 'logisticsNotified' ? '物流信息已告知' : '折扣信息已告知';
     const fieldName = settings.feishuCooperationFieldMapping?.[key];
@@ -620,21 +753,13 @@ function ProjectDetail({
     setPendingValues((current) => ({ ...current, [key]: checked }));
     setUpdatingFields((current) => new Set(current).add(key));
     try {
-      const response = await fetch('/api/feishu/records', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          action: 'update',
-          url: feishuUrl,
-          recordId: project.id,
-          fields: { [fieldName]: checked },
-        }),
+      await writeProjectFieldToFeishu({
+        url: feishuUrl,
+        recordId: project.id,
+        fieldName,
+        value: checked,
       });
-      const result = await response.json();
-      if (!response.ok || !result.success) {
-        throw new Error(String(result.error || '写回飞书失败。'));
-      }
-      onNotificationUpdated(project.id, fieldName, checked);
+      onFieldUpdated(project.id, fieldName, checked);
       toast.success(`“${label}”已${checked ? '勾选' : '取消勾选'}并写回飞书。`);
     } catch (error) {
       setPendingValues((current) => {
@@ -652,8 +777,48 @@ function ProjectDetail({
     }
   };
 
+  const updateDate = async (key: EditableDateFieldKey, value: number) => {
+    const label = EDITABLE_DATE_LABELS[key];
+    const fieldName = settings.feishuCooperationFieldMapping?.[key];
+    if (!feishuUrl || !fieldName) {
+      toast.error(`请先在“设置 > 飞书”映射“${label}”字段。`);
+      return;
+    }
+
+    setPendingDateValues((current) => ({ ...current, [key]: value }));
+    setUpdatingDateFields((current) => new Set(current).add(key));
+    try {
+      await writeProjectFieldToFeishu({
+        url: feishuUrl,
+        recordId: project.id,
+        fieldName,
+        value,
+      });
+      onFieldUpdated(project.id, fieldName, value);
+      toast.success(`“${label}”已更新为${formatCooperationFullDate(value)}并写回飞书。`);
+    } catch (error) {
+      setPendingDateValues((current) => {
+        const next = { ...current };
+        delete next[key];
+        return next;
+      });
+      const message = error instanceof Error ? error.message : '写回飞书失败。';
+      toast.error(`“${label}”写回失败：${message}`);
+    } finally {
+      setUpdatingDateFields((current) => {
+        const next = new Set(current);
+        next.delete(key);
+        return next;
+      });
+    }
+  };
+
   const logisticsNotified = pendingValues.logisticsNotified ?? project.logisticsNotified;
   const discountNotified = pendingValues.discountNotified ?? project.discountNotified;
+  const shippingDate = pendingDateValues.shippingDate ?? project.shippingDate;
+  const arrivalDate = pendingDateValues.arrivalDate ?? project.arrivalDate;
+  const filmingCompleteDate = pendingDateValues.filmingCompleteDate ?? project.filmingCompleteDate;
+  const actualPublishDate = pendingDateValues.actualPublishDate ?? project.actualPublishDate;
 
   return (
     <div className="flex h-full flex-col bg-white">
@@ -729,10 +894,30 @@ function ProjectDetail({
             onCheckedChange={(checked) => void updateNotification('discountNotified', checked)}
           />
           <dl className="mt-1">
-            <DetailValue label="发货时间" value={formatCooperationDate(project.shippingDate)} />
-            <DetailValue label="到货时间" value={formatCooperationDate(project.arrivalDate)} />
-            <DetailValue label="拍摄完成" value={formatCooperationDate(project.filmingCompleteDate)} />
-            <DetailValue label="实际上线" value={formatCooperationDate(project.actualPublishDate)} />
+            <EditableDateValue
+              disabled={updatingDateFields.has('shippingDate')}
+              label={EDITABLE_DATE_LABELS.shippingDate}
+              value={shippingDate}
+              onSelect={(value) => void updateDate('shippingDate', value)}
+            />
+            <EditableDateValue
+              disabled={updatingDateFields.has('arrivalDate')}
+              label={EDITABLE_DATE_LABELS.arrivalDate}
+              value={arrivalDate}
+              onSelect={(value) => void updateDate('arrivalDate', value)}
+            />
+            <EditableDateValue
+              disabled={updatingDateFields.has('filmingCompleteDate')}
+              label={EDITABLE_DATE_LABELS.filmingCompleteDate}
+              value={filmingCompleteDate}
+              onSelect={(value) => void updateDate('filmingCompleteDate', value)}
+            />
+            <EditableDateValue
+              disabled={updatingDateFields.has('actualPublishDate')}
+              label={EDITABLE_DATE_LABELS.actualPublishDate}
+              value={actualPublishDate}
+              onSelect={(value) => void updateDate('actualPublishDate', value)}
+            />
           </dl>
         </section>
 
@@ -751,6 +936,8 @@ function ProjectDetail({
           project={project}
           settings={settings}
           onProjectUpdated={onProjectUpdated}
+          draft={noticeDraft}
+          setDraft={setNoticeDraft}
         />
 
         <section className="py-4">
@@ -828,6 +1015,7 @@ export function CooperationProjectsPage({
   const [dateTo, setDateTo] = useState('');
   const [calendarMonth, setCalendarMonth] = useState(new Date());
   const [avatarByProjectId, setAvatarByProjectId] = useState<Record<string, string>>({});
+  const [noticeDrafts, setNoticeDrafts] = useState<Record<string, NoticeDraft | null>>({});
   const hasLoadedRef = useRef(false);
   const lastLoadedAtRef = useRef(0);
 
@@ -856,11 +1044,27 @@ export function CooperationProjectsPage({
   }, [url]);
   const refreshProjects = useCallback(() => loadRecords(true), [loadRecords]);
 
-  const updateNotificationRecord = useCallback((recordId: string, fieldName: string, checked: boolean) => {
+  const updateNoticeDraft = useCallback((
+    projectId: string,
+    update: SetStateAction<NoticeDraft | null>,
+  ) => {
+    setNoticeDrafts((current) => {
+      const previous = current[projectId] || null;
+      const next = typeof update === 'function' ? update(previous) : update;
+      if (next === previous) return current;
+      return { ...current, [projectId]: next };
+    });
+  }, []);
+
+  const updateProjectRecordField = useCallback((
+    recordId: string,
+    fieldName: string,
+    value: boolean | number,
+  ) => {
     invalidateFeishuRecordsCache(url);
     setRecords((current) => current.map((record) => (
       record.record_id === recordId
-        ? { ...record, fields: { ...record.fields, [fieldName]: checked } }
+        ? { ...record, fields: { ...record.fields, [fieldName]: value } }
         : record
     )));
     const updated = Date.now();
@@ -973,6 +1177,17 @@ export function CooperationProjectsPage({
       });
   }, [dateFrom, dateTo, deferredSearch, productFilter, projects, riskFilter, siteFilter, stageFilters]);
 
+  const noticeTaskEntries = Object.entries(noticeDrafts).filter(([, draft]) => Boolean(draft));
+  const runningNoticeTasks = noticeTaskEntries.filter(([, draft]) => (
+    draft?.status === 'generating' || draft?.status === 'refining'
+  ));
+  const failedNoticeTasks = noticeTaskEntries.filter(([, draft]) => draft?.status === 'error');
+  const readyNoticeTasks = noticeTaskEntries.filter(([, draft]) => draft?.status === 'ready');
+  const highlightedNoticeTask = runningNoticeTasks[0] || failedNoticeTasks[0] || readyNoticeTasks[0];
+  const highlightedNoticeProject = highlightedNoticeTask
+    ? projects.find((project) => project.id === highlightedNoticeTask[0])
+    : undefined;
+
   if (settingsLoading || (loading && url)) {
     return (
       <div className="flex h-full items-center justify-center bg-white">
@@ -990,6 +1205,7 @@ export function CooperationProjectsPage({
 
   return (
     <div className="app-workbench flex h-full min-h-0 overflow-hidden rounded-xl">
+      <Toaster richColors position="top-center" />
       <div className="flex min-w-0 flex-1 flex-col overflow-hidden">
         <header className="material-toolbar flex shrink-0 flex-col items-stretch gap-3 border-b border-border/45 px-4 py-4 sm:flex-row sm:items-center sm:justify-between sm:gap-4 sm:px-5">
           <div className="min-w-0">
@@ -1003,6 +1219,23 @@ export function CooperationProjectsPage({
             </p>
           </div>
           <div className="flex shrink-0 items-center gap-2">
+            {highlightedNoticeProject ? (
+              <Button
+                variant="outline"
+                size="sm"
+                className={`h-9 ${failedNoticeTasks.length ? 'border-red-200 bg-red-50 text-red-700' : 'border-blue-200 bg-blue-50 text-blue-700'}`}
+                onClick={() => setSelectedProject(highlightedNoticeProject)}
+              >
+                {runningNoticeTasks.length
+                  ? <LoaderCircle className="mr-1.5 h-3.5 w-3.5 animate-spin" />
+                  : <MailCheck className="mr-1.5 h-3.5 w-3.5" />}
+                {runningNoticeTasks.length
+                  ? `后台生成 ${runningNoticeTasks.length}`
+                  : failedNoticeTasks.length
+                    ? `生成失败 ${failedNoticeTasks.length}`
+                    : `邮件待检查 ${readyNoticeTasks.length}`}
+              </Button>
+            ) : null}
             <Button variant="outline" size="sm" className="h-9" disabled={refreshing} onClick={() => void loadRecords(true)}>
               <RefreshCw className={`mr-1.5 h-3.5 w-3.5 ${refreshing ? 'animate-spin' : ''}`} />刷新数据
             </Button>
@@ -1098,7 +1331,9 @@ export function CooperationProjectsPage({
             project={selectedProject}
             settings={settings}
             feishuUrl={url}
-            onNotificationUpdated={updateNotificationRecord}
+            noticeDraft={noticeDrafts[selectedProject.id] || null}
+            setNoticeDraft={(update) => updateNoticeDraft(selectedProject.id, update)}
+            onFieldUpdated={updateProjectRecordField}
             onProjectUpdated={refreshProjects}
             onClose={() => setSelectedProject(undefined)}
           />
@@ -1113,7 +1348,9 @@ export function CooperationProjectsPage({
               project={selectedProject}
               settings={settings}
               feishuUrl={url}
-              onNotificationUpdated={updateNotificationRecord}
+              noticeDraft={noticeDrafts[selectedProject.id] || null}
+              setNoticeDraft={(update) => updateNoticeDraft(selectedProject.id, update)}
+              onFieldUpdated={updateProjectRecordField}
               onProjectUpdated={refreshProjects}
               onClose={() => setSelectedProject(undefined)}
             />

@@ -1,6 +1,6 @@
 'use client';
 
-import { useEffect, useState } from 'react';
+import { useEffect, useState, type Dispatch, type SetStateAction } from 'react';
 import {
   AlertTriangle,
   BadgePercent,
@@ -11,8 +11,9 @@ import {
   RefreshCw,
   Save,
   Sparkles,
+  WandSparkles,
 } from 'lucide-react';
-import { toast, Toaster } from 'sonner';
+import { toast } from 'sonner';
 import {
   AlertDialog,
   AlertDialogAction,
@@ -67,9 +68,9 @@ type GmailHistoryMessage = {
   automated?: boolean;
   deliveryFailure?: boolean;
 };
-type NoticeDraft = {
+export type NoticeDraft = {
   type: NoticeType;
-  status: 'generating' | 'ready' | 'saving' | 'saved' | 'writing' | 'written' | 'error';
+  status: 'generating' | 'refining' | 'ready' | 'saving' | 'saved' | 'writing' | 'written' | 'error';
   recipient: string;
   subject: string;
   body: string;
@@ -77,6 +78,7 @@ type NoticeDraft = {
   language: string;
   riskNotes: string[];
   missingInfo: string[];
+  chineseDirty: boolean;
   thread?: GmailHistoryMessage;
   gmailDraftId?: string;
   error?: string;
@@ -86,7 +88,70 @@ type Props = {
   project: CooperationProject;
   settings: AppSettings;
   onProjectUpdated: () => Promise<void>;
+  draft: NoticeDraft | null;
+  setDraft: Dispatch<SetStateAction<NoticeDraft | null>>;
 };
+
+type CachedContactHistory = {
+  expiresAt: number;
+  messages: GmailHistoryMessage[];
+};
+
+const CONTACT_HISTORY_MAX_RESULTS = 6;
+const CONTACT_HISTORY_CACHE_MS = 2 * 60 * 1000;
+const contactHistoryCache = new Map<string, CachedContactHistory>();
+const pendingContactHistoryRequests = new Map<string, Promise<GmailHistoryMessage[]>>();
+
+function tokenFingerprint(token: string) {
+  let hash = 0;
+  for (let index = 0; index < token.length; index += 1) {
+    hash = ((hash << 5) - hash + token.charCodeAt(index)) | 0;
+  }
+  return Math.abs(hash).toString(36);
+}
+
+async function requestContactHistory(email: string, accessToken: string) {
+  const cacheKey = `${email.toLowerCase()}|${tokenFingerprint(accessToken)}`;
+  const cached = contactHistoryCache.get(cacheKey);
+  if (cached && cached.expiresAt > Date.now()) return cached.messages;
+
+  const pending = pendingContactHistoryRequests.get(cacheKey);
+  if (pending) return await pending;
+
+  const request = (async () => {
+    const response = await fetch('/api/gmail', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        action: 'contactHistory',
+        accessToken,
+        contactEmail: email,
+        maxResults: CONTACT_HISTORY_MAX_RESULTS,
+      }),
+    });
+    const result = await response.json();
+    if (!response.ok || !result.success) {
+      throw new Error([result.error, result.details].filter(Boolean).join(' ') || '读取 Gmail 历史邮件失败。');
+    }
+    const messages = (result.data || []) as GmailHistoryMessage[];
+    contactHistoryCache.set(cacheKey, {
+      expiresAt: Date.now() + CONTACT_HISTORY_CACHE_MS,
+      messages,
+    });
+    if (contactHistoryCache.size > 50) {
+      const oldestKey = contactHistoryCache.keys().next().value;
+      if (oldestKey) contactHistoryCache.delete(oldestKey);
+    }
+    return messages;
+  })();
+
+  pendingContactHistoryRequests.set(cacheKey, request);
+  try {
+    return await request;
+  } finally {
+    pendingContactHistoryRequests.delete(cacheKey);
+  }
+}
 
 const NOTICE_META: Record<NoticeType, {
   label: string;
@@ -137,9 +202,14 @@ async function resolveRecipientOptions(project: CooperationProject, settings: Ap
   };
 }
 
-export function CooperationEmailActions({ project, settings, onProjectUpdated }: Props) {
+export function CooperationEmailActions({
+  project,
+  settings,
+  onProjectUpdated,
+  draft,
+  setDraft,
+}: Props) {
   const { auth, connect } = useGmailAuth();
-  const [draft, setDraft] = useState<NoticeDraft | null>(null);
   const [confirmDraftOpen, setConfirmDraftOpen] = useState(false);
   const [confirmSentOpen, setConfirmSentOpen] = useState(false);
   const [recipientSelection, setRecipientSelection] = useState<{
@@ -152,7 +222,6 @@ export function CooperationEmailActions({ project, settings, onProjectUpdated }:
   const [resolvingRecipientType, setResolvingRecipientType] = useState<NoticeType | null>(null);
 
   useEffect(() => {
-    setDraft(null);
     setConfirmDraftOpen(false);
     setConfirmSentOpen(false);
     setRecipientSelection(null);
@@ -169,24 +238,6 @@ export function CooperationEmailActions({ project, settings, onProjectUpdated }:
     }
     connect(result.data as GmailAuth);
     return accessToken;
-  };
-
-  const requestContactHistory = async (email: string, accessToken: string) => {
-    const response = await fetch('/api/gmail', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        action: 'contactHistory',
-        accessToken,
-        contactEmail: email,
-        maxResults: 15,
-      }),
-    });
-    const result = await response.json();
-    if (!response.ok || !result.success) {
-      throw new Error([result.error, result.details].filter(Boolean).join(' ') || '读取 Gmail 历史邮件失败。');
-    }
-    return (result.data || []) as GmailHistoryMessage[];
   };
 
   const loadContactHistory = async (email: string) => {
@@ -214,6 +265,7 @@ export function CooperationEmailActions({ project, settings, onProjectUpdated }:
       language: '',
       riskNotes: [],
       missingInfo: [],
+      chineseDirty: false,
     });
     try {
       const historyMessages = await loadContactHistory(recipient);
@@ -261,14 +313,85 @@ export function CooperationEmailActions({ project, settings, onProjectUpdated }:
         language: String(result.data?.language || '').trim(),
         riskNotes: Array.isArray(result.data?.riskNotes) ? result.data.riskNotes.map(String) : [],
         missingInfo: Array.isArray(result.data?.missingInfo) ? result.data.missingInfo.map(String) : [],
+        chineseDirty: false,
         thread,
       });
+      toast.success(`${project.channelName} 的${NOTICE_META[type].shortLabel}草稿已生成，可以打开项目检查。`);
     } catch (error) {
+      const message = error instanceof Error ? error.message : '生成告知邮件失败。';
       setDraft((current) => current ? {
         ...current,
         status: 'error',
-        error: error instanceof Error ? error.message : '生成告知邮件失败。',
+        error: message,
       } : null);
+      toast.error(`${project.channelName} 的${NOTICE_META[type].shortLabel}生成失败：${message}`);
+    }
+  };
+
+  const refineLogisticsFromChinese = async () => {
+    if (!draft || draft.type !== 'logistics') return;
+    const chineseBody = draft.translatedBody.trim();
+    if (!chineseBody) {
+      toast.error('请先填写需要转换的中文邮件内容。');
+      return;
+    }
+
+    setDraft((current) => current ? { ...current, status: 'refining', error: undefined } : null);
+    try {
+      const response = await fetch('/api/ai', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          action: 'polishCooperationNotice',
+          noticeType: 'logistics',
+          noticePrompt: settings.aiLogisticsNoticePrompt,
+          chineseBody,
+          targetLanguage: draft.language || project.region,
+          currentSubject: draft.subject,
+          project: {
+            channelName: project.channelName,
+            region: project.region,
+            product: project.product,
+            cooperationType: project.cooperationType,
+            shippingDate: project.shippingDate,
+            shippingTracking: project.shippingTracking,
+          },
+          modelProvider: settings.modelProvider,
+          customApiUrl: settings.customApiUrl,
+          customApiKey: settings.customApiKey,
+          customModelName: settings.customModelName,
+        }),
+      });
+      const result = await response.json();
+      if (!response.ok || !result.success) {
+        throw new Error(String(result.error || '根据中文润色外语邮件失败。'));
+      }
+      const cleanBody = stripConfiguredEmailSignature(
+        String(result.data?.body || '').trim(),
+        settings.emailSignature,
+      );
+      if (!cleanBody) throw new Error('AI 没有返回可用的外语邮件正文。');
+
+      setDraft((current) => current ? {
+        ...current,
+        status: 'ready',
+        subject: current.thread
+          ? replySubject(current.thread.subject)
+          : String(result.data?.subject || current.subject).trim(),
+        body: cleanBody,
+        language: String(result.data?.language || current.language).trim(),
+        riskNotes: Array.isArray(result.data?.riskNotes) ? result.data.riskNotes.map(String) : [],
+        missingInfo: Array.isArray(result.data?.missingInfo) ? result.data.missingInfo.map(String) : [],
+        chineseDirty: false,
+      } : null);
+      toast.success('已根据你确认的中文更新外语邮件，请检查后再保存草稿。');
+    } catch (error) {
+      setDraft((current) => current ? {
+        ...current,
+        status: 'ready',
+        error: error instanceof Error ? error.message : '根据中文润色外语邮件失败。',
+      } : null);
+      toast.error(error instanceof Error ? error.message : '根据中文润色外语邮件失败。');
     }
   };
 
@@ -361,6 +484,10 @@ export function CooperationEmailActions({ project, settings, onProjectUpdated }:
 
   const saveDraft = async () => {
     if (!draft) return;
+    if (draft.type === 'logistics' && draft.chineseDirty) {
+      toast.error('中文内容已修改，请先按中文更新外语邮件，再保存 Gmail 草稿。');
+      return;
+    }
     if (!auth?.accessToken) {
       toast.error('请先在“设置 > Gmail 邮件”连接 Gmail。');
       return;
@@ -429,6 +556,9 @@ export function CooperationEmailActions({ project, settings, onProjectUpdated }:
   };
 
   const activeMeta = draft ? NOTICE_META[draft.type] : null;
+  const draftBusy = draft?.status === 'refining'
+    || draft?.status === 'saving'
+    || draft?.status === 'writing';
   const alreadyNotified = draft?.type === 'logistics'
     ? project.logisticsNotified
     : project.discountNotified;
@@ -438,7 +568,6 @@ export function CooperationEmailActions({ project, settings, onProjectUpdated }:
 
   return (
     <section className="border-b border-slate-200 py-4">
-      <Toaster richColors position="top-center" />
       <h3 className="text-sm font-semibold text-slate-900">邮件动作</h3>
       <p className="mt-1 text-xs leading-5 text-slate-500">先生成并检查，再保存 Gmail 草稿；系统不会自动发送。</p>
 
@@ -513,7 +642,7 @@ export function CooperationEmailActions({ project, settings, onProjectUpdated }:
                 <Input
                   value={draft.subject}
                   className="mt-1.5 bg-white"
-                  disabled={draft.status === 'saving' || draft.status === 'writing'}
+                  disabled={draftBusy}
                   onChange={(event) => setDraft((current) => current ? { ...current, subject: event.target.value } : null)}
                 />
               </div>
@@ -522,11 +651,42 @@ export function CooperationEmailActions({ project, settings, onProjectUpdated }:
                 <Textarea
                   value={draft.body}
                   className="mt-1.5 min-h-40 resize-y bg-white leading-6"
-                  disabled={draft.status === 'saving' || draft.status === 'writing'}
+                  disabled={draftBusy}
                   onChange={(event) => setDraft((current) => current ? { ...current, body: event.target.value } : null)}
                 />
               </div>
-              {draft.translatedBody ? (
+              {draft.translatedBody && draft.type === 'logistics' ? (
+                <div className="rounded-lg border border-blue-200 bg-white/90 p-3">
+                  <div className="flex flex-wrap items-center justify-between gap-2">
+                    <div>
+                      <p className="text-xs font-medium text-slate-800">中文内容（可直接修改）</p>
+                      <p className="mt-0.5 text-[11px] text-slate-500">修改后点击下方按钮，系统才会更新对应语言的邮件正文。</p>
+                    </div>
+                    {draft.chineseDirty ? <Badge variant="outline" className="border-amber-200 bg-amber-50 text-amber-700">等待更新外语</Badge> : null}
+                  </div>
+                  <Textarea
+                    value={draft.translatedBody}
+                    className="mt-2 min-h-44 resize-y bg-white leading-6"
+                    disabled={draftBusy}
+                    onChange={(event) => setDraft((current) => current ? {
+                      ...current,
+                      translatedBody: event.target.value,
+                      chineseDirty: true,
+                    } : null)}
+                  />
+                  <Button
+                    type="button"
+                    variant="outline"
+                    size="sm"
+                    className="mt-2 border-blue-200 bg-blue-50 text-blue-700 hover:bg-blue-100"
+                    disabled={!draft.translatedBody.trim() || draftBusy}
+                    onClick={() => void refineLogisticsFromChinese()}
+                  >
+                    {draft.status === 'refining' ? <Loader2 className="h-4 w-4 animate-spin" /> : <WandSparkles className="h-4 w-4" />}
+                    {draft.status === 'refining' ? '正在更新外语邮件…' : `按中文更新${draft.language ? `为${draft.language}` : '对应语言'}`}
+                  </Button>
+                </div>
+              ) : draft.translatedBody ? (
                 <details open className="rounded-lg border border-slate-200 bg-white/80 px-3 py-2">
                   <summary className="cursor-pointer text-xs font-medium text-slate-700">中文对照</summary>
                   <p className="mt-2 whitespace-pre-wrap text-xs leading-6 text-slate-600">{draft.translatedBody}</p>
@@ -542,10 +702,10 @@ export function CooperationEmailActions({ project, settings, onProjectUpdated }:
               ) : null}
               {draft.error ? <p className="text-xs text-red-700">{draft.error}</p> : null}
               <div className="flex flex-wrap gap-2 border-t border-blue-100 pt-3">
-                <Button variant="outline" size="sm" onClick={() => void generateNotice(draft.type)} disabled={draft.status === 'saving' || draft.status === 'writing'}>
+                <Button variant="outline" size="sm" onClick={() => void generateNotice(draft.type)} disabled={draftBusy}>
                   <RefreshCw className="h-4 w-4" />重新生成
                 </Button>
-                <Button size="sm" onClick={() => setConfirmDraftOpen(true)} disabled={!draft.subject.trim() || !draft.body.trim() || draft.status === 'saving' || draft.status === 'writing'}>
+                <Button size="sm" onClick={() => setConfirmDraftOpen(true)} disabled={!draft.subject.trim() || !draft.body.trim() || draft.chineseDirty || draftBusy}>
                   {draft.status === 'saving' ? <Loader2 className="h-4 w-4 animate-spin" /> : <Save className="h-4 w-4" />}
                   {draft.status === 'saved' || draft.status === 'written' ? '重新保存 Gmail 草稿' : '保存 Gmail 草稿'}
                 </Button>
