@@ -21,11 +21,13 @@ import {
   subMonths,
 } from 'date-fns';
 import { zhCN } from 'date-fns/locale';
+import { toast } from 'sonner';
 import {
   AlertCircle,
   AlertTriangle,
   CalendarDays,
   Check,
+  ChevronDown,
   ChevronLeft,
   ChevronRight,
   ExternalLink,
@@ -43,8 +45,11 @@ import {
 import { Badge } from '@/components/ui/badge';
 import { Avatar, AvatarFallback, AvatarImage } from '@/components/ui/avatar';
 import { Button } from '@/components/ui/button';
+import { Checkbox } from '@/components/ui/checkbox';
 import { Input } from '@/components/ui/input';
 import { CooperationEmailActions } from '@/components/cooperation-email-actions';
+import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover';
+import { Separator } from '@/components/ui/separator';
 import {
   Select,
   SelectContent,
@@ -63,14 +68,17 @@ import {
 import { useSettings } from '@/lib/data';
 import {
   fetchFeishuRecordSnapshot,
+  invalidateFeishuRecordsCache,
   type CachedFeishuRecord,
 } from '@/lib/feishu-record-cache';
 import {
   COOPERATION_STAGE_META,
   COOPERATION_STAGES,
   formatCooperationDate,
+  formatCooperationFullDate,
   formatStageDuration,
   mapFeishuCooperationRecord,
+  matchesCooperationStageFilter,
   type CooperationProject,
   type CooperationStage,
 } from '@/lib/cooperation-projects';
@@ -92,6 +100,69 @@ type CalendarProjectEvent = {
 
 const WEEKDAYS = ['周一', '周二', '周三', '周四', '周五', '周六', '周日'];
 const EMPTY_FEISHU_MAPPING = {};
+
+function StageMultiSelect({
+  value,
+  onChange,
+}: {
+  value: CooperationStage[];
+  onChange: (value: CooperationStage[]) => void;
+}) {
+  const selectedStages = new Set(value);
+  const summary = value.length === 0
+    ? '全部阶段'
+    : value.length === 1
+      ? COOPERATION_STAGE_META[value[0]].label
+      : `已选 ${value.length} 个阶段`;
+
+  const toggleStage = (stage: CooperationStage) => {
+    onChange(
+      selectedStages.has(stage)
+        ? value.filter((item) => item !== stage)
+        : [...value, stage],
+    );
+  };
+
+  return (
+    <Popover>
+      <PopoverTrigger asChild>
+        <Button
+          type="button"
+          variant="outline"
+          className="h-9 w-[150px] justify-between bg-background px-3 text-xs font-normal"
+          aria-label={`筛选合作阶段：${summary}`}
+        >
+          <span className="truncate">{summary}</span>
+          <ChevronDown data-icon="inline-end" />
+        </Button>
+      </PopoverTrigger>
+      <PopoverContent align="start" className="w-56 p-2">
+        <div className="flex flex-col gap-1">
+          <label className="flex cursor-pointer items-center gap-2 rounded-md px-2 py-2 text-xs hover:bg-muted">
+            <Checkbox
+              checked={value.length === 0}
+              onCheckedChange={() => onChange([])}
+            />
+            <span className="font-medium">全部阶段</span>
+          </label>
+          <Separator className="my-1" />
+          {COOPERATION_STAGES.map((stage) => (
+            <label
+              key={stage}
+              className="flex cursor-pointer items-center gap-2 rounded-md px-2 py-2 text-xs hover:bg-muted"
+            >
+              <Checkbox
+                checked={selectedStages.has(stage)}
+                onCheckedChange={() => toggleStage(stage)}
+              />
+              <span>{COOPERATION_STAGE_META[stage].label}</span>
+            </label>
+          ))}
+        </div>
+      </PopoverContent>
+    </Popover>
+  );
+}
 
 function uniqueValues(values: string[], ignoredValue?: string) {
   return Array.from(new Set(values.filter((value) => value && value !== ignoredValue)))
@@ -252,7 +323,7 @@ function ProjectsTable({ projects, selectedId, onSelect }: {
             <TableHead className="w-[110px] text-xs font-medium text-slate-600">合作日期</TableHead>
             <TableHead className="w-[190px] text-xs font-medium text-slate-600">合作项目</TableHead>
             <TableHead className="w-[135px] text-xs font-medium text-slate-600">当前进度</TableHead>
-            <TableHead className="w-[112px] text-xs font-medium text-slate-600">阶段时间</TableHead>
+            <TableHead className="w-[145px] text-xs font-medium text-slate-600">阶段时间</TableHead>
             <TableHead className="w-[180px] text-xs font-medium text-slate-600">下一步</TableHead>
             <TableHead className="w-[105px] text-xs font-medium text-slate-600">预计上线</TableHead>
             <TableHead className="w-[150px] text-xs font-medium text-slate-600">风险</TableHead>
@@ -286,7 +357,7 @@ function ProjectsTable({ projects, selectedId, onSelect }: {
                 <p className="mt-1 text-[10px] text-slate-400">自动判断</p>
               </TableCell>
               <TableCell>
-                <p className="text-xs text-slate-700">{formatCooperationDate(project.stageDate)}</p>
+                <p className="whitespace-nowrap text-xs text-slate-700">{formatCooperationFullDate(project.stageDate)}</p>
                 <p className="mt-1 text-[10px] text-slate-400">{formatStageDuration(project.stageDate)}</p>
               </TableCell>
               <TableCell className="text-xs text-slate-700">{project.nextAction}</TableCell>
@@ -479,24 +550,111 @@ function DetailValue({ label, value }: { label: string; value: string }) {
   );
 }
 
-function ReadonlyCheck({ checked, label }: { checked: boolean; label: string }) {
+type NotificationFieldKey = 'logisticsNotified' | 'discountNotified';
+
+function NotificationCheck({
+  checked,
+  disabled,
+  label,
+  onCheckedChange,
+}: {
+  checked: boolean;
+  disabled: boolean;
+  label: string;
+  onCheckedChange: (checked: boolean) => void;
+}) {
   return (
-    <div className="flex items-center gap-2 py-1.5 text-xs text-slate-700">
-      <span className={`flex h-4 w-4 items-center justify-center rounded border ${checked ? 'border-blue-600 bg-blue-600 text-white' : 'border-slate-300 bg-white'}`}>
-        {checked ? <Check className="h-3 w-3" /> : null}
-      </span>
-      {label}
-    </div>
+    <label className={`flex items-center gap-2 py-1.5 text-xs text-slate-700 ${disabled ? 'cursor-wait' : 'cursor-pointer'}`}>
+      <Checkbox
+        checked={checked}
+        disabled={disabled}
+        onCheckedChange={(nextChecked) => onCheckedChange(nextChecked === true)}
+      />
+      <span>{label}</span>
+      {disabled ? <LoaderCircle className="h-3.5 w-3.5 animate-spin text-slate-400" /> : null}
+    </label>
   );
 }
 
-function ProjectDetail({ project, settings, feishuUrl, onProjectUpdated, onClose }: {
+function ProjectDetail({
+  project,
+  settings,
+  feishuUrl,
+  onNotificationUpdated,
+  onProjectUpdated,
+  onClose,
+}: {
   project: CooperationProject;
   settings: ReturnType<typeof useSettings>['settings'];
   feishuUrl: string;
+  onNotificationUpdated: (recordId: string, fieldName: string, checked: boolean) => void;
   onProjectUpdated: () => Promise<void>;
   onClose: () => void;
 }) {
+  const [pendingValues, setPendingValues] = useState<Partial<Record<NotificationFieldKey, boolean>>>({});
+  const [updatingFields, setUpdatingFields] = useState<Set<NotificationFieldKey>>(() => new Set());
+
+  useEffect(() => {
+    setPendingValues((current) => {
+      const next = { ...current };
+      if (
+        !updatingFields.has('logisticsNotified')
+        && current.logisticsNotified === project.logisticsNotified
+      ) delete next.logisticsNotified;
+      if (
+        !updatingFields.has('discountNotified')
+        && current.discountNotified === project.discountNotified
+      ) delete next.discountNotified;
+      return next;
+    });
+  }, [project.discountNotified, project.logisticsNotified, updatingFields]);
+
+  const updateNotification = async (key: NotificationFieldKey, checked: boolean) => {
+    const label = key === 'logisticsNotified' ? '物流信息已告知' : '折扣信息已告知';
+    const fieldName = settings.feishuCooperationFieldMapping?.[key];
+    if (!feishuUrl || !fieldName) {
+      toast.error(`请先在“设置 > 飞书”映射“${label}”字段。`);
+      return;
+    }
+
+    setPendingValues((current) => ({ ...current, [key]: checked }));
+    setUpdatingFields((current) => new Set(current).add(key));
+    try {
+      const response = await fetch('/api/feishu/records', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          action: 'update',
+          url: feishuUrl,
+          recordId: project.id,
+          fields: { [fieldName]: checked },
+        }),
+      });
+      const result = await response.json();
+      if (!response.ok || !result.success) {
+        throw new Error(String(result.error || '写回飞书失败。'));
+      }
+      onNotificationUpdated(project.id, fieldName, checked);
+      toast.success(`“${label}”已${checked ? '勾选' : '取消勾选'}并写回飞书。`);
+    } catch (error) {
+      setPendingValues((current) => {
+        const next = { ...current };
+        delete next[key];
+        return next;
+      });
+      toast.error(error instanceof Error ? error.message : '写回飞书失败。');
+    } finally {
+      setUpdatingFields((current) => {
+        const next = new Set(current);
+        next.delete(key);
+        return next;
+      });
+    }
+  };
+
+  const logisticsNotified = pendingValues.logisticsNotified ?? project.logisticsNotified;
+  const discountNotified = pendingValues.discountNotified ?? project.discountNotified;
+
   return (
     <div className="flex h-full flex-col bg-white">
       <header className="flex shrink-0 items-start justify-between border-b border-slate-200 px-4 py-4">
@@ -558,8 +716,18 @@ function ProjectDetail({ project, settings, feishuUrl, onProjectUpdated, onClose
 
         <section className="border-b border-slate-200 py-4">
           <h3 className="mb-2 text-sm font-semibold text-slate-900">关键事项</h3>
-          <ReadonlyCheck checked={project.logisticsNotified} label="物流信息已告知" />
-          <ReadonlyCheck checked={project.discountNotified} label="折扣信息已告知" />
+          <NotificationCheck
+            checked={logisticsNotified}
+            disabled={updatingFields.has('logisticsNotified')}
+            label="物流信息已告知"
+            onCheckedChange={(checked) => void updateNotification('logisticsNotified', checked)}
+          />
+          <NotificationCheck
+            checked={discountNotified}
+            disabled={updatingFields.has('discountNotified')}
+            label="折扣信息已告知"
+            onCheckedChange={(checked) => void updateNotification('discountNotified', checked)}
+          />
           <dl className="mt-1">
             <DetailValue label="发货时间" value={formatCooperationDate(project.shippingDate)} />
             <DetailValue label="到货时间" value={formatCooperationDate(project.arrivalDate)} />
@@ -652,7 +820,7 @@ export function CooperationProjectsPage({
   const [selectedProject, setSelectedProject] = useState<CooperationProject>();
   const [search, setSearch] = useState('');
   const deferredSearch = useDeferredValue(search);
-  const [stageFilter, setStageFilter] = useState<CooperationStage | 'all'>('all');
+  const [stageFilters, setStageFilters] = useState<CooperationStage[]>([]);
   const [productFilter, setProductFilter] = useState('all');
   const [siteFilter, setSiteFilter] = useState('all');
   const [riskFilter, setRiskFilter] = useState<RiskFilter>('all');
@@ -687,6 +855,18 @@ export function CooperationProjectsPage({
     }
   }, [url]);
   const refreshProjects = useCallback(() => loadRecords(true), [loadRecords]);
+
+  const updateNotificationRecord = useCallback((recordId: string, fieldName: string, checked: boolean) => {
+    invalidateFeishuRecordsCache(url);
+    setRecords((current) => current.map((record) => (
+      record.record_id === recordId
+        ? { ...record, fields: { ...record.fields, [fieldName]: checked } }
+        : record
+    )));
+    const updated = Date.now();
+    setUpdatedAt(updated);
+    lastLoadedAtRef.current = updated;
+  }, [url]);
 
   useEffect(() => {
     hasLoadedRef.current = false;
@@ -770,7 +950,7 @@ export function CooperationProjectsPage({
       .filter((project) => {
         const haystack = [project.channelName, project.product, project.site, project.region, project.channelUrl].join(' ').toLowerCase();
         if (query && !haystack.includes(query)) return false;
-        if (stageFilter !== 'all' && project.stage !== stageFilter) return false;
+        if (!matchesCooperationStageFilter(project.stage, stageFilters)) return false;
         if (productFilter !== 'all' && project.product !== productFilter) return false;
         if (siteFilter !== 'all' && project.site !== siteFilter) return false;
         if (riskFilter === 'risk' && project.risks.length === 0) return false;
@@ -791,7 +971,7 @@ export function CooperationProjectsPage({
         if (right.cooperationDate) return 1;
         return left.channelName.localeCompare(right.channelName, 'zh-CN');
       });
-  }, [dateFrom, dateTo, deferredSearch, productFilter, projects, riskFilter, siteFilter, stageFilter]);
+  }, [dateFrom, dateTo, deferredSearch, productFilter, projects, riskFilter, siteFilter, stageFilters]);
 
   if (settingsLoading || (loading && url)) {
     return (
@@ -805,7 +985,7 @@ export function CooperationProjectsPage({
   }
   if (!url) return <EmptyState onOpenSettings={onOpenSettings} />;
 
-  const missingNewMappings = ['discountCode', 'filmingCompleteDate', 'logisticsNotified', 'discountNotified']
+  const missingNewMappings = ['filmingCompleteDate', 'logisticsNotified', 'discountNotified']
     .filter((key) => !mapping[key as keyof typeof mapping]).length;
 
   return (
@@ -850,10 +1030,7 @@ export function CooperationProjectsPage({
               <Search className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-slate-400" />
               <Input value={search} onChange={(event) => setSearch(event.target.value)} placeholder="搜索红人或产品" className="h-9 border-slate-200 pl-9 text-xs" />
             </div>
-            <Select value={stageFilter} onValueChange={(value) => setStageFilter(value as CooperationStage | 'all')}>
-              <SelectTrigger className="h-9 w-[135px] border-slate-200 text-xs"><SelectValue placeholder="合作阶段" /></SelectTrigger>
-              <SelectContent><SelectItem value="all">全部阶段</SelectItem>{COOPERATION_STAGES.map((stage) => <SelectItem key={stage} value={stage}>{COOPERATION_STAGE_META[stage].label}</SelectItem>)}</SelectContent>
-            </Select>
+            <StageMultiSelect value={stageFilters} onChange={setStageFilters} />
             <Select value={productFilter} onValueChange={setProductFilter}>
               <SelectTrigger className="h-9 w-[140px] border-slate-200 text-xs"><SelectValue placeholder="合作产品" /></SelectTrigger>
               <SelectContent><SelectItem value="all">全部产品</SelectItem>{products.map((product) => <SelectItem key={product} value={product}>{product}</SelectItem>)}</SelectContent>
@@ -917,9 +1094,11 @@ export function CooperationProjectsPage({
       {selectedProject ? (
         <aside className="hidden h-full w-[390px] shrink-0 border-l border-slate-200 xl:block">
           <ProjectDetail
+            key={selectedProject.id}
             project={selectedProject}
             settings={settings}
             feishuUrl={url}
+            onNotificationUpdated={updateNotificationRecord}
             onProjectUpdated={refreshProjects}
             onClose={() => setSelectedProject(undefined)}
           />
@@ -930,9 +1109,11 @@ export function CooperationProjectsPage({
         <div className="fixed inset-0 z-[70] bg-slate-950/20 xl:hidden" onMouseDown={() => setSelectedProject(undefined)}>
           <aside className="ml-auto h-full w-full max-w-[420px] shadow-xl" onMouseDown={(event) => event.stopPropagation()}>
             <ProjectDetail
+              key={selectedProject.id}
               project={selectedProject}
               settings={settings}
               feishuUrl={url}
+              onNotificationUpdated={updateNotificationRecord}
               onProjectUpdated={refreshProjects}
               onClose={() => setSelectedProject(undefined)}
             />

@@ -32,3 +32,14 @@ test('字段类型转换复用单条写入规则，多选标量转换为数组',
     new Map([['频道名', 1]]),
   ));
 });
+
+test('飞书复选框字段保留布尔值用于单条状态写回', () => {
+  const normalized = normalizeFeishuFieldsWithTypes(
+    { 物流信息已告知: true, 折扣信息已告知: false },
+    new Map([['物流信息已告知', 7], ['折扣信息已告知', 7]]),
+  );
+  assert.deepEqual(normalized, {
+    物流信息已告知: true,
+    折扣信息已告知: false,
+  });
+});

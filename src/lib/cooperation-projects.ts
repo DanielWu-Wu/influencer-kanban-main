@@ -65,6 +65,13 @@ export const COOPERATION_STAGE_META: Record<CooperationStage, {
   },
 };
 
+export function matchesCooperationStageFilter(
+  stage: CooperationStage,
+  selectedStages: CooperationStage[],
+) {
+  return selectedStages.length === 0 || selectedStages.includes(stage);
+}
+
 export type CooperationRisk = {
   code: string;
   label: string;
@@ -547,6 +554,17 @@ export function formatCooperationDate(value?: number, includeYear = false) {
   return new Intl.DateTimeFormat('zh-CN', includeYear
     ? { year: 'numeric', month: 'numeric', day: 'numeric' }
     : { month: 'numeric', day: 'numeric' }).format(date);
+}
+
+export function formatCooperationFullDate(value?: number) {
+  if (!value) return '未记录';
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return '未记录';
+  return new Intl.DateTimeFormat('zh-CN', {
+    year: 'numeric',
+    month: 'long',
+    day: 'numeric',
+  }).format(date);
 }
 
 export function formatStageDuration(value?: number, now = Date.now()) {
