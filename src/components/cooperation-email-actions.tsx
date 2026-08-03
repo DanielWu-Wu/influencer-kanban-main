@@ -328,8 +328,8 @@ export function CooperationEmailActions({
     }
   };
 
-  const refineLogisticsFromChinese = async () => {
-    if (!draft || draft.type !== 'logistics') return;
+  const refineNoticeFromChinese = async () => {
+    if (!draft) return;
     const chineseBody = draft.translatedBody.trim();
     if (!chineseBody) {
       toast.error('请先填写需要转换的中文邮件内容。');
@@ -343,8 +343,10 @@ export function CooperationEmailActions({
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           action: 'polishCooperationNotice',
-          noticeType: 'logistics',
-          noticePrompt: settings.aiLogisticsNoticePrompt,
+          noticeType: draft.type,
+          noticePrompt: draft.type === 'logistics'
+            ? settings.aiLogisticsNoticePrompt
+            : settings.aiDiscountNoticePrompt,
           chineseBody,
           targetLanguage: draft.language || project.region,
           currentSubject: draft.subject,
@@ -355,6 +357,7 @@ export function CooperationEmailActions({
             cooperationType: project.cooperationType,
             shippingDate: project.shippingDate,
             shippingTracking: project.shippingTracking,
+            discountCode: project.discountCode,
           },
           modelProvider: settings.modelProvider,
           customApiUrl: settings.customApiUrl,
@@ -384,7 +387,7 @@ export function CooperationEmailActions({
         missingInfo: Array.isArray(result.data?.missingInfo) ? result.data.missingInfo.map(String) : [],
         chineseDirty: false,
       } : null);
-      toast.success('已根据你确认的中文更新外语邮件，请检查后再保存草稿。');
+      toast.success(`已根据你确认的中文更新${NOTICE_META[draft.type].shortLabel}外语邮件，请检查后再保存草稿。`);
     } catch (error) {
       setDraft((current) => current ? {
         ...current,
@@ -484,7 +487,7 @@ export function CooperationEmailActions({
 
   const saveDraft = async () => {
     if (!draft) return;
-    if (draft.type === 'logistics' && draft.chineseDirty) {
+    if (draft.chineseDirty) {
       toast.error('中文内容已修改，请先按中文更新外语邮件，再保存 Gmail 草稿。');
       return;
     }
@@ -655,7 +658,7 @@ export function CooperationEmailActions({
                   onChange={(event) => setDraft((current) => current ? { ...current, body: event.target.value } : null)}
                 />
               </div>
-              {draft.translatedBody && draft.type === 'logistics' ? (
+              {draft.translatedBody ? (
                 <div className="rounded-lg border border-blue-200 bg-white/90 p-3">
                   <div className="flex flex-wrap items-center justify-between gap-2">
                     <div>
@@ -680,17 +683,12 @@ export function CooperationEmailActions({
                     size="sm"
                     className="mt-2 border-blue-200 bg-blue-50 text-blue-700 hover:bg-blue-100"
                     disabled={!draft.translatedBody.trim() || draftBusy}
-                    onClick={() => void refineLogisticsFromChinese()}
+                    onClick={() => void refineNoticeFromChinese()}
                   >
                     {draft.status === 'refining' ? <Loader2 className="h-4 w-4 animate-spin" /> : <WandSparkles className="h-4 w-4" />}
                     {draft.status === 'refining' ? '正在更新外语邮件…' : `按中文更新${draft.language ? `为${draft.language}` : '对应语言'}`}
                   </Button>
                 </div>
-              ) : draft.translatedBody ? (
-                <details open className="rounded-lg border border-slate-200 bg-white/80 px-3 py-2">
-                  <summary className="cursor-pointer text-xs font-medium text-slate-700">中文对照</summary>
-                  <p className="mt-2 whitespace-pre-wrap text-xs leading-6 text-slate-600">{draft.translatedBody}</p>
-                </details>
               ) : null}
               {draft.riskNotes.length || draft.missingInfo.length ? (
                 <div className="rounded-lg border border-amber-200 bg-amber-50 p-3 text-xs text-amber-800">
