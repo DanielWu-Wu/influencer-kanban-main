@@ -1,8 +1,11 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import {
+  appendFeishuEmailValue,
   buildFeishuRecordIndex,
+  extractFeishuEmails,
   findFeishuRecordMatch,
+  normalizeFeishuEmailValue,
   splitFeishuEmails,
 } from '../src/lib/feishu-record-index';
 
@@ -67,6 +70,38 @@ test('飞书超链接对象提取真实频道链接，单元格多邮箱分别�
   }, index);
   assert.equal(byUrl.kind, 'exact');
   assert.equal(byEmail.kind, 'exact');
+});
+
+test('飞书富文本邮箱对象只提取邮箱，不会生成 object Object', () => {
+  const richTextValue = [
+    { type: 'text', text: 'Creator: ' },
+    {
+      type: 'url',
+      text: 'Creator@Example.com',
+      link: 'https://example.com/creator',
+    },
+  ];
+
+  assert.deepEqual(extractFeishuEmails(richTextValue), ['Creator@Example.com']);
+  assert.equal(normalizeFeishuEmailValue(richTextValue), 'Creator@Example.com');
+  assert.doesNotMatch(normalizeFeishuEmailValue(richTextValue), /object Object/);
+});
+
+test('资源库邮箱补写清理历史 object Object 并按邮箱去重', () => {
+  assert.equal(
+    appendFeishuEmailValue(
+      '[object Object] existing@example.com',
+      'new@example.com',
+    ),
+    'existing@example.com\nnew@example.com',
+  );
+  assert.equal(
+    appendFeishuEmailValue(
+      { text: 'Existing@Example.com' },
+      'existing@example.com',
+    ),
+    'Existing@Example.com',
+  );
 });
 
 test('同一精确键命中多条记录时返回冲突，不静默取第一条', () => {

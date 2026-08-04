@@ -42,6 +42,7 @@ import { type AppSettings, useGmailAuth } from '@/lib/data';
 import {
   appendEmailSignature,
   applyPlainTextEmailSignature,
+  getEmailSignatureForContext,
   stripConfiguredEmailSignature,
   textToEmailHtml,
 } from '@/lib/email-content';
@@ -460,13 +461,18 @@ export function CooperationEmailActions({
       throw new Error('收件人、主题或邮件正文不完整。');
     }
     const cleanBody = stripConfiguredEmailSignature(draft.body, settings.emailSignature);
+    const emailSignature = getEmailSignatureForContext(
+      settings.emailSignature,
+      settings.emailSignatureScope,
+      'regular',
+    );
     const payload: Record<string, unknown> = {
       action: 'draft',
       accessToken,
       to: draft.recipient,
       subject: draft.subject.trim(),
-      body: applyPlainTextEmailSignature(cleanBody, settings.emailSignature),
-      bodyHtml: appendEmailSignature(textToEmailHtml(cleanBody), settings.emailSignature),
+      body: applyPlainTextEmailSignature(cleanBody, emailSignature),
+      bodyHtml: appendEmailSignature(textToEmailHtml(cleanBody), emailSignature),
     };
     if (draft.thread?.threadId) {
       payload.threadId = draft.thread.threadId;

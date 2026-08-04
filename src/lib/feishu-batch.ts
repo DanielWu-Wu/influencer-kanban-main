@@ -31,6 +31,22 @@ export function normalizeBatchOperationId(value: string) {
   return normalized;
 }
 
+function assertNoAccidentalObjectText(value: unknown, fieldName: string) {
+  if (typeof value === 'string' && value.includes('[object Object]')) {
+    throw new Error(
+      `字段“${fieldName}”包含异常对象文本“[object Object]”，已阻止写入。请刷新飞书数据后重试。`,
+    );
+  }
+  if (Array.isArray(value)) {
+    value.forEach((item) => assertNoAccidentalObjectText(item, fieldName));
+    return;
+  }
+  if (value && typeof value === 'object') {
+    Object.values(value as Record<string, unknown>)
+      .forEach((item) => assertNoAccidentalObjectText(item, fieldName));
+  }
+}
+
 export function normalizeFeishuFieldsWithTypes(
   fields: Record<string, unknown>,
   fieldTypes: Map<string, number>,
@@ -41,6 +57,11 @@ export function normalizeFeishuFieldsWithTypes(
       `飞书中找不到字段“${missingFieldNames.join('、')}”。字段可能已改名或删除，请到设置中对目标子表执行“只读检查子表”，确认映射后重新保存。`,
     );
   }
+
+  Object.entries(fields).forEach(([fieldName, value]) => {
+    assertNoAccidentalObjectText(value, fieldName);
+  });
+
   return Object.fromEntries(
     Object.entries(fields).map(([fieldName, value]) => {
       if (fieldTypes.get(fieldName) !== 4) return [fieldName, value];

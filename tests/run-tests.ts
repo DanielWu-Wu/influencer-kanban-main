@@ -10,3 +10,4 @@ import './local-date.test';
 import './creator-country-label.test';
 import './creator-language.test';
 import './feishu-write-guard.test';
+import './email-signature-scope.test';

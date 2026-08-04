@@ -45,6 +45,7 @@ import { DEFAULT_OUTREACH_PROMPT } from '@/lib/ai-prompts';
 import {
   appendEmailSignature,
   applyPlainTextEmailSignature,
+  getEmailSignatureForContext,
   stripConfiguredEmailSignature,
 } from '@/lib/email-content';
 import { sanitizeOutreachEmailBody } from '@/lib/outreach-draft-sanitizer';
@@ -62,9 +63,12 @@ import {
   type FeishuRecordSnapshot,
 } from '@/lib/feishu-record-cache';
 import {
+  appendFeishuEmailValue,
   buildFeishuRecordIndex,
+  extractFeishuEmails,
   findFeishuRecordMatch,
   flattenFeishuValue,
+  normalizeFeishuEmailValue,
   type FeishuRecordMatch,
 } from '@/lib/feishu-record-index';
 import type { FeishuBatchResult } from '@/lib/feishu-batch';
@@ -318,7 +322,7 @@ function buildResourceFields(
   putMappedField(fields, mapping, 'channelUrl', buildFeishuUrlValue(prospect));
   putMappedField(fields, mapping, 'channelId', prospect.channelId);
   putMappedField(fields, mapping, 'recentAverageViews', prospect.recentAverageViews);
-  putMappedField(fields, mapping, 'email', prospect.publicEmail);
+  putMappedField(fields, mapping, 'email', normalizeFeishuEmailValue(prospect.publicEmail));
   putMappedField(fields, mapping, 'notes', notes);
   return fields;
 }
@@ -338,7 +342,7 @@ function buildDevelopmentFields(prospect: Prospect, mapping: FeishuFieldMapping)
   putMappedField(fields, mapping, 'channelName', prospect.title);
   putMappedField(fields, mapping, 'region', prospect.country ? countryLabel(prospect.country) : '');
   putMappedField(fields, mapping, 'channelUrl', buildFeishuUrlValue(prospect));
-  putMappedField(fields, mapping, 'email', prospect.publicEmail);
+  putMappedField(fields, mapping, 'email', normalizeFeishuEmailValue(prospect.publicEmail));
   const developmentDate = new Date(prospect.createdAt);
   developmentDate.setHours(0, 0, 0, 0);
   putMappedField(fields, mapping, 'developmentDate', developmentDate.getTime());
@@ -354,7 +358,7 @@ function buildDevelopmentFields(prospect: Prospect, mapping: FeishuFieldMapping)
 
 function buildDevelopmentSyncFields(prospect: Prospect, mapping: FeishuFieldMapping) {
   const fields: Record<string, unknown> = {};
-  putMappedField(fields, mapping, 'email', prospect.publicEmail);
+  putMappedField(fields, mapping, 'email', normalizeFeishuEmailValue(prospect.publicEmail));
   putMappedField(fields, mapping, 'prospectingStatus', WORKFLOW_META[prospect.workflowStatus].label);
   putMappedField(fields, mapping, 'targetProduct', prospect.targetProduct);
   putMappedField(fields, mapping, 'cooperationType', prospect.cooperationType);
@@ -501,38 +505,13 @@ function formatPreviewValue(value: unknown): string {
     if (typeof objectValue.link === 'string') {
       return [objectValue.text, objectValue.link].filter(Boolean).join('\n');
     }
+    return flattenFeishuValue(value);
   }
   return String(value);
 }
 
-function normalizeEmailForCompare(value: string) {
-  return value.trim().toLowerCase();
-}
-
-function splitEmailValues(value: string) {
-  return value
-    .split(/[\n,，;；、\s]+/)
-    .map((item) => item.trim())
-    .filter(Boolean);
-}
-
 function firstValidEmail(value: string | undefined) {
-  return splitEmailValues(value || '').find((email) => /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) || '';
-}
-
-function formatFeishuEmailValue(value: unknown) {
-  if (value === null || value === undefined) return '';
-  if (typeof value === 'string') return value.trim();
-  return formatPreviewValue(value).trim();
-}
-
-function appendEmailValue(currentValue: string, email: string) {
-  const trimmedCurrentValue = currentValue.trim();
-  const trimmedEmail = email.trim();
-  if (!trimmedCurrentValue) return trimmedEmail;
-  const existingEmails = splitEmailValues(trimmedCurrentValue).map(normalizeEmailForCompare);
-  if (existingEmails.includes(normalizeEmailForCompare(trimmedEmail))) return trimmedCurrentValue;
-  return `${trimmedCurrentValue}\n${trimmedEmail}`;
+  return extractFeishuEmails(value || '')[0] || '';
 }
 
 function buildPendingResourceEmailSyncPreview(
@@ -540,7 +519,7 @@ function buildPendingResourceEmailSyncPreview(
   emailFieldName: string | undefined,
   resourceUrl: string | undefined,
 ): ResourceEmailSyncPreview {
-  const email = prospect.publicEmail?.trim();
+  const email = normalizeFeishuEmailValue(prospect.publicEmail);
   if (!email) return { status: 'missing_email' };
   if (!emailFieldName) return { status: 'missing_mapping' };
   if (!prospect.resourceRecordId) return { status: 'missing_record' };
@@ -555,13 +534,13 @@ function buildResourceEmailSyncPreview(
   resourceRecord: FeishuRecord | undefined,
   emailFieldName: string | undefined,
 ): ResourceEmailSyncPreview {
-  const email = prospect.publicEmail?.trim();
+  const email = normalizeFeishuEmailValue(prospect.publicEmail);
   if (!email) return { status: 'missing_email' };
   if (!emailFieldName) return { status: 'missing_mapping' };
   if (!prospect.resourceRecordId || !resourceRecord) return { status: 'missing_record' };
 
-  const currentValue = formatFeishuEmailValue(resourceRecord.fields[emailFieldName]);
-  const nextValue = appendEmailValue(currentValue, email);
+  const currentValue = normalizeFeishuEmailValue(resourceRecord.fields[emailFieldName]);
+  const nextValue = appendFeishuEmailValue(currentValue, email);
   if (nextValue === currentValue) {
     return {
       status: 'already_exists',
@@ -3224,6 +3203,11 @@ export function CreatorProspectingPage() {
       ...prospect.aiDraft,
       body: sanitizedBody,
     };
+    const emailSignature = getEmailSignatureForContext(
+      settings.emailSignature,
+      settings.emailSignatureScope,
+      'outreach',
+    );
     if (sanitizedBody !== prospect.aiDraft.body) {
       updateProspect(prospect.id, { aiDraft: draft });
     }
@@ -3249,8 +3233,8 @@ export function CreatorProspectingPage() {
             accessToken,
             to: prospect.publicEmail,
             subject: draft.subject,
-            body: applyPlainTextEmailSignature(draft.body, settings.emailSignature),
-            bodyHtml: appendEmailSignature(renderedBodyHtml, settings.emailSignature),
+            body: applyPlainTextEmailSignature(draft.body, emailSignature),
+            bodyHtml: appendEmailSignature(renderedBodyHtml, emailSignature),
             inlineImages: inlineProductImage ? [inlineProductImage] : [],
           }),
         });
@@ -3531,7 +3515,11 @@ export function CreatorProspectingPage() {
           <OutreachEmailTab
             prospects={outreachProspects}
             products={products}
-            emailSignature={settings.emailSignature}
+            emailSignature={getEmailSignatureForContext(
+              settings.emailSignature,
+              settings.emailSignatureScope,
+              'outreach',
+            )}
             generatingId={generatingId}
             regeneratingPart={regeneratingDraftPart}
             savingDraftId={savingDraftId}

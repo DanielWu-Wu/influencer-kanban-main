@@ -20,6 +20,7 @@ import {
 import type { PromptTemplate, PromptType } from './ai-prompts';
 import type { FeishuFieldMapping } from './feishu-mapping';
 import type { RecordAssistantSettings } from './record-assistant';
+import type { EmailSignatureScope } from './email-content';
 import { getSupabaseBrowserClient } from './supabase/client';
 import { formatLocalDateKey, parseLocalDateKey } from './local-date';
 
@@ -68,6 +69,7 @@ export interface AppSettings {
   brandName?: string;
   senderName?: string;
   emailSignature?: string;
+  emailSignatureScope?: EmailSignatureScope;
   emailSendDelaySeconds?: number;
   gmailClientId?: string;
   gmailClientSecret?: string;

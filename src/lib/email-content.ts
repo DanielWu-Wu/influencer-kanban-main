@@ -1,3 +1,15 @@
+export type EmailSignatureScope = 'outreach' | 'regular' | 'both';
+export type EmailSignatureContext = Exclude<EmailSignatureScope, 'both'>;
+
+export function getEmailSignatureForContext(
+  signature: string | undefined,
+  scope: EmailSignatureScope | undefined,
+  context: EmailSignatureContext,
+) {
+  const normalizedScope = scope || 'both';
+  return normalizedScope === 'both' || normalizedScope === context ? signature : undefined;
+}
+
 export function encodeUtf8Base64(value: string) {
   const bytes = new TextEncoder().encode(value);
   let binary = '';

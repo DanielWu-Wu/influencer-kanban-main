@@ -17,6 +17,7 @@ import {
   appendEmailSignature,
   buildRichRawEmail,
   emailHtmlToText,
+  getEmailSignatureForContext,
   isEmailContentEmpty,
   toBase64Url,
 } from '@/lib/email-content';
@@ -121,7 +122,14 @@ export function NewEmailComposer({
     if (!subject.trim()) throw new Error('请填写邮件主题。');
     if (isEmailContentEmpty(content)) throw new Error('请填写邮件正文。');
 
-    const finalContent = appendEmailSignature(content, settings.emailSignature);
+    const finalContent = appendEmailSignature(
+      content,
+      getEmailSignatureForContext(
+        settings.emailSignature,
+        settings.emailSignatureScope,
+        'regular',
+      ),
+    );
     const accessToken = await getAccessToken();
     const raw = toBase64Url(await buildRichRawEmail({
       to: to.trim(),

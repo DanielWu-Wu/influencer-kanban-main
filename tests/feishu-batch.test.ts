@@ -43,3 +43,20 @@ test('飞书复选框字段保留布尔值用于单条状态写回', () => {
     折扣信息已告知: false,
   });
 });
+
+test('飞书写入阻止意外字符串化的对象文本', () => {
+  assert.throws(
+    () => normalizeFeishuFieldsWithTypes(
+      { 联系邮箱: '[object Object]\ncreator@example.com' },
+      new Map([['联系邮箱', 1]]),
+    ),
+    /已阻止写入/,
+  );
+  assert.throws(
+    () => normalizeFeishuFieldsWithTypes(
+      { 频道链接: { text: '[object Object]', link: 'https://youtube.com/@creator' } },
+      new Map([['频道链接', 15]]),
+    ),
+    /频道链接/,
+  );
+});

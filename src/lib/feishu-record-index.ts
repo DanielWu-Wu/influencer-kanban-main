@@ -34,11 +34,42 @@ export function flattenFeishuValue(value: unknown): string {
   return '';
 }
 
+const FEISHU_EMAIL_PATTERN = /[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}/gi;
+
+function flattenEmailSource(value: unknown): string {
+  if (value === null || value === undefined) return '';
+  if (typeof value === 'string' || typeof value === 'number') return String(value);
+  if (Array.isArray(value)) return value.map(flattenEmailSource).filter(Boolean).join(' ');
+  if (typeof value === 'object') {
+    return Object.values(value as Record<string, unknown>)
+      .map(flattenEmailSource)
+      .filter(Boolean)
+      .join(' ');
+  }
+  return '';
+}
+
+export function extractFeishuEmails(value: unknown) {
+  const matches = flattenEmailSource(value).match(FEISHU_EMAIL_PATTERN) || [];
+  const seen = new Set<string>();
+  return matches.filter((email) => {
+    const normalized = email.toLowerCase();
+    if (seen.has(normalized)) return false;
+    seen.add(normalized);
+    return true;
+  });
+}
+
 export function splitFeishuEmails(value: unknown) {
-  return flattenFeishuValue(value)
-    .split(/[\n,，;；、\s]+/)
-    .map((item) => item.trim().toLowerCase())
-    .filter((item) => /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(item));
+  return extractFeishuEmails(value).map((email) => email.toLowerCase());
+}
+
+export function normalizeFeishuEmailValue(value: unknown) {
+  return extractFeishuEmails(value).join('\n');
+}
+
+export function appendFeishuEmailValue(currentValue: unknown, emailValue: unknown) {
+  return normalizeFeishuEmailValue([currentValue, emailValue]);
 }
 
 export function extractYouTubeHandle(value?: string) {

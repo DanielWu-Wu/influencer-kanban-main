@@ -6,8 +6,9 @@ import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Slider } from '@/components/ui/slider';
 import { Textarea } from '@/components/ui/textarea';
+import { RadioGroup, RadioGroupItem } from '@/components/ui/radio-group';
 import { useSettings } from '@/lib/data';
-import { sanitizeEmailHtml } from '@/lib/email-content';
+import { sanitizeEmailHtml, type EmailSignatureScope } from '@/lib/email-content';
 
 function clampDelay(value: number) {
   if (!Number.isFinite(value)) return 0;
@@ -23,6 +24,7 @@ function normalizeLinkUrl(value: string) {
 export function GmailSignatureSettings({ onBack }: { onBack: () => void }) {
   const { settings, updateSettings, loading } = useSettings();
   const [signature, setSignature] = useState('');
+  const [signatureScope, setSignatureScope] = useState<EmailSignatureScope>('both');
   const [sendDelay, setSendDelay] = useState(0);
   const [linkText, setLinkText] = useState('AFERIY EU');
   const [linkUrl, setLinkUrl] = useState('');
@@ -32,8 +34,14 @@ export function GmailSignatureSettings({ onBack }: { onBack: () => void }) {
   useEffect(() => {
     if (loading) return;
     setSignature(settings.emailSignature || '');
+    setSignatureScope(settings.emailSignatureScope || 'both');
     setSendDelay(clampDelay(settings.emailSendDelaySeconds ?? 0));
-  }, [loading, settings.emailSendDelaySeconds, settings.emailSignature]);
+  }, [
+    loading,
+    settings.emailSendDelaySeconds,
+    settings.emailSignature,
+    settings.emailSignatureScope,
+  ]);
 
   const handleInsertLink = () => {
     const normalizedUrl = normalizeLinkUrl(linkUrl);
@@ -56,6 +64,7 @@ export function GmailSignatureSettings({ onBack }: { onBack: () => void }) {
   const handleSave = () => {
     updateSettings({
       emailSignature: signature.trim(),
+      emailSignatureScope: signatureScope,
       emailSendDelaySeconds: clampDelay(sendDelay),
     });
     setSaved(true);
@@ -131,6 +140,44 @@ export function GmailSignatureSettings({ onBack }: { onBack: () => void }) {
                 发送邮件或保存 Gmail 草稿时，签名会自动添加在正文末尾。链接格式会自动转成可点击链接。
               </p>
             </div>
+
+            <RadioGroup
+              value={signatureScope}
+              onValueChange={(value) => setSignatureScope(value as EmailSignatureScope)}
+              className="mb-4 grid gap-3 md:grid-cols-3"
+              aria-label="邮件签名生效范围"
+            >
+              {[
+                {
+                  value: 'outreach',
+                  title: '仅开发信',
+                  description: '首封开发信和一次、二次 Follow Up',
+                },
+                {
+                  value: 'regular',
+                  title: '仅正常邮件',
+                  description: 'Gmail 写信、回复和合作项目告知邮件',
+                },
+                {
+                  value: 'both',
+                  title: '两者都生效',
+                  description: '所有由工作台创建的邮件',
+                },
+              ].map((option) => (
+                <label
+                  key={option.value}
+                  className="flex cursor-pointer items-start gap-3 rounded-lg border border-white/65 bg-white/55 p-3 transition-colors hover:bg-white/75 has-[[data-state=checked]]:border-primary/45 has-[[data-state=checked]]:bg-primary/5"
+                >
+                  <RadioGroupItem value={option.value} className="mt-0.5" />
+                  <span className="min-w-0">
+                    <span className="block text-sm font-medium">{option.title}</span>
+                    <span className="mt-1 block text-xs leading-5 text-muted-foreground">
+                      {option.description}
+                    </span>
+                  </span>
+                </label>
+              ))}
+            </RadioGroup>
 
             <div className="mb-4 rounded-lg border border-white/65 bg-white/55 p-4">
               <div className="mb-3 flex items-center gap-2 text-sm font-medium">

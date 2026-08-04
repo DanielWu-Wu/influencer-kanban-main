@@ -29,6 +29,7 @@ import {
   appendEmailSignature,
   buildRichRawEmail,
   emailHtmlToText,
+  getEmailSignatureForContext,
   isEmailContentEmpty,
   stripConfiguredEmailSignature,
   toBase64Url,
@@ -593,7 +594,14 @@ export function EmailComposer({
     if (!recipientEmail) {
       throw new Error('未找到可用的红人邮箱；已排除 Mailsuite 等系统通知邮箱。');
     }
-    const finalReply = appendEmailSignature(replyContent, settings.emailSignature);
+    const finalReply = appendEmailSignature(
+      replyContent,
+      getEmailSignatureForContext(
+        settings.emailSignature,
+        settings.emailSignatureScope,
+        'regular',
+      ),
+    );
     const accessToken = await getAccessToken();
     const references = [externalMessage?.references, externalMessage?.rfcMessageId]
       .filter(Boolean)

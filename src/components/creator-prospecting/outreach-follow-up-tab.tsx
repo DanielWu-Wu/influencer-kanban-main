@@ -43,6 +43,7 @@ import {
 import {
   appendEmailSignature,
   applyPlainTextEmailSignature,
+  getEmailSignatureForContext,
   stripConfiguredEmailSignature,
   textToEmailHtml,
 } from '@/lib/email-content';
@@ -915,7 +916,12 @@ export function OutreachFollowUpTab({ settings, auth, onAuthRefresh }: Props) {
       .join(' ');
     const subject = /^re:/i.test(initialEmail.subject) ? initialEmail.subject : `Re: ${initialEmail.subject}`;
     const cleanBody = stripConfiguredEmailSignature(draft.body, settings.emailSignature);
-    const bodyHtml = appendEmailSignature(textToEmailHtml(cleanBody), settings.emailSignature);
+    const emailSignature = getEmailSignatureForContext(
+      settings.emailSignature,
+      settings.emailSignatureScope,
+      'outreach',
+    );
+    const bodyHtml = appendEmailSignature(textToEmailHtml(cleanBody), emailSignature);
     const response = await fetch('/api/gmail', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
@@ -924,7 +930,7 @@ export function OutreachFollowUpTab({ settings, auth, onAuthRefresh }: Props) {
         accessToken,
         to: record.email,
         subject,
-        body: applyPlainTextEmailSignature(cleanBody, settings.emailSignature),
+        body: applyPlainTextEmailSignature(cleanBody, emailSignature),
         bodyHtml,
         threadId: latestOutbound.threadId,
         inReplyTo: latestOutbound.rfcMessageId,
