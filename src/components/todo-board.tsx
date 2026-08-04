@@ -10,7 +10,7 @@ import { Card, CardContent } from '@/components/ui/card';
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from '@/components/ui/dialog';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { 
-  CheckCircle2, Circle, Clock, Flag, Plus, Trash2,
+  CheckCircle2, Circle, Clock, Flag, Pencil, Plus, Trash2,
   Flame, AlertCircle, Sparkles, Mail, RefreshCw, ArrowRight
 } from 'lucide-react';
 import { formatLocalDateKey, parseLocalDateKey } from '@/lib/local-date';
@@ -20,6 +20,7 @@ import { YouTubeChannelAvatar } from '@/components/youtube-channel-avatar';
 interface TodoBoardProps {
   todos: TodoItem[];
   onAdd: (todo: Omit<TodoItem, 'id' | 'createdAt'>) => void;
+  onUpdate: (id: string, updates: Partial<TodoItem>) => void;
   onToggle: (id: string) => void;
   onDelete: (id: string) => void;
   gmailItems: DailyGmailTodo[];
@@ -38,9 +39,40 @@ const PRIORITY_CONFIG: Record<TodoPriority, { label: string; color: string; bgCo
   urgent: { label: '紧急', color: 'text-red-600', bgColor: 'bg-red-100', icon: <AlertCircle className="w-3 h-3" /> },
 };
 
+type TodoDraft = {
+  title: string;
+  description: string;
+  priority: TodoPriority;
+  dueDate: string;
+  dueTime: string;
+  tags: string[];
+};
+
+type UnifiedTodo =
+  | { kind: 'manual'; key: string; sortTime: number; todo: TodoItem }
+  | { kind: 'gmail'; key: string; sortTime: number; item: DailyGmailTodo };
+
+function createTodoDraft(): TodoDraft {
+  return {
+    title: '',
+    description: '',
+    priority: 'medium',
+    dueDate: formatLocalDateKey(),
+    dueTime: '',
+    tags: [],
+  };
+}
+
+function toTimestamp(value?: string) {
+  if (!value) return 0;
+  const timestamp = Date.parse(value);
+  return Number.isNaN(timestamp) ? 0 : timestamp;
+}
+
 export function TodoBoard({
   todos,
   onAdd,
+  onUpdate,
   onToggle,
   onDelete,
   gmailItems,
@@ -51,16 +83,10 @@ export function TodoBoard({
   onOpenGmail,
   onToggleGmail,
 }: TodoBoardProps) {
-  const [showAddDialog, setShowAddDialog] = useState(false);
+  const [dialogMode, setDialogMode] = useState<'add' | 'edit' | null>(null);
+  const [editingTodoId, setEditingTodoId] = useState<string | null>(null);
   const [filterPriority, setFilterPriority] = useState<TodoPriority | 'all'>('all');
-  const [newTodo, setNewTodo] = useState(() => ({
-    title: '',
-    description: '',
-    priority: 'medium' as TodoPriority,
-    dueDate: formatLocalDateKey(),
-    dueTime: '',
-    tags: [] as string[],
-  }));
+  const [todoDraft, setTodoDraft] = useState<TodoDraft>(createTodoDraft);
 
   const pendingTodos = todos.filter(t => t.status === 'pending');
   const completedTodos = todos.filter(t => t.status === 'completed');
@@ -68,30 +94,74 @@ export function TodoBoard({
   const filteredPending = filterPriority === 'all'
     ? pendingTodos
     : pendingTodos.filter(t => t.priority === filterPriority);
-  const pendingGmailItems = gmailItems.filter((item) => !item.completed);
+  const pendingItems: UnifiedTodo[] = [
+    ...filteredPending.map((todo) => ({
+      kind: 'manual' as const,
+      key: `manual-${todo.id}`,
+      sortTime: toTimestamp(todo.createdAt),
+      todo,
+    })),
+    ...(filterPriority === 'all'
+      ? gmailItems.filter((item) => !item.completed).map((item) => ({
+          kind: 'gmail' as const,
+          key: `gmail-${item.messageId}`,
+          sortTime: toTimestamp(item.date),
+          item,
+        }))
+      : []),
+  ].sort((a, b) => b.sortTime - a.sortTime);
+  const completedItems: UnifiedTodo[] = [
+    ...completedTodos.map((todo) => ({
+      kind: 'manual' as const,
+      key: `manual-${todo.id}`,
+      sortTime: toTimestamp(todo.completedAt || todo.createdAt),
+      todo,
+    })),
+    ...gmailItems.filter((item) => item.completed).map((item) => ({
+      kind: 'gmail' as const,
+      key: `gmail-${item.messageId}`,
+      sortTime: toTimestamp(item.completedAt || item.date),
+      item,
+    })),
+  ].sort((a, b) => b.sortTime - a.sortTime);
 
-  const handleAddTodo = () => {
-    if (!newTodo.title.trim()) return;
-    
-    onAdd({
-      title: newTodo.title,
-      description: newTodo.description || undefined,
-      priority: newTodo.priority,
-      status: 'pending',
-      dueDate: newTodo.dueDate || undefined,
-      dueTime: newTodo.dueTime || undefined,
-      tags: newTodo.tags,
-    });
+  const openAddDialog = () => {
+    setEditingTodoId(null);
+    setTodoDraft(createTodoDraft());
+    setDialogMode('add');
+  };
 
-    setNewTodo({
-      title: '',
-      description: '',
-      priority: 'medium',
-      dueDate: formatLocalDateKey(),
-      dueTime: '',
-      tags: [],
+  const openEditDialog = (todo: TodoItem) => {
+    setEditingTodoId(todo.id);
+    setTodoDraft({
+      title: todo.title,
+      description: todo.description || '',
+      priority: todo.priority,
+      dueDate: todo.dueDate || '',
+      dueTime: todo.dueTime || '',
+      tags: todo.tags,
     });
-    setShowAddDialog(false);
+    setDialogMode('edit');
+  };
+
+  const handleSaveTodo = () => {
+    const title = todoDraft.title.trim();
+    if (!title) return;
+    const updates = {
+      title,
+      description: todoDraft.description.trim() || undefined,
+      priority: todoDraft.priority,
+      dueDate: todoDraft.dueDate || undefined,
+      dueTime: todoDraft.dueTime || undefined,
+      tags: todoDraft.tags,
+    };
+    if (dialogMode === 'edit' && editingTodoId) {
+      onUpdate(editingTodoId, updates);
+    } else {
+      onAdd({ ...updates, status: 'pending' });
+    }
+    setDialogMode(null);
+    setEditingTodoId(null);
   };
 
   const getDueDateTime = (dateStr: string, timeStr?: string) => {
@@ -138,11 +208,22 @@ export function TodoBoard({
           <div>
             <h2 className="text-xl font-semibold">今日待办</h2>
             <p className="text-sm text-muted-foreground">
-              {filteredPending.length} 项手动任务 · {pendingGmailItems.length} 封待处理来信
+              {pendingItems.length} 项待完成 · {completedItems.length} 项已完成
             </p>
           </div>
         </div>
         <div className="flex items-center gap-2">
+          <Button
+            type="button"
+            variant="ghost"
+            size="sm"
+            onClick={onRefreshGmail}
+            disabled={gmailRefreshing}
+            title="刷新今日 Gmail 来信"
+          >
+            <RefreshCw className={`mr-1 h-3.5 w-3.5 ${gmailRefreshing ? 'animate-spin' : ''}`} />
+            刷新来信
+          </Button>
           <select
             value={filterPriority}
             onChange={(e) => setFilterPriority(e.target.value as TodoPriority | 'all')}
@@ -154,7 +235,7 @@ export function TodoBoard({
             <option value="medium">中</option>
             <option value="low">低</option>
           </select>
-          <Button size="sm" onClick={() => setShowAddDialog(true)} className="shadow-sm">
+          <Button size="sm" onClick={openAddDialog} className="shadow-sm">
             <Plus className="w-4 h-4 mr-1" />
             添加
           </Button>
@@ -163,202 +244,125 @@ export function TodoBoard({
 
       {/* 待办列表 */}
       <div className="flex-1 overflow-y-auto space-y-3">
-        <section className="space-y-3">
-          <div className="flex items-center justify-between px-1">
-            <div>
-              <h3 className="flex items-center gap-2 text-sm font-semibold">
-                <Mail className="h-4 w-4 text-blue-600" />
-                今日 Gmail 来信
-                {!gmailLoading && <Badge variant="secondary">{pendingGmailItems.length}</Badge>}
-              </h3>
-              <p className="mt-0.5 text-xs text-muted-foreground">只显示已匹配到飞书红人资料的正常来信</p>
-            </div>
-            <Button
-              type="button"
-              variant="ghost"
-              size="sm"
-              onClick={onRefreshGmail}
-              disabled={gmailRefreshing}
-            >
-              <RefreshCw className={`mr-1 h-3.5 w-3.5 ${gmailRefreshing ? 'animate-spin' : ''}`} />
-              刷新
-            </Button>
-          </div>
-
-          {gmailError ? (
-            <div className="flex items-center justify-between gap-3 rounded-xl border border-amber-200 bg-amber-50/70 px-4 py-3 text-sm text-amber-800">
-              <span className="flex items-center gap-2"><AlertCircle className="h-4 w-4" />{gmailError}</span>
-              <Button type="button" variant="outline" size="sm" onClick={onRefreshGmail}>重试</Button>
-            </div>
-          ) : gmailLoading ? (
-            <div className="rounded-xl border border-border/60 bg-white/55 px-4 py-5 text-sm text-muted-foreground">
-              正在读取今日 Gmail 来信并匹配红人资料…
-            </div>
-          ) : gmailItems.length === 0 ? (
-            <div className="rounded-xl border border-dashed border-border/70 bg-white/35 px-4 py-5 text-center text-sm text-muted-foreground">
-              今天暂时没有匹配到红人的新来信
-            </div>
-          ) : (
-            gmailItems.map((item) => (
-              <Card
-                key={item.messageId}
-                className={item.completed
-                  ? 'border-slate-200 bg-slate-50/55 opacity-75 transition-shadow hover:shadow-apple-hover'
-                  : 'border-blue-100 bg-blue-50/25 transition-shadow hover:shadow-apple-hover'}
-              >
-                <CardContent className="flex items-start gap-3 p-4">
-                  <button
-                    type="button"
-                    className="mt-2 flex-shrink-0"
-                    aria-label={item.completed ? '取消完成这封来信' : '标记这封来信为已完成'}
-                    title={item.completed ? '点击恢复为待完成' : '标记为已完成'}
-                    onClick={() => onToggleGmail(item.messageId)}
-                  >
-                    {item.completed ? (
-                      <CheckCircle2 className="h-6 w-6 text-green-500" />
-                    ) : (
-                      <Circle className="h-6 w-6 text-slate-300 transition-colors hover:text-blue-500" />
-                    )}
-                  </button>
-                  <YouTubeChannelAvatar
-                    avatar={item.avatar}
-                    fallback={item.channelName}
-                    label={item.channelName}
-                    size="md"
-                  />
-                  <div className={`min-w-0 flex-1 ${item.completed ? 'text-muted-foreground' : ''}`}>
-                    <div className="flex items-start justify-between gap-3">
-                      <div className="min-w-0">
-                        <div className="flex items-center gap-2">
-                          <p className={`truncate font-medium ${item.completed ? 'line-through' : ''}`}>{item.channelName}</p>
-                          {item.completed && <Badge variant="outline" className="shrink-0 text-[10px]">已完成</Badge>}
-                        </div>
-                        <p className={`mt-0.5 truncate text-xs text-muted-foreground ${item.completed ? 'line-through' : ''}`}>
-                          {item.subject || '无主题'}
-                        </p>
-                      </div>
-                      <span className="shrink-0 text-xs text-muted-foreground">
-                        {new Date(item.date).toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit' })}
-                      </span>
-                    </div>
-                    <p className={`mt-2 text-sm leading-6 ${item.completed ? 'line-through text-muted-foreground' : 'text-slate-700'}`}>
-                      {item.summary}
-                      {item.summaryPending && <span className="ml-2 text-xs text-blue-500">AI 正在优化摘要…</span>}
-                    </p>
-                  </div>
-                  <Button type="button" variant="ghost" size="sm" onClick={onOpenGmail} className="shrink-0">
-                    查看邮件 <ArrowRight className="ml-1 h-3.5 w-3.5" />
-                  </Button>
-                </CardContent>
-              </Card>
-            ))
+        <div className="flex items-center justify-between px-1 py-1">
+          <h3 className="flex items-center gap-2 text-sm font-medium text-muted-foreground">
+            <Circle className="h-4 w-4" />
+            待完成 ({pendingItems.length})
+          </h3>
+          {gmailLoading && (
+            <span className="text-xs text-muted-foreground">正在读取今日 Gmail 来信…</span>
           )}
-        </section>
-
-        <div className="flex items-center gap-3 py-2">
-          <div className="h-px flex-1 bg-border/60" />
-          <span className="text-xs font-medium text-muted-foreground">手动任务</span>
-          <div className="h-px flex-1 bg-border/60" />
         </div>
 
-        {filteredPending.length === 0 ? (
+        {gmailError && (
+          <div className="flex items-center justify-between gap-3 rounded-xl border border-amber-200 bg-amber-50/70 px-4 py-3 text-sm text-amber-800">
+            <span className="flex items-center gap-2"><AlertCircle className="h-4 w-4" />{gmailError}</span>
+            <Button type="button" variant="outline" size="sm" onClick={onRefreshGmail}>重试</Button>
+          </div>
+        )}
+
+        {pendingItems.length === 0 && !gmailLoading ? (
           <div className="flex flex-col items-center justify-center py-16 text-center">
             <div className="w-16 h-16 rounded-2xl bg-green-100 flex items-center justify-center mb-4">
               <CheckCircle2 className="w-8 h-8 text-green-500" />
             </div>
             <h3 className="text-lg font-medium mb-1">太棒了！</h3>
-            <p className="text-muted-foreground">当前没有未完成的手动任务</p>
+            <p className="text-muted-foreground">当前没有未完成的任务</p>
           </div>
         ) : (
-          filteredPending.map(todo => (
-            <Card 
-              key={todo.id} 
-              className={`
-                cursor-pointer transition-[background-color,border-color,box-shadow] duration-200
-                hover:shadow-apple-hover
-                ${todo.dueDate && isOverdue(todo.dueDate, todo.dueTime) ? 'border-red-200 bg-red-50/30' : ''}
-              `}
-              onClick={() => onToggle(todo.id)}
+          pendingItems.map((entry) => entry.kind === 'manual' ? (
+            <Card
+              key={entry.key}
+              className={`transition-[background-color,border-color,box-shadow] duration-200 hover:shadow-apple-hover ${entry.todo.dueDate && isOverdue(entry.todo.dueDate, entry.todo.dueTime) ? 'border-red-200 bg-red-50/30' : ''}`}
             >
-              <CardContent className="p-4">
-                <div className="flex items-start gap-4">
-                  <button
-                    className="mt-0.5 flex-shrink-0"
-                    onClick={(e) => {
-                      e.stopPropagation();
-                      onToggle(todo.id);
-                    }}
-                  >
-                    <Circle className="w-6 h-6 text-gray-300 hover:text-blue-500 transition-colors" />
-                  </button>
-                  <div className="flex-1 min-w-0">
-                    <p className="font-medium">{todo.title}</p>
-                    {todo.description && (
-                      <p className="text-sm text-muted-foreground mt-1">{todo.description}</p>
-                    )}
-                    <div className="flex items-center gap-2 mt-3">
-                      <span className={`inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-xs ${PRIORITY_CONFIG[todo.priority].bgColor} ${PRIORITY_CONFIG[todo.priority].color}`}>
-                        {PRIORITY_CONFIG[todo.priority].icon}
-                        {PRIORITY_CONFIG[todo.priority].label}
+              <CardContent className="flex items-start gap-4 p-4">
+                <button type="button" className="mt-0.5 flex-shrink-0" onClick={() => onToggle(entry.todo.id)} aria-label={`将“${entry.todo.title}”标记为已完成`}>
+                  <Circle className="w-6 h-6 text-gray-300 hover:text-blue-500 transition-colors" />
+                </button>
+                <div className="flex-1 min-w-0">
+                  <p className="font-medium">{entry.todo.title}</p>
+                  {entry.todo.description && <p className="text-sm text-muted-foreground mt-1">{entry.todo.description}</p>}
+                  <div className="flex items-center gap-2 mt-3">
+                    <span className={`inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-xs ${PRIORITY_CONFIG[entry.todo.priority].bgColor} ${PRIORITY_CONFIG[entry.todo.priority].color}`}>
+                      {PRIORITY_CONFIG[entry.todo.priority].icon}{PRIORITY_CONFIG[entry.todo.priority].label}
+                    </span>
+                    {entry.todo.dueDate && (
+                      <span className={`inline-flex items-center gap-1 text-xs ${isOverdue(entry.todo.dueDate, entry.todo.dueTime) ? 'text-red-500' : 'text-muted-foreground'}`}>
+                        <Clock className="w-3 h-3" />{formatDueDate(entry.todo.dueDate, entry.todo.dueTime)}
                       </span>
-                      {todo.dueDate && (
-                        <span className={`inline-flex items-center gap-1 text-xs ${isOverdue(todo.dueDate, todo.dueTime) ? 'text-red-500' : 'text-muted-foreground'}`}>
-                          <Clock className="w-3 h-3" />
-                          {formatDueDate(todo.dueDate, todo.dueTime)}
-                        </span>
-                      )}
-                      {todo.tags.map(tag => (
-                        <Badge key={tag} variant="secondary" className="text-xs">
-                          {tag}
-                        </Badge>
-                      ))}
-                    </div>
+                    )}
+                    {entry.todo.tags.map((tag) => <Badge key={tag} variant="secondary" className="text-xs">{tag}</Badge>)}
                   </div>
-                  <button
-                    onClick={(e) => {
-                      e.stopPropagation();
-                      onDelete(todo.id);
-                    }}
-                    className="text-gray-300 hover:text-red-500 transition-colors"
-                  >
-                    <Trash2 className="w-4 h-4" />
-                  </button>
                 </div>
+                <button type="button" onClick={() => openEditDialog(entry.todo)} className="text-gray-300 hover:text-blue-500 transition-colors" aria-label={`编辑“${entry.todo.title}”`} title="编辑任务">
+                  <Pencil className="w-4 h-4" />
+                </button>
+                <button type="button" onClick={() => onDelete(entry.todo.id)} className="text-gray-300 hover:text-red-500 transition-colors" aria-label={`删除“${entry.todo.title}”`} title="删除任务">
+                  <Trash2 className="w-4 h-4" />
+                </button>
+              </CardContent>
+            </Card>
+          ) : (
+            <Card key={entry.key} className="border-blue-100 bg-blue-50/25 transition-shadow hover:shadow-apple-hover">
+              <CardContent className="flex items-start gap-3 p-4">
+                <button type="button" className="mt-2 flex-shrink-0" onClick={() => onToggleGmail(entry.item.messageId)} aria-label={`将“${entry.item.channelName}”的来信标记为已完成`}>
+                  <Circle className="h-6 w-6 text-slate-300 transition-colors hover:text-blue-500" />
+                </button>
+                <YouTubeChannelAvatar avatar={entry.item.avatar} fallback={entry.item.channelName} label={entry.item.channelName} size="md" />
+                <div className="min-w-0 flex-1">
+                  <div className="flex items-start justify-between gap-3">
+                    <div className="min-w-0">
+                      <div className="flex items-center gap-2"><p className="truncate font-medium">{entry.item.channelName}</p><Badge variant="outline" className="shrink-0 text-[10px]"><Mail className="mr-1 h-3 w-3" />Gmail</Badge></div>
+                      <p className="mt-0.5 truncate text-xs text-muted-foreground">{entry.item.subject || '无主题'}</p>
+                    </div>
+                    <span className="shrink-0 text-xs text-muted-foreground">{new Date(entry.item.date).toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit' })}</span>
+                  </div>
+                  <p className="mt-2 text-sm leading-6 text-slate-700">{entry.item.summary}{entry.item.summaryPending && <span className="ml-2 text-xs text-blue-500">AI 正在优化摘要…</span>}</p>
+                </div>
+                <Button type="button" variant="ghost" size="sm" onClick={onOpenGmail} className="shrink-0">查看邮件 <ArrowRight className="ml-1 h-3.5 w-3.5" /></Button>
               </CardContent>
             </Card>
           ))
         )}
 
         {/* 已完成 */}
-        {completedTodos.length > 0 && (
+        {completedItems.length > 0 && (
           <div className="mt-8">
             <h3 className="text-sm font-medium text-muted-foreground mb-3 flex items-center gap-2">
               <CheckCircle2 className="w-4 h-4 text-green-500" />
-              已完成 ({completedTodos.length})
+              已完成 ({completedItems.length})
             </h3>
-            <div className="space-y-1">
-              {completedTodos.map(todo => (
+            <div className="space-y-2">
+              {completedItems.map((entry) => entry.kind === 'manual' ? (
                 <div
-                  key={todo.id}
+                  key={entry.key}
                   className="flex items-center gap-3 p-3 rounded-xl bg-accent/30 text-muted-foreground group"
                 >
-                  <button
-                    type="button"
-                    onClick={() => onToggle(todo.id)}
-                    className="flex-shrink-0"
-                    aria-label={`将“${todo.title}”恢复为待完成`}
-                    title="点击恢复为待完成"
-                  >
+                  <button type="button" onClick={() => onToggle(entry.todo.id)} className="flex-shrink-0" aria-label={`将“${entry.todo.title}”恢复为待完成`} title="点击恢复为待完成">
                     <CheckCircle2 className="w-5 h-5 text-green-500 transition-colors hover:text-blue-500" />
                   </button>
-                  <span className="flex-1 line-through">{todo.title}</span>
-                  <button
-                    onClick={() => onDelete(todo.id)}
-                    className="opacity-0 group-hover:opacity-100 text-muted-foreground hover:text-red-500"
-                    aria-label={`删除“${todo.title}”`}
-                  >
+                  <div className="min-w-0 flex-1">
+                    <p className="truncate line-through">{entry.todo.title}</p>
+                    {entry.todo.description && <p className="mt-0.5 truncate text-xs line-through">{entry.todo.description}</p>}
+                  </div>
+                  <button type="button" onClick={() => openEditDialog(entry.todo)} className="opacity-0 group-hover:opacity-100 text-muted-foreground hover:text-blue-500" aria-label={`编辑“${entry.todo.title}”`} title="编辑任务">
+                    <Pencil className="w-4 h-4" />
+                  </button>
+                  <button type="button" onClick={() => onDelete(entry.todo.id)} className="opacity-0 group-hover:opacity-100 text-muted-foreground hover:text-red-500" aria-label={`删除“${entry.todo.title}”`} title="删除任务">
                     <Trash2 className="w-4 h-4" />
                   </button>
+                </div>
+              ) : (
+                <div key={entry.key} className="flex items-center gap-3 rounded-xl bg-accent/30 p-3 text-muted-foreground">
+                  <button type="button" onClick={() => onToggleGmail(entry.item.messageId)} className="flex-shrink-0" aria-label={`将“${entry.item.channelName}”的来信恢复为待完成`} title="点击恢复为待完成">
+                    <CheckCircle2 className="w-5 h-5 text-green-500 transition-colors hover:text-blue-500" />
+                  </button>
+                  <YouTubeChannelAvatar avatar={entry.item.avatar} fallback={entry.item.channelName} label={entry.item.channelName} size="sm" />
+                  <div className="min-w-0 flex-1">
+                    <div className="flex items-center gap-2"><p className="truncate line-through">{entry.item.channelName}</p><Badge variant="outline" className="shrink-0 text-[10px]">Gmail</Badge></div>
+                    <p className="truncate text-xs line-through">{entry.item.subject || entry.item.summary}</p>
+                  </div>
+                  <Button type="button" variant="ghost" size="sm" onClick={onOpenGmail} className="shrink-0">查看邮件 <ArrowRight className="ml-1 h-3.5 w-3.5" /></Button>
                 </div>
               ))}
             </div>
@@ -366,21 +370,21 @@ export function TodoBoard({
         )}
       </div>
 
-      {/* 添加弹窗 */}
-      <Dialog open={showAddDialog} onOpenChange={setShowAddDialog}>
+      {/* 添加/编辑弹窗 */}
+      <Dialog open={dialogMode !== null} onOpenChange={(open) => { if (!open) setDialogMode(null); }}>
         <DialogContent className="sm:max-w-md">
           <DialogHeader>
             <DialogTitle className="flex items-center gap-2">
-              <Plus className="w-5 h-5" />
-              添加待办
+              {dialogMode === 'edit' ? <Pencil className="w-5 h-5" /> : <Plus className="w-5 h-5" />}
+              {dialogMode === 'edit' ? '编辑待办' : '添加待办'}
             </DialogTitle>
           </DialogHeader>
           <div className="space-y-4 py-2">
             <div className="space-y-2">
               <label className="text-sm font-medium">标题</label>
               <Input
-                value={newTodo.title}
-                onChange={(e) => setNewTodo({ ...newTodo, title: e.target.value })}
+                value={todoDraft.title}
+                onChange={(e) => setTodoDraft({ ...todoDraft, title: e.target.value })}
                 placeholder="输入待办事项..."
                 autoFocus
               />
@@ -388,8 +392,8 @@ export function TodoBoard({
             <div className="space-y-2">
               <label className="text-sm font-medium">描述</label>
               <Textarea
-                value={newTodo.description}
-                onChange={(e) => setNewTodo({ ...newTodo, description: e.target.value })}
+                value={todoDraft.description}
+                onChange={(e) => setTodoDraft({ ...todoDraft, description: e.target.value })}
                 placeholder="添加详细描述..."
                 rows={5}
                 className="min-h-[120px] resize-y"
@@ -398,9 +402,9 @@ export function TodoBoard({
             <div className="grid grid-cols-[90px_1fr_1fr] gap-3">
               <div className="space-y-2">
                 <label className="text-sm font-medium">优先级</label>
-                <Select 
-                  value={newTodo.priority} 
-                  onValueChange={(v: TodoPriority) => setNewTodo({ ...newTodo, priority: v })}
+                <Select
+                  value={todoDraft.priority}
+                  onValueChange={(v: TodoPriority) => setTodoDraft({ ...todoDraft, priority: v })}
                 >
                   <SelectTrigger>
                     <SelectValue />
@@ -417,26 +421,26 @@ export function TodoBoard({
                 <label className="text-sm font-medium">截止日期</label>
                 <Input
                   type="date"
-                  value={newTodo.dueDate}
-                  onChange={(e) => setNewTodo({ ...newTodo, dueDate: e.target.value })}
+                  value={todoDraft.dueDate}
+                  onChange={(e) => setTodoDraft({ ...todoDraft, dueDate: e.target.value })}
                 />
               </div>
               <div className="space-y-2">
                 <label className="text-sm font-medium">截止时间</label>
                 <Input
                   type="time"
-                  value={newTodo.dueTime}
-                  onChange={(e) => setNewTodo({ ...newTodo, dueTime: e.target.value })}
+                  value={todoDraft.dueTime}
+                  onChange={(e) => setTodoDraft({ ...todoDraft, dueTime: e.target.value })}
                 />
               </div>
             </div>
           </div>
           <DialogFooter>
-            <Button variant="outline" onClick={() => setShowAddDialog(false)}>
+            <Button variant="outline" onClick={() => setDialogMode(null)}>
               取消
             </Button>
-            <Button onClick={handleAddTodo} disabled={!newTodo.title.trim()}>
-              添加
+            <Button onClick={handleSaveTodo} disabled={!todoDraft.title.trim()}>
+              {dialogMode === 'edit' ? '保存修改' : '添加'}
             </Button>
           </DialogFooter>
         </DialogContent>

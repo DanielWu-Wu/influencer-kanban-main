@@ -1,6 +1,6 @@
 'use client';
 
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import {
   AlertTriangle,
   ArrowLeft,
@@ -64,6 +64,7 @@ type Props = {
   onPatch: (id: string, patch: Partial<Prospect>) => void;
   onGenerate: (prospect: Prospect) => void;
   onRegeneratePart: (prospect: Prospect, part: 'subject' | 'body') => void;
+  onTranslateChinese: (prospectId: string, chineseBody: string) => Promise<boolean>;
   onSaveDraft: (prospect: Prospect) => void;
   onBack: (prospect: Prospect) => void;
   onSkip: (prospect: Prospect) => void;
@@ -299,16 +300,21 @@ export function OutreachEmailTab({
   onPatch,
   onGenerate,
   onRegeneratePart,
+  onTranslateChinese,
   onSaveDraft,
   onBack,
   onSkip,
 }: Props) {
   const [query, setQuery] = useState('');
   const [editingIds, setEditingIds] = useState<string[]>([]);
+  const [translationStatusById, setTranslationStatusById] = useState<Record<string, 'pending' | 'syncing' | 'synced' | 'error'>>({});
   const [expandedIds, setExpandedIds] = useState<string[]>(() => (
     prospects[0] ? [prospects[0].id] : []
   ));
   const [confirmDraftId, setConfirmDraftId] = useState<string | null>(null);
+  const translationTimersRef = useRef(new Map<string, number>());
+  const translationVersionsRef = useRef(new Map<string, number>());
+  const mountedRef = useRef(true);
   const prospectIdsKey = prospects.map((prospect) => prospect.id).join('\u0000');
   const filtered = useMemo(() => {
     const normalized = query.trim().toLowerCase();
@@ -331,6 +337,40 @@ export function OutreachEmailTab({
       return [prospectIds[0]];
     });
   }, [prospectIdsKey]);
+
+  useEffect(() => {
+    mountedRef.current = true;
+    const translationTimers = translationTimersRef.current;
+    return () => {
+      mountedRef.current = false;
+      translationTimers.forEach((timer) => window.clearTimeout(timer));
+      translationTimers.clear();
+    };
+  }, []);
+
+  const scheduleChineseTranslation = (prospect: Prospect, chineseBody: string) => {
+    onPatch(prospect.id, patchDraft(prospect, { translatedBody: chineseBody }));
+
+    const previousTimer = translationTimersRef.current.get(prospect.id);
+    if (previousTimer !== undefined) window.clearTimeout(previousTimer);
+
+    const version = (translationVersionsRef.current.get(prospect.id) || 0) + 1;
+    translationVersionsRef.current.set(prospect.id, version);
+    setTranslationStatusById((current) => ({ ...current, [prospect.id]: 'pending' }));
+
+    const timer = window.setTimeout(async () => {
+      translationTimersRef.current.delete(prospect.id);
+      if (!mountedRef.current || translationVersionsRef.current.get(prospect.id) !== version) return;
+      setTranslationStatusById((current) => ({ ...current, [prospect.id]: 'syncing' }));
+      const success = await onTranslateChinese(prospect.id, chineseBody);
+      if (!mountedRef.current || translationVersionsRef.current.get(prospect.id) !== version) return;
+      setTranslationStatusById((current) => ({
+        ...current,
+        [prospect.id]: success ? 'synced' : 'error',
+      }));
+    }, 1200);
+    translationTimersRef.current.set(prospect.id, timer);
+  };
 
   if (!prospects.length) {
     return (
@@ -402,6 +442,9 @@ export function OutreachEmailTab({
           const productAsset = selectedProductEmailAsset(products, prospect.targetProduct);
           const isRegeneratingSubject = regeneratingPart?.id === prospect.id && regeneratingPart.part === 'subject';
           const isRegeneratingBody = regeneratingPart?.id === prospect.id && regeneratingPart.part === 'body';
+          const translationStatus = translationStatusById[prospect.id];
+          const translationBusy = translationStatus === 'pending' || translationStatus === 'syncing';
+          const translationUnsynced = translationBusy || translationStatus === 'error';
           return (
             <article
               key={prospect.id}
@@ -690,14 +733,22 @@ export function OutreachEmailTab({
                           />
                           <div>
                             <Label htmlFor={`translation-${prospect.id}`}>中文翻译对照</Label>
-                            <p className="mt-0.5 text-xs text-muted-foreground">用于人工核对，不会写入 Gmail 邮件正文。</p>
+                            <p className={`mt-0.5 text-xs ${translationStatus === 'error' ? 'text-red-600' : 'text-muted-foreground'}`}>
+                              {translationStatus === 'pending'
+                                ? '中文已修改，停止输入后将自动更新外文正文…'
+                                : translationStatus === 'syncing'
+                                  ? '正在润色并翻译为对应语言…'
+                                  : translationStatus === 'synced'
+                                    ? '已根据中文修改自动更新外文正文。'
+                                    : translationStatus === 'error'
+                                      ? '自动更新失败；中文修改已保留，继续编辑即可重试。'
+                                      : '修改中文后，将自动润色并更新上方外文正文。'}
+                            </p>
                             <Textarea
                               id={`translation-${prospect.id}`}
                               value={prospect.aiDraft?.translatedBody || prospect.aiDraft?.translatedSummary || ''}
                               readOnly={!isEditing}
-                              onChange={(event) => onPatch(prospect.id, {
-                                aiDraft: { ...prospect.aiDraft!, translatedBody: event.target.value },
-                              })}
+                              onChange={(event) => scheduleChineseTranslation(prospect, event.target.value)}
                               className={`mt-1.5 min-h-48 resize-y leading-6 ${isEditing ? 'bg-white' : 'bg-slate-50'}`}
                             />
                           </div>
@@ -746,10 +797,14 @@ export function OutreachEmailTab({
                     )}
                     <Button
                       onClick={() => setConfirmDraftId(prospect.id)}
-                      disabled={!hasDraft || !prospect.publicEmail || savingDraftId === prospect.id}
+                      disabled={!hasDraft || !prospect.publicEmail || savingDraftId === prospect.id || translationUnsynced}
                     >
-                      {savingDraftId === prospect.id ? <Loader2 className="mr-1 h-4 w-4 animate-spin" /> : <MailPlus className="mr-1 h-4 w-4" />}
-                      保存 Gmail 草稿
+                      {savingDraftId === prospect.id || translationBusy ? <Loader2 className="mr-1 h-4 w-4 animate-spin" /> : <MailPlus className="mr-1 h-4 w-4" />}
+                      {translationBusy
+                        ? '等待中文同步'
+                        : translationStatus === 'error'
+                          ? '中文同步失败'
+                          : '保存 Gmail 草稿'}
                     </Button>
                     <Button variant="ghost" onClick={() => onBack(prospect)}>
                       <ArrowLeft className="mr-1 h-4 w-4" />

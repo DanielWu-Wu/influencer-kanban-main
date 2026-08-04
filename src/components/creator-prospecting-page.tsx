@@ -48,6 +48,7 @@ import {
   stripConfiguredEmailSignature,
 } from '@/lib/email-content';
 import { sanitizeOutreachEmailBody } from '@/lib/outreach-draft-sanitizer';
+import { outreachLanguageLabel } from '@/lib/outreach-languages';
 import {
   buildOutreachEmailHtml,
   getProductInlineImage,
@@ -845,6 +846,7 @@ export function CreatorProspectingPage() {
   const developmentSnapshotRef = useRef<FeishuRecordSnapshot | null>(null);
   const previewOperationIdRef = useRef('');
   const quickOperationIdRef = useRef('');
+  const outreachChineseTranslationRunRef = useRef(new Map<string, number>());
   const prospectsRef = useRef<Prospect[]>([]);
   const cloudSyncedUpdatedAtRef = useRef(new Map<string, string>());
 
@@ -894,13 +896,15 @@ export function CreatorProspectingPage() {
         cloudProspects.map((item) => [item.id, item.updatedAt]),
       );
       if (cloudProspects.length) {
-        const merged = new Map<string, Prospect>();
-        [...localProspects, ...cloudProspects].forEach((item) => {
-          if (latestDeletedIds.has(item.id)) return;
-          const current = merged.get(item.id);
-          if (!current || item.updatedAt > current.updatedAt) merged.set(item.id, item);
+        setProspects((currentProspects) => {
+          const merged = new Map<string, Prospect>();
+          [...localProspects, ...cloudProspects, ...currentProspects].forEach((item) => {
+            if (latestDeletedIds.has(item.id)) return;
+            const current = merged.get(item.id);
+            if (!current || item.updatedAt > current.updatedAt) merged.set(item.id, item);
+          });
+          return Array.from(merged.values()).sort((a, b) => b.updatedAt.localeCompare(a.updatedAt));
         });
-        setProspects(Array.from(merged.values()).sort((a, b) => b.updatedAt.localeCompare(a.updatedAt)));
       }
       setCloudReady(true);
     };
@@ -1539,20 +1543,29 @@ export function CreatorProspectingPage() {
         }];
       });
       const resolvedById = new Map(resolvedProspects.map((item) => [item.id, item]));
+      const additionIds = new Set(additions.map((item) => item.id));
 
       setProspects((current) => current.map((item) => {
+        if (!additionIds.has(item.id)) return item;
         const resolved = resolvedById.get(item.id);
         if (resolved) return resolved;
         const inputKey = normalizeYouTubeKey(item.inputUrl);
         const matchedError = result.errors?.find((error) => normalizeYouTubeKey(error.sourceUrl) === inputKey);
-        if (matchedError) {
-          return { ...item, workflowStatus: 'error', error: matchedError.error, updatedAt: new Date().toISOString() };
-        }
-        return item;
+        return {
+          ...item,
+          workflowStatus: 'error',
+          error: matchedError?.error || 'YouTube 已返回识别结果，但未能关联到这条输入，请点击“识别频道”重试。',
+          updatedAt: new Date().toISOString(),
+        };
       }));
       setInput('');
-      const failures = result.errors?.length || 0;
-      toast.success(`识别完成：成功 ${result.channels?.length || 0} 个${failures ? `，失败 ${failures} 个` : ''}。`);
+      const successCount = resolvedProspects.length;
+      const failureCount = additions.length - successCount;
+      if (successCount) {
+        toast.success(`识别完成：成功 ${successCount} 个${failureCount ? `，失败 ${failureCount} 个` : ''}。`);
+      } else {
+        toast.error(`本次 ${additions.length} 个频道均未能稳定写入列表，请根据错误提示重试。`);
+      }
       if (resolvedProspects.length) {
         setResolving(false);
         void handleCheckDedupe(resolvedProspects);
@@ -2383,6 +2396,25 @@ export function CreatorProspectingPage() {
     const targetUrl = target === 'resource' ? settings.feishuUrl : settings.feishuProspectingUrl;
     if (!targetUrl) return;
 
+    let submittedItems = previewItems;
+    const operationId = previewOperationIdRef.current || crypto.randomUUID();
+    resourcePreviewRunRef.current += 1;
+    setPreviewItems([]);
+    setWritingFeishu(true);
+    toast.info(`已提交 ${submittedItems.length} 条记录，正在后台检查并写入飞书。`);
+
+    // 先让 React 完成弹窗关闭与页面解锁，再开始可能较慢的飞书快照刷新。
+    await new Promise<void>((resolve) => {
+      let settled = false;
+      const release = () => {
+        if (settled) return;
+        settled = true;
+        resolve();
+      };
+      window.requestAnimationFrame(release);
+      window.setTimeout(release, 50);
+    });
+
     const relevantSnapshots = target === 'resource'
       ? [resourceSnapshotRef.current]
       : [developmentSnapshotRef.current, resourceSnapshotRef.current];
@@ -2391,19 +2423,21 @@ export function CreatorProspectingPage() {
     ));
     if (snapshotExpired) {
       const patches = await runDedupe(
-        previewItems.map((item) => item.prospect),
+        submittedItems.map((item) => item.prospect),
         { force: true, showToast: false },
       );
       if (!patches) {
-        toast.error('飞书快照刷新失败，本次没有执行写入。');
+        setPreviewItems(submittedItems);
+        setWritingFeishu(false);
+        toast.error('飞书快照刷新失败，本次没有执行写入；原预览已恢复。');
         return;
       }
-      const refreshedProspects = previewItems.map((item) => ({
+      const refreshedProspects = submittedItems.map((item) => ({
         ...item.prospect,
         ...(patches.get(item.prospect.id) || {}),
       }));
       const planChanged = refreshedProspects.some((prospect, index) => (
-        dedupePlanKey(prospect) !== dedupePlanKey(previewItems[index].prospect)
+        dedupePlanKey(prospect) !== dedupePlanKey(submittedItems[index].prospect)
       ));
       let emailPlanChanged = false;
       if (!planChanged && target === 'development') {
@@ -2412,7 +2446,7 @@ export function CreatorProspectingPage() {
         const resourceIndex = resourceSnapshot
           ? buildFeishuRecordIndex(resourceSnapshot.records, resourceMapping)
           : undefined;
-        const refreshedPreviewItems = previewItems.map((item, index) => {
+        const refreshedPreviewItems = submittedItems.map((item, index) => {
           const prospect = refreshedProspects[index];
           const pending = buildPendingResourceEmailSyncPreview(
             prospect,
@@ -2431,13 +2465,16 @@ export function CreatorProspectingPage() {
           }
           return { ...item, prospect, resourceEmailSync: nextSync };
         });
-        setPreviewItems(refreshedPreviewItems);
+        submittedItems = refreshedPreviewItems;
       }
       if (planChanged) {
-        resourcePreviewRunRef.current += 1;
-        setPreviewItems([]);
+        setWritingFeishu(false);
         if (target === 'resource') await openResourcePreview(refreshedProspects);
         else await openDevelopmentPreview(refreshedProspects);
+      }
+      if (emailPlanChanged) {
+        setPreviewItems(submittedItems);
+        setWritingFeishu(false);
       }
       if (planChanged || emailPlanChanged) {
         toast.warning('飞书数据已变化，写入预览已刷新。请重新检查后再次确认。');
@@ -2445,11 +2482,6 @@ export function CreatorProspectingPage() {
       }
     }
 
-    const submittedItems = previewItems;
-    resourcePreviewRunRef.current += 1;
-    setPreviewItems([]);
-    setWritingFeishu(true);
-    toast.info(`已提交 ${submittedItems.length} 条记录，正在后台写入飞书。`);
     const activeItems = submittedItems.filter((item) => item.writeStatus !== 'success');
     const successes: Array<{ id: string; recordId: string }> = [];
     const failures: Array<{ id: string; error: string }> = [];
@@ -2459,7 +2491,7 @@ export function CreatorProspectingPage() {
       const results = await requestFeishuBatch(
         'batchCreate',
         targetUrl,
-        previewOperationIdRef.current || crypto.randomUUID(),
+        operationId,
         activeItems.map((item) => ({
           clientId: item.prospect.id,
           fields: compactFeishuWriteFields(item.fields),
@@ -2495,7 +2527,7 @@ export function CreatorProspectingPage() {
           const syncResults = await requestFeishuBatch(
             'batchUpdate',
             settings.feishuUrl,
-            `${previewOperationIdRef.current || crypto.randomUUID()}:email`,
+            `${operationId}:email`,
             emailSyncItems.map((item) => {
               const sync = item.resourceEmailSync!;
               if (sync.status !== 'will_update') throw new Error('邮箱同步预览状态无效。');
@@ -3008,6 +3040,65 @@ export function CreatorProspectingPage() {
     }
   };
 
+  const handleTranslateEditedOutreach = async (prospectId: string, chineseBody: string) => {
+    const normalizedChineseBody = chineseBody.trim();
+    const prospect = prospectsRef.current.find((item) => item.id === prospectId);
+    if (!prospect?.aiDraft || !normalizedChineseBody) {
+      toast.error('中文邮件内容为空，无法自动更新外文正文。');
+      return false;
+    }
+
+    const targetLang = prospect.outreachLanguage || prospect.aiDraft.language || prospect.language || 'en';
+    const runId = (outreachChineseTranslationRunRef.current.get(prospectId) || 0) + 1;
+    outreachChineseTranslationRunRef.current.set(prospectId, runId);
+
+    try {
+      const response = await fetch('/api/ai', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          action: 'translateEditedReply',
+          editedChineseReply: normalizedChineseBody,
+          targetLang,
+          targetLangName: outreachLanguageLabel(targetLang),
+          modelProvider: settings.modelProvider,
+          customApiUrl: settings.customApiUrl,
+          customApiKey: settings.customApiKey,
+          customModelName: settings.customModelName,
+        }),
+      });
+      const result = await response.json();
+      if (!response.ok || !result.success) {
+        throw new Error(getErrorMessage(result, '中文邮件自动翻译失败。'));
+      }
+
+      const latestProspect = prospectsRef.current.find((item) => item.id === prospectId);
+      if (
+        outreachChineseTranslationRunRef.current.get(prospectId) !== runId
+        || latestProspect?.aiDraft?.translatedBody?.trim() !== normalizedChineseBody
+      ) {
+        return false;
+      }
+
+      const translatedBody = sanitizeOutreachEmailBody(result.data?.suggestedReply);
+      if (!translatedBody) throw new Error('AI 没有返回可用的外文正文。');
+      updateProspect(prospectId, {
+        aiDraft: {
+          ...latestProspect.aiDraft,
+          body: translatedBody,
+        },
+        error: undefined,
+      });
+      toast.success(`已根据中文修改更新为${outreachLanguageLabel(targetLang)}开发信。`);
+      return true;
+    } catch (error) {
+      if (outreachChineseTranslationRunRef.current.get(prospectId) === runId) {
+        toast.error(error instanceof Error ? error.message : '中文邮件自动翻译失败。');
+      }
+      return false;
+    }
+  };
+
   const handleSaveGmailDraft = async (prospect: Prospect) => {
     if (!auth?.accessToken) {
       toast.error('请先连接 Gmail，再保存草稿。');
@@ -3343,6 +3434,7 @@ export function CreatorProspectingPage() {
             onPatch={updateProspect}
             onGenerate={handleGenerateOutreach}
             onRegeneratePart={handleRegenerateOutreachPart}
+            onTranslateChinese={handleTranslateEditedOutreach}
             onSaveDraft={handleSaveGmailDraft}
             onBack={handleBackToInvitation}
             onSkip={handleSkip}

@@ -30,6 +30,7 @@ export type DailyGmailTodo = DailyGmailMessage & {
   summaryPending: boolean;
   avatar: ChannelAvatarState;
   completed: boolean;
+  completedAt?: string;
 };
 
 const SUMMARY_CACHE_KEY = 'influencer-board-daily-gmail-summaries-v1';
@@ -200,6 +201,7 @@ export function useDailyGmailTodos(settings: AppSettings) {
           summaryPending: !summaryCache[message.messageId],
           avatar: initialAvatar(profile),
           completed: Boolean(completionCache[message.messageId]),
+          completedAt: completionCache[message.messageId] || undefined,
           profile,
         }];
       });
@@ -218,6 +220,7 @@ export function useDailyGmailTodos(settings: AppSettings) {
         summaryPending: item.summaryPending,
         avatar: item.avatar,
         completed: item.completed,
+        completedAt: item.completedAt,
       })));
       setLoading(false);
       setRefreshing(false);
@@ -294,11 +297,12 @@ export function useDailyGmailTodos(settings: AppSettings) {
 
   const toggleCompleted = useCallback((messageId: string) => {
     const completed = !Boolean(completionCacheRef.current[messageId]);
-    if (completed) completionCacheRef.current[messageId] = new Date().toISOString();
+    const completedAt = completed ? new Date().toISOString() : undefined;
+    if (completedAt) completionCacheRef.current[messageId] = completedAt;
     else delete completionCacheRef.current[messageId];
     saveCompletionCache(completionCacheRef.current);
     setItems((current) => current.map((item) => (
-      item.messageId === messageId ? { ...item, completed } : item
+      item.messageId === messageId ? { ...item, completed, completedAt } : item
     )));
   }, []);
 

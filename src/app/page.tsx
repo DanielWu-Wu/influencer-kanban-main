@@ -142,7 +142,7 @@ export default function DashboardPage() {
   const { influencers, addInfluencer, updateInfluencer } = useInfluencers();
   const { templates } = useEmailTemplates();
   const { reminders, pendingReminders, addReminder, completeReminder, skipReminder } = useReminders();
-  const { todos, todayTodos, addTodo, toggleTodo, deleteTodo } = useTodos();
+  const { todos, todayTodos, addTodo, updateTodo, toggleTodo, deleteTodo } = useTodos();
   const { events, addEvent, deleteEvent } = useCalendarEvents();
   const { settings } = useSettings();
   const { unreadCount } = useGmailThreads();
@@ -500,6 +500,7 @@ export default function DashboardPage() {
               <TodoBoard
                 todos={todos}
                 onAdd={addTodo}
+                onUpdate={updateTodo}
                 onToggle={toggleTodo}
                 onDelete={deleteTodo}
                 gmailItems={dailyGmail.items}
