@@ -20,6 +20,7 @@ export interface TodoItem {
   priority: TodoPriority;
   status: TodoStatus;
   dueDate?: string;
+  dueTime?: string;
   influencerId?: string;
   tags: string[];
   createdAt: string;

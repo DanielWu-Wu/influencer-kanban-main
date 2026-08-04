@@ -29,9 +29,11 @@ export type DailyGmailTodo = DailyGmailMessage & {
   summary: string;
   summaryPending: boolean;
   avatar: ChannelAvatarState;
+  completed: boolean;
 };
 
 const SUMMARY_CACHE_KEY = 'influencer-board-daily-gmail-summaries-v1';
+const COMPLETION_CACHE_KEY = 'influencer-board-daily-gmail-completions-v1';
 const AUTO_REFRESH_MS = 5 * 60_000;
 
 function loadSummaryCache() {
@@ -48,6 +50,23 @@ function saveSummaryCache(cache: Record<string, string>) {
     window.localStorage.setItem(SUMMARY_CACHE_KEY, JSON.stringify(Object.fromEntries(entries)));
   } catch {
     // 摘要缓存只是性能优化，不应阻断每日来信读取。
+  }
+}
+
+function loadCompletionCache() {
+  try {
+    return JSON.parse(window.localStorage.getItem(COMPLETION_CACHE_KEY) || '{}') as Record<string, string>;
+  } catch {
+    return {};
+  }
+}
+
+function saveCompletionCache(cache: Record<string, string>) {
+  try {
+    const entries = Object.entries(cache).slice(-500);
+    window.localStorage.setItem(COMPLETION_CACHE_KEY, JSON.stringify(Object.fromEntries(entries)));
+  } catch {
+    // 完成状态只影响本地界面，不应阻断 Gmail 来信显示。
   }
 }
 
@@ -110,6 +129,7 @@ export function useDailyGmailTodos(settings: AppSettings) {
   const [refreshing, setRefreshing] = useState(false);
   const [error, setError] = useState('');
   const runIdRef = useRef(0);
+  const completionCacheRef = useRef<Record<string, string>>({});
 
   const getAccessToken = useCallback(async (force = false) => {
     if (!auth?.isConnected) throw new Error('请先连接 Gmail。');
@@ -167,6 +187,8 @@ export function useDailyGmailTodos(settings: AppSettings) {
       if (runId !== runIdRef.current) return;
       const profileByEmail = selectProfileByEmail(profiles);
       const summaryCache = loadSummaryCache();
+      const completionCache = loadCompletionCache();
+      completionCacheRef.current = completionCache;
       const matched = messages.flatMap((message) => {
         const profile = profileByEmail.get(normalizeThreadContactEmail(message.from));
         if (!profile) return [];
@@ -177,6 +199,7 @@ export function useDailyGmailTodos(settings: AppSettings) {
           summary: summaryCache[message.messageId] || fallbackSummary(message),
           summaryPending: !summaryCache[message.messageId],
           avatar: initialAvatar(profile),
+          completed: Boolean(completionCache[message.messageId]),
           profile,
         }];
       });
@@ -194,6 +217,7 @@ export function useDailyGmailTodos(settings: AppSettings) {
         summary: item.summary,
         summaryPending: item.summaryPending,
         avatar: item.avatar,
+        completed: item.completed,
       })));
       setLoading(false);
       setRefreshing(false);
@@ -268,11 +292,22 @@ export function useDailyGmailTodos(settings: AppSettings) {
     };
   }, [load]);
 
+  const toggleCompleted = useCallback((messageId: string) => {
+    const completed = !Boolean(completionCacheRef.current[messageId]);
+    if (completed) completionCacheRef.current[messageId] = new Date().toISOString();
+    else delete completionCacheRef.current[messageId];
+    saveCompletionCache(completionCacheRef.current);
+    setItems((current) => current.map((item) => (
+      item.messageId === messageId ? { ...item, completed } : item
+    )));
+  }, []);
+
   return {
     items,
     loading,
     refreshing,
     error,
     refresh: () => load(true),
+    toggleCompleted,
   };
 }

@@ -154,7 +154,7 @@ export default function DashboardPage() {
     inProgress: influencers.filter((item) => ['contacted', 'interested', 'negotiating'].includes(item.status)).length,
     published: influencers.filter((item) => item.status === 'published').length,
     upcoming: pendingReminders.length,
-    todayTodos: todayTodos.length + dailyGmail.items.length,
+    todayTodos: todayTodos.length + dailyGmail.items.filter((item) => !item.completed).length,
   };
 
   if (authLoading || (configured && !user)) {
@@ -508,6 +508,7 @@ export default function DashboardPage() {
                 gmailError={dailyGmail.error}
                 onRefreshGmail={dailyGmail.refresh}
                 onOpenGmail={() => setCurrentView('gmail')}
+                onToggleGmail={dailyGmail.toggleCompleted}
               />
             </div>
           )}

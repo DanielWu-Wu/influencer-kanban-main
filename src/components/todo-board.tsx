@@ -13,7 +13,7 @@ import {
   CheckCircle2, Circle, Clock, Flag, Plus, Trash2,
   Flame, AlertCircle, Sparkles, Mail, RefreshCw, ArrowRight
 } from 'lucide-react';
-import { parseLocalDateKey } from '@/lib/local-date';
+import { formatLocalDateKey, parseLocalDateKey } from '@/lib/local-date';
 import type { DailyGmailTodo } from '@/lib/use-daily-gmail-todos';
 import { YouTubeChannelAvatar } from '@/components/youtube-channel-avatar';
 
@@ -28,6 +28,7 @@ interface TodoBoardProps {
   gmailError: string;
   onRefreshGmail: () => void;
   onOpenGmail: () => void;
+  onToggleGmail: (messageId: string) => void;
 }
 
 const PRIORITY_CONFIG: Record<TodoPriority, { label: string; color: string; bgColor: string; icon: React.ReactNode }> = {
@@ -48,16 +49,18 @@ export function TodoBoard({
   gmailError,
   onRefreshGmail,
   onOpenGmail,
+  onToggleGmail,
 }: TodoBoardProps) {
   const [showAddDialog, setShowAddDialog] = useState(false);
   const [filterPriority, setFilterPriority] = useState<TodoPriority | 'all'>('all');
-  const [newTodo, setNewTodo] = useState({
+  const [newTodo, setNewTodo] = useState(() => ({
     title: '',
     description: '',
     priority: 'medium' as TodoPriority,
-    dueDate: '',
+    dueDate: formatLocalDateKey(),
+    dueTime: '',
     tags: [] as string[],
-  });
+  }));
 
   const pendingTodos = todos.filter(t => t.status === 'pending');
   const completedTodos = todos.filter(t => t.status === 'completed');
@@ -65,6 +68,7 @@ export function TodoBoard({
   const filteredPending = filterPriority === 'all'
     ? pendingTodos
     : pendingTodos.filter(t => t.priority === filterPriority);
+  const pendingGmailItems = gmailItems.filter((item) => !item.completed);
 
   const handleAddTodo = () => {
     if (!newTodo.title.trim()) return;
@@ -75,6 +79,7 @@ export function TodoBoard({
       priority: newTodo.priority,
       status: 'pending',
       dueDate: newTodo.dueDate || undefined,
+      dueTime: newTodo.dueTime || undefined,
       tags: newTodo.tags,
     });
 
@@ -82,13 +87,31 @@ export function TodoBoard({
       title: '',
       description: '',
       priority: 'medium',
-      dueDate: '',
+      dueDate: formatLocalDateKey(),
+      dueTime: '',
       tags: [],
     });
     setShowAddDialog(false);
   };
 
-  const formatDueDate = (dateStr: string) => {
+  const getDueDateTime = (dateStr: string, timeStr?: string) => {
+    const date = parseLocalDateKey(dateStr);
+    if (timeStr) {
+      const [hours, minutes] = timeStr.split(':').map(Number);
+      date.setHours(hours || 0, minutes || 0, 0, 0);
+    }
+    return date;
+  };
+
+  const isOverdue = (dateStr: string, timeStr?: string) => {
+    const dueDate = getDueDateTime(dateStr, timeStr);
+    if (timeStr) return dueDate < new Date();
+    const today = new Date();
+    today.setHours(0, 0, 0, 0);
+    return dueDate < today;
+  };
+
+  const formatDueDate = (dateStr: string, timeStr?: string) => {
     const date = parseLocalDateKey(dateStr);
     const today = new Date();
     today.setHours(0, 0, 0, 0);
@@ -96,17 +119,12 @@ export function TodoBoard({
     tomorrow.setDate(tomorrow.getDate() + 1);
     const dueDate = parseLocalDateKey(dateStr);
     dueDate.setHours(0, 0, 0, 0);
+    const timeLabel = timeStr ? ` ${timeStr}` : '';
 
-    if (dueDate.getTime() === today.getTime()) return '今天';
-    if (dueDate.getTime() === tomorrow.getTime()) return '明天';
-    if (dueDate < today) return '已逾期';
-    return date.toLocaleDateString('zh-CN', { month: 'short', day: 'numeric' });
-  };
-
-  const isOverdue = (dateStr: string) => {
-    const today = new Date();
-    today.setHours(0, 0, 0, 0);
-    return parseLocalDateKey(dateStr) < today;
+    if (isOverdue(dateStr, timeStr)) return timeStr ? `已逾期 · ${timeStr}` : '已逾期';
+    if (dueDate.getTime() === today.getTime()) return `今天${timeLabel}`;
+    if (dueDate.getTime() === tomorrow.getTime()) return `明天${timeLabel}`;
+    return `${date.toLocaleDateString('zh-CN', { month: 'short', day: 'numeric' })}${timeLabel}`;
   };
 
   return (
@@ -120,7 +138,7 @@ export function TodoBoard({
           <div>
             <h2 className="text-xl font-semibold">今日待办</h2>
             <p className="text-sm text-muted-foreground">
-              {filteredPending.length} 项手动任务 · {gmailItems.length} 封今日红人来信
+              {filteredPending.length} 项手动任务 · {pendingGmailItems.length} 封待处理来信
             </p>
           </div>
         </div>
@@ -151,7 +169,7 @@ export function TodoBoard({
               <h3 className="flex items-center gap-2 text-sm font-semibold">
                 <Mail className="h-4 w-4 text-blue-600" />
                 今日 Gmail 来信
-                {!gmailLoading && <Badge variant="secondary">{gmailItems.length}</Badge>}
+                {!gmailLoading && <Badge variant="secondary">{pendingGmailItems.length}</Badge>}
               </h3>
               <p className="mt-0.5 text-xs text-muted-foreground">只显示已匹配到飞书红人资料的正常来信</p>
             </div>
@@ -182,25 +200,48 @@ export function TodoBoard({
             </div>
           ) : (
             gmailItems.map((item) => (
-              <Card key={item.messageId} className="border-blue-100 bg-blue-50/25 transition-shadow hover:shadow-apple-hover">
+              <Card
+                key={item.messageId}
+                className={item.completed
+                  ? 'border-slate-200 bg-slate-50/55 opacity-75 transition-shadow hover:shadow-apple-hover'
+                  : 'border-blue-100 bg-blue-50/25 transition-shadow hover:shadow-apple-hover'}
+              >
                 <CardContent className="flex items-start gap-3 p-4">
+                  <button
+                    type="button"
+                    className="mt-2 flex-shrink-0"
+                    aria-label={item.completed ? '取消完成这封来信' : '标记这封来信为已完成'}
+                    title={item.completed ? '点击恢复为待完成' : '标记为已完成'}
+                    onClick={() => onToggleGmail(item.messageId)}
+                  >
+                    {item.completed ? (
+                      <CheckCircle2 className="h-6 w-6 text-green-500" />
+                    ) : (
+                      <Circle className="h-6 w-6 text-slate-300 transition-colors hover:text-blue-500" />
+                    )}
+                  </button>
                   <YouTubeChannelAvatar
                     avatar={item.avatar}
                     fallback={item.channelName}
                     label={item.channelName}
                     size="md"
                   />
-                  <div className="min-w-0 flex-1">
+                  <div className={`min-w-0 flex-1 ${item.completed ? 'text-muted-foreground' : ''}`}>
                     <div className="flex items-start justify-between gap-3">
                       <div className="min-w-0">
-                        <p className="truncate font-medium">{item.channelName}</p>
-                        <p className="mt-0.5 truncate text-xs text-muted-foreground">{item.subject || '无主题'}</p>
+                        <div className="flex items-center gap-2">
+                          <p className={`truncate font-medium ${item.completed ? 'line-through' : ''}`}>{item.channelName}</p>
+                          {item.completed && <Badge variant="outline" className="shrink-0 text-[10px]">已完成</Badge>}
+                        </div>
+                        <p className={`mt-0.5 truncate text-xs text-muted-foreground ${item.completed ? 'line-through' : ''}`}>
+                          {item.subject || '无主题'}
+                        </p>
                       </div>
                       <span className="shrink-0 text-xs text-muted-foreground">
                         {new Date(item.date).toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit' })}
                       </span>
                     </div>
-                    <p className="mt-2 text-sm leading-6 text-slate-700">
+                    <p className={`mt-2 text-sm leading-6 ${item.completed ? 'line-through text-muted-foreground' : 'text-slate-700'}`}>
                       {item.summary}
                       {item.summaryPending && <span className="ml-2 text-xs text-blue-500">AI 正在优化摘要…</span>}
                     </p>
@@ -235,7 +276,7 @@ export function TodoBoard({
               className={`
                 cursor-pointer transition-[background-color,border-color,box-shadow] duration-200
                 hover:shadow-apple-hover
-                ${todo.dueDate && isOverdue(todo.dueDate) ? 'border-red-200 bg-red-50/30' : ''}
+                ${todo.dueDate && isOverdue(todo.dueDate, todo.dueTime) ? 'border-red-200 bg-red-50/30' : ''}
               `}
               onClick={() => onToggle(todo.id)}
             >
@@ -261,9 +302,9 @@ export function TodoBoard({
                         {PRIORITY_CONFIG[todo.priority].label}
                       </span>
                       {todo.dueDate && (
-                        <span className={`inline-flex items-center gap-1 text-xs ${isOverdue(todo.dueDate) ? 'text-red-500' : 'text-muted-foreground'}`}>
+                        <span className={`inline-flex items-center gap-1 text-xs ${isOverdue(todo.dueDate, todo.dueTime) ? 'text-red-500' : 'text-muted-foreground'}`}>
                           <Clock className="w-3 h-3" />
-                          {formatDueDate(todo.dueDate)}
+                          {formatDueDate(todo.dueDate, todo.dueTime)}
                         </span>
                       )}
                       {todo.tags.map(tag => (
@@ -296,26 +337,30 @@ export function TodoBoard({
               已完成 ({completedTodos.length})
             </h3>
             <div className="space-y-1">
-              {completedTodos.slice(0, 5).map(todo => (
+              {completedTodos.map(todo => (
                 <div
                   key={todo.id}
                   className="flex items-center gap-3 p-3 rounded-xl bg-accent/30 text-muted-foreground group"
                 >
-                  <CheckCircle2 className="w-5 h-5 text-green-500" />
+                  <button
+                    type="button"
+                    onClick={() => onToggle(todo.id)}
+                    className="flex-shrink-0"
+                    aria-label={`将“${todo.title}”恢复为待完成`}
+                    title="点击恢复为待完成"
+                  >
+                    <CheckCircle2 className="w-5 h-5 text-green-500 transition-colors hover:text-blue-500" />
+                  </button>
                   <span className="flex-1 line-through">{todo.title}</span>
                   <button
                     onClick={() => onDelete(todo.id)}
                     className="opacity-0 group-hover:opacity-100 text-muted-foreground hover:text-red-500"
+                    aria-label={`删除“${todo.title}”`}
                   >
                     <Trash2 className="w-4 h-4" />
                   </button>
                 </div>
               ))}
-              {completedTodos.length > 5 && (
-                <p className="text-xs text-muted-foreground text-center py-2">
-                  还有 {completedTodos.length - 5} 项已完成
-                </p>
-              )}
             </div>
           </div>
         )}
@@ -346,10 +391,11 @@ export function TodoBoard({
                 value={newTodo.description}
                 onChange={(e) => setNewTodo({ ...newTodo, description: e.target.value })}
                 placeholder="添加详细描述..."
-                rows={2}
+                rows={5}
+                className="min-h-[120px] resize-y"
               />
             </div>
-            <div className="grid grid-cols-2 gap-4">
+            <div className="grid grid-cols-[90px_1fr_1fr] gap-3">
               <div className="space-y-2">
                 <label className="text-sm font-medium">优先级</label>
                 <Select 
@@ -373,6 +419,14 @@ export function TodoBoard({
                   type="date"
                   value={newTodo.dueDate}
                   onChange={(e) => setNewTodo({ ...newTodo, dueDate: e.target.value })}
+                />
+              </div>
+              <div className="space-y-2">
+                <label className="text-sm font-medium">截止时间</label>
+                <Input
+                  type="time"
+                  value={newTodo.dueTime}
+                  onChange={(e) => setNewTodo({ ...newTodo, dueTime: e.target.value })}
                 />
               </div>
             </div>
