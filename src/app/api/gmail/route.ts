@@ -160,6 +160,7 @@ function parseHistoryMessage(message: Record<string, unknown>) {
     from: getHeader(headers, 'From'),
     to: getHeader(headers, 'To'),
     date: rawDate ? new Date(rawDate).toISOString() : '',
+    snippet: repairTextEncoding(String(message.snippet || '')),
     body: repairTextEncoding(text.join('\n\n').trim() || htmlFallback || String(message.snippet || '')),
     automated: isAutomatedReply(headers, getHeader(headers, 'Subject'), getHeader(headers, 'From')),
     deliveryFailure: isDeliveryFailure(getHeader(headers, 'Subject'), getHeader(headers, 'From')),
@@ -191,6 +192,65 @@ export async function GET(request: NextRequest) {
       }
       const data = await res.json();
       return NextResponse.json({ success: true, data });
+    }
+
+    if (action === 'daily-inbox') {
+      const maxResults = Math.min(Math.max(Number(searchParams.get('maxResults') || 50), 1), 50);
+      const q = 'in:inbox newer_than:2d -category:promotions -category:social';
+      const listResponse = await fetch(
+        `https://gmail.googleapis.com/gmail/v1/users/me/threads?maxResults=${maxResults}&q=${encodeURIComponent(q)}`,
+        { headers },
+      );
+      if (!listResponse.ok) {
+        const details = await listResponse.text();
+        return NextResponse.json(
+          { error: '读取今日 Gmail 来信失败', details },
+          { status: listResponse.status },
+        );
+      }
+
+      const listData = await listResponse.json() as { threads?: Array<{ id: string }> };
+      const references = listData.threads || [];
+      const incomingMessages: ReturnType<typeof parseHistoryMessage>[] = [];
+
+      for (let index = 0; index < references.length; index += 12) {
+        const batch = references.slice(index, index + 12);
+        const threadResults = await Promise.all(batch.map(async ({ id }) => {
+          const threadResponse = await fetch(
+            `https://gmail.googleapis.com/gmail/v1/users/me/threads/${id}?format=full`,
+            { headers },
+          );
+          return threadResponse.ok ? threadResponse.json() as Promise<Record<string, unknown>> : null;
+        }));
+
+        for (const thread of threadResults) {
+          if (!thread) continue;
+          const messages = ((thread.messages || []) as Record<string, unknown>[])
+            .map(parseHistoryMessage)
+            .filter((message) => (
+              !message.labelIds.includes('SENT')
+              && !message.automated
+              && !message.deliveryFailure
+              && !containsIgnoredGmailContactEmail(message.from)
+            ))
+            .sort((left, right) => Date.parse(right.date) - Date.parse(left.date));
+          if (messages[0]) incomingMessages.push(messages[0]);
+        }
+      }
+
+      incomingMessages.sort((left, right) => Date.parse(right.date) - Date.parse(left.date));
+      return NextResponse.json({
+        success: true,
+        data: incomingMessages.map((message) => ({
+          messageId: message.id,
+          threadId: message.threadId,
+          from: message.from,
+          subject: message.subject,
+          snippet: message.snippet,
+          body: message.body,
+          date: message.date,
+        })),
+      });
     }
 
     if (action === 'threads') {

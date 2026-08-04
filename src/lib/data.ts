@@ -21,6 +21,7 @@ import type { PromptTemplate, PromptType } from './ai-prompts';
 import type { FeishuFieldMapping } from './feishu-mapping';
 import type { RecordAssistantSettings } from './record-assistant';
 import { getSupabaseBrowserClient } from './supabase/client';
+import { formatLocalDateKey, parseLocalDateKey } from './local-date';
 
 export const STORAGE_KEYS = {
   INFLUENCERS: 'influencer-board-influencers',
@@ -794,7 +795,7 @@ export function useTodos() {
     [updateTodo],
   );
 
-  const today = new Date().toISOString().split('T')[0];
+  const today = formatLocalDateKey();
   const todayTodos = todos.filter((todo) => todo.status !== 'completed' && (!todo.dueDate || todo.dueDate === today));
   const weekTodos = todos.filter((todo) => todo.status !== 'completed' && Boolean(todo.dueDate));
 
@@ -852,7 +853,7 @@ export function useCalendarEvents() {
   const getEventsByMonth = useCallback(
     (year: number, month: number) =>
       events.filter((event) => {
-        const eventDate = new Date(event.date);
+        const eventDate = parseLocalDateKey(event.date);
         return eventDate.getFullYear() === year && eventDate.getMonth() === month;
       }),
     [events],

@@ -11,15 +11,23 @@ import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from '
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { 
   CheckCircle2, Circle, Clock, Flag, Plus, Trash2,
-  Calendar, Flame, AlertCircle, Sparkles
+  Flame, AlertCircle, Sparkles, Mail, RefreshCw, ArrowRight
 } from 'lucide-react';
+import { parseLocalDateKey } from '@/lib/local-date';
+import type { DailyGmailTodo } from '@/lib/use-daily-gmail-todos';
+import { YouTubeChannelAvatar } from '@/components/youtube-channel-avatar';
 
 interface TodoBoardProps {
   todos: TodoItem[];
   onAdd: (todo: Omit<TodoItem, 'id' | 'createdAt'>) => void;
   onToggle: (id: string) => void;
   onDelete: (id: string) => void;
-  onUpdate: (id: string, updates: Partial<TodoItem>) => void;
+  gmailItems: DailyGmailTodo[];
+  gmailLoading: boolean;
+  gmailRefreshing: boolean;
+  gmailError: string;
+  onRefreshGmail: () => void;
+  onOpenGmail: () => void;
 }
 
 const PRIORITY_CONFIG: Record<TodoPriority, { label: string; color: string; bgColor: string; icon: React.ReactNode }> = {
@@ -29,7 +37,18 @@ const PRIORITY_CONFIG: Record<TodoPriority, { label: string; color: string; bgCo
   urgent: { label: '紧急', color: 'text-red-600', bgColor: 'bg-red-100', icon: <AlertCircle className="w-3 h-3" /> },
 };
 
-export function TodoBoard({ todos, onAdd, onToggle, onDelete, onUpdate }: TodoBoardProps) {
+export function TodoBoard({
+  todos,
+  onAdd,
+  onToggle,
+  onDelete,
+  gmailItems,
+  gmailLoading,
+  gmailRefreshing,
+  gmailError,
+  onRefreshGmail,
+  onOpenGmail,
+}: TodoBoardProps) {
   const [showAddDialog, setShowAddDialog] = useState(false);
   const [filterPriority, setFilterPriority] = useState<TodoPriority | 'all'>('all');
   const [newTodo, setNewTodo] = useState({
@@ -70,12 +89,12 @@ export function TodoBoard({ todos, onAdd, onToggle, onDelete, onUpdate }: TodoBo
   };
 
   const formatDueDate = (dateStr: string) => {
-    const date = new Date(dateStr);
+    const date = parseLocalDateKey(dateStr);
     const today = new Date();
     today.setHours(0, 0, 0, 0);
     const tomorrow = new Date(today);
     tomorrow.setDate(tomorrow.getDate() + 1);
-    const dueDate = new Date(dateStr);
+    const dueDate = parseLocalDateKey(dateStr);
     dueDate.setHours(0, 0, 0, 0);
 
     if (dueDate.getTime() === today.getTime()) return '今天';
@@ -87,7 +106,7 @@ export function TodoBoard({ todos, onAdd, onToggle, onDelete, onUpdate }: TodoBo
   const isOverdue = (dateStr: string) => {
     const today = new Date();
     today.setHours(0, 0, 0, 0);
-    return new Date(dateStr) < today;
+    return parseLocalDateKey(dateStr) < today;
   };
 
   return (
@@ -101,7 +120,7 @@ export function TodoBoard({ todos, onAdd, onToggle, onDelete, onUpdate }: TodoBo
           <div>
             <h2 className="text-xl font-semibold">今日待办</h2>
             <p className="text-sm text-muted-foreground">
-              {filteredPending.length} 项待完成
+              {filteredPending.length} 项手动任务 · {gmailItems.length} 封今日红人来信
             </p>
           </div>
         </div>
@@ -126,13 +145,88 @@ export function TodoBoard({ todos, onAdd, onToggle, onDelete, onUpdate }: TodoBo
 
       {/* 待办列表 */}
       <div className="flex-1 overflow-y-auto space-y-3">
+        <section className="space-y-3">
+          <div className="flex items-center justify-between px-1">
+            <div>
+              <h3 className="flex items-center gap-2 text-sm font-semibold">
+                <Mail className="h-4 w-4 text-blue-600" />
+                今日 Gmail 来信
+                {!gmailLoading && <Badge variant="secondary">{gmailItems.length}</Badge>}
+              </h3>
+              <p className="mt-0.5 text-xs text-muted-foreground">只显示已匹配到飞书红人资料的正常来信</p>
+            </div>
+            <Button
+              type="button"
+              variant="ghost"
+              size="sm"
+              onClick={onRefreshGmail}
+              disabled={gmailRefreshing}
+            >
+              <RefreshCw className={`mr-1 h-3.5 w-3.5 ${gmailRefreshing ? 'animate-spin' : ''}`} />
+              刷新
+            </Button>
+          </div>
+
+          {gmailError ? (
+            <div className="flex items-center justify-between gap-3 rounded-xl border border-amber-200 bg-amber-50/70 px-4 py-3 text-sm text-amber-800">
+              <span className="flex items-center gap-2"><AlertCircle className="h-4 w-4" />{gmailError}</span>
+              <Button type="button" variant="outline" size="sm" onClick={onRefreshGmail}>重试</Button>
+            </div>
+          ) : gmailLoading ? (
+            <div className="rounded-xl border border-border/60 bg-white/55 px-4 py-5 text-sm text-muted-foreground">
+              正在读取今日 Gmail 来信并匹配红人资料…
+            </div>
+          ) : gmailItems.length === 0 ? (
+            <div className="rounded-xl border border-dashed border-border/70 bg-white/35 px-4 py-5 text-center text-sm text-muted-foreground">
+              今天暂时没有匹配到红人的新来信
+            </div>
+          ) : (
+            gmailItems.map((item) => (
+              <Card key={item.messageId} className="border-blue-100 bg-blue-50/25 transition-shadow hover:shadow-apple-hover">
+                <CardContent className="flex items-start gap-3 p-4">
+                  <YouTubeChannelAvatar
+                    avatar={item.avatar}
+                    fallback={item.channelName}
+                    label={item.channelName}
+                    size="md"
+                  />
+                  <div className="min-w-0 flex-1">
+                    <div className="flex items-start justify-between gap-3">
+                      <div className="min-w-0">
+                        <p className="truncate font-medium">{item.channelName}</p>
+                        <p className="mt-0.5 truncate text-xs text-muted-foreground">{item.subject || '无主题'}</p>
+                      </div>
+                      <span className="shrink-0 text-xs text-muted-foreground">
+                        {new Date(item.date).toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit' })}
+                      </span>
+                    </div>
+                    <p className="mt-2 text-sm leading-6 text-slate-700">
+                      {item.summary}
+                      {item.summaryPending && <span className="ml-2 text-xs text-blue-500">AI 正在优化摘要…</span>}
+                    </p>
+                  </div>
+                  <Button type="button" variant="ghost" size="sm" onClick={onOpenGmail} className="shrink-0">
+                    查看邮件 <ArrowRight className="ml-1 h-3.5 w-3.5" />
+                  </Button>
+                </CardContent>
+              </Card>
+            ))
+          )}
+        </section>
+
+        <div className="flex items-center gap-3 py-2">
+          <div className="h-px flex-1 bg-border/60" />
+          <span className="text-xs font-medium text-muted-foreground">手动任务</span>
+          <div className="h-px flex-1 bg-border/60" />
+        </div>
+
         {filteredPending.length === 0 ? (
           <div className="flex flex-col items-center justify-center py-16 text-center">
             <div className="w-16 h-16 rounded-2xl bg-green-100 flex items-center justify-center mb-4">
               <CheckCircle2 className="w-8 h-8 text-green-500" />
             </div>
             <h3 className="text-lg font-medium mb-1">太棒了！</h3>
-            <p className="text-muted-foreground">今天的待办已经全部完成</p>
+            <p className="text-muted-foreground">当前没有未完成的手动任务</p>
           </div>
         ) : (
           filteredPending.map(todo => (

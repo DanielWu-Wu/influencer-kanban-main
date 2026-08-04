@@ -13,6 +13,7 @@ import {
   ChevronLeft, ChevronRight, Plus, Clock, Video,
   Mail, CalendarDays, X, Trash2, Calendar
 } from 'lucide-react';
+import { formatLocalDateKey, parseLocalDateKey } from '@/lib/local-date';
 
 interface WorkCalendarProps {
   events: CalendarEvent[];
@@ -83,17 +84,13 @@ export function WorkCalendar({ events, todos, onAddEvent, onDeleteEvent }: WorkC
   const today = new Date();
   today.setHours(0, 0, 0, 0);
 
-  const formatDateKey = (date: Date) => {
-    return date.toISOString().split('T')[0];
-  };
-
   const getEventsForDate = (date: Date) => {
-    const dateKey = formatDateKey(date);
+    const dateKey = formatLocalDateKey(date);
     return events.filter(e => e.date === dateKey);
   };
 
   const getTodosForDate = (date: Date) => {
-    const dateKey = formatDateKey(date);
+    const dateKey = formatLocalDateKey(date);
     return todos.filter(t => t.dueDate === dateKey && t.status === 'pending');
   };
 
@@ -110,7 +107,7 @@ export function WorkCalendar({ events, todos, onAddEvent, onDeleteEvent }: WorkC
     
     onAddEvent({
       title: newEvent.title,
-      date: formatDateKey(selectedDate),
+      date: formatLocalDateKey(selectedDate),
       type: newEvent.type,
       color: newEvent.color,
       description: newEvent.description || undefined,
@@ -139,7 +136,7 @@ export function WorkCalendar({ events, todos, onAddEvent, onDeleteEvent }: WorkC
               {currentDate.getFullYear()} 年 {currentDate.getMonth() + 1} 月
             </h2>
             <p className="text-sm text-muted-foreground">
-              {events.length} 个日程 · {todos.filter(t => t.dueDate && new Date(t.dueDate) >= today).length} 个待办
+              {events.length} 个日程 · {todos.filter(t => t.dueDate && parseLocalDateKey(t.dueDate) >= today).length} 个待办
             </p>
           </div>
         </div>

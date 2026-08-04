@@ -1,6 +1,8 @@
 import type { AppSettings } from '@/lib/data';
 import { flattenFeishuValue, type CooperationProject } from '@/lib/cooperation-projects';
 import type { FeishuFieldKey, FeishuFieldMapping } from '@/lib/feishu-mapping';
+import { fetchFeishuRecordsCached } from '@/lib/feishu-record-cache';
+import { extractMappedFeishuChannelUrl } from '@/lib/feishu-field-value';
 
 type FeishuRecord = {
   record_id: string;
@@ -70,37 +72,17 @@ export async function loadCreatorResourceProfiles(settings: AppSettings) {
   if (!url || !fieldNames.length) return [];
 
   const profiles: CreatorResourceProfile[] = [];
-  let pageToken = '';
-  for (let page = 0; page < 10; page += 1) {
-    const response = await fetch('/api/feishu/records', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        action: 'search',
-        url,
-        pageSize: 500,
-        pageToken,
-        fieldNames,
-      }),
+  const records = await fetchFeishuRecordsCached(url, { fieldNames });
+  for (const record of records) {
+    const emailField = mapping.email ? record.fields[mapping.email] : undefined;
+    profiles.push({
+      recordId: record.record_id,
+      channelName: mappedValue(record, mapping, 'channelName'),
+      channelUrl: extractMappedFeishuChannelUrl(record.fields, mapping),
+      channelId: mappedValue(record, mapping, 'channelId'),
+      avatarUrl: getFeishuImageUrl(mapping.avatar ? record.fields[mapping.avatar] : undefined),
+      emails: extractEmailAddresses(emailField),
     });
-    const result = await response.json();
-    if (!response.ok || !result.success) {
-      throw new Error(String(result.error || '读取红人信息数据库失败。'));
-    }
-    const data = result.data as { items?: FeishuRecord[]; has_more?: boolean; page_token?: string };
-    for (const record of data.items || []) {
-      const emailField = mapping.email ? record.fields[mapping.email] : undefined;
-      profiles.push({
-        recordId: record.record_id,
-        channelName: mappedValue(record, mapping, 'channelName'),
-        channelUrl: mappedValue(record, mapping, 'channelUrl'),
-        channelId: mappedValue(record, mapping, 'channelId'),
-        avatarUrl: getFeishuImageUrl(mapping.avatar ? record.fields[mapping.avatar] : undefined),
-        emails: extractEmailAddresses(emailField),
-      });
-    }
-    if (!data.has_more || !data.page_token) break;
-    pageToken = data.page_token;
   }
   return profiles;
 }

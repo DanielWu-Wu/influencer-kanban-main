@@ -46,6 +46,7 @@ import { WorkCalendar } from '@/components/work-calendar';
 import { GmailPage } from '@/components/gmail-page';
 import { CreatorProspectingPage } from '@/components/creator-prospecting-page';
 import { useAuth } from '@/components/auth-provider';
+import { useDailyGmailTodos } from '@/lib/use-daily-gmail-todos';
 
 type View = 'kanban' | 'list' | 'email' | 'reminders' | 'settings' | 'todo' | 'calendar' | 'prospecting' | 'gmail' | 'prompts' | 'draft-prompts';
 
@@ -141,10 +142,11 @@ export default function DashboardPage() {
   const { influencers, addInfluencer, updateInfluencer } = useInfluencers();
   const { templates } = useEmailTemplates();
   const { reminders, pendingReminders, addReminder, completeReminder, skipReminder } = useReminders();
-  const { todos, todayTodos, addTodo, toggleTodo, deleteTodo, updateTodo } = useTodos();
+  const { todos, todayTodos, addTodo, toggleTodo, deleteTodo } = useTodos();
   const { events, addEvent, deleteEvent } = useCalendarEvents();
   const { settings } = useSettings();
   const { unreadCount } = useGmailThreads();
+  const dailyGmail = useDailyGmailTodos(settings);
 
   const stats = {
     total: influencers.length,
@@ -152,7 +154,7 @@ export default function DashboardPage() {
     inProgress: influencers.filter((item) => ['contacted', 'interested', 'negotiating'].includes(item.status)).length,
     published: influencers.filter((item) => item.status === 'published').length,
     upcoming: pendingReminders.length,
-    todayTodos: todayTodos.length,
+    todayTodos: todayTodos.length + dailyGmail.items.length,
   };
 
   if (authLoading || (configured && !user)) {
@@ -495,7 +497,18 @@ export default function DashboardPage() {
 
           {currentView === 'todo' && (
             <div className="app-workbench min-h-0 flex-1 rounded-xl p-4">
-              <TodoBoard todos={todos} onAdd={addTodo} onToggle={toggleTodo} onDelete={deleteTodo} onUpdate={updateTodo} />
+              <TodoBoard
+                todos={todos}
+                onAdd={addTodo}
+                onToggle={toggleTodo}
+                onDelete={deleteTodo}
+                gmailItems={dailyGmail.items}
+                gmailLoading={dailyGmail.loading}
+                gmailRefreshing={dailyGmail.refreshing}
+                gmailError={dailyGmail.error}
+                onRefreshGmail={dailyGmail.refresh}
+                onOpenGmail={() => setCurrentView('gmail')}
+              />
             </div>
           )}
 
