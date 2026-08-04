@@ -7,3 +7,6 @@ import './email-language.test';
 import './gmail-ai-reply.test';
 import './outreach-follow-up-sync.test';
 import './local-date.test';
+import './creator-country-label.test';
+import './creator-language.test';
+import './feishu-write-guard.test';

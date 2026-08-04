@@ -230,35 +230,75 @@ export const FALLBACK_PRODUCT_OPTIONS = [
 ];
 
 export const COUNTRY_LABELS: Record<string, string> = {
+  AD: '安道尔',
+  AL: '阿尔巴尼亚',
+  AM: '亚美尼亚',
   AT: '奥地利',
   AU: '澳大利亚',
+  AX: '奥兰群岛',
+  AZ: '阿塞拜疆',
+  BA: '波斯尼亚和黑塞哥维那',
+  BE: '比利时',
+  BG: '保加利亚',
+  BY: '白俄罗斯',
   CA: '加拿大',
   CH: '瑞士',
+  CY: '塞浦路斯',
   CZ: '捷克',
-  DK: '丹麦',
-  ES: '西班牙',
-  BE: '比利时',
   DE: '德国',
-  FR: '法国',
+  DK: '丹麦',
+  EE: '爱沙尼亚',
+  ES: '西班牙',
   FI: '芬兰',
+  FO: '法罗群岛',
+  FR: '法国',
+  GB: '英国',
+  GE: '格鲁吉亚',
+  GG: '根西岛',
+  GI: '直布罗陀',
   GR: '希腊',
   HR: '克罗地亚',
   HU: '匈牙利',
   IE: '爱尔兰',
+  IM: '马恩岛',
+  IS: '冰岛',
   IT: '意大利',
+  JE: '泽西岛',
   JP: '日本',
   KR: '韩国',
+  KZ: '哈萨克斯坦',
+  LI: '列支敦士登',
+  LT: '立陶宛',
   LU: '卢森堡',
+  LV: '拉脱维亚',
+  MC: '摩纳哥',
+  MD: '摩尔多瓦',
+  ME: '黑山',
+  MK: '北马其顿',
+  MT: '马耳他',
   NL: '荷兰',
   NO: '挪威',
   PL: '波兰',
   PT: '葡萄牙',
   RO: '罗马尼亚',
+  RS: '塞尔维亚',
+  RU: '俄罗斯',
   SE: '瑞典',
-  GB: '英国',
+  SI: '斯洛文尼亚',
+  SJ: '斯瓦尔巴和扬马延',
+  SK: '斯洛伐克',
+  SM: '圣马力诺',
+  TR: '土耳其',
+  UA: '乌克兰',
   UK: '英国',
   US: '美国',
+  VA: '梵蒂冈',
+  XK: '科索沃',
 };
+
+const ZH_REGION_DISPLAY_NAMES = typeof Intl.DisplayNames === 'function'
+  ? new Intl.DisplayNames(['zh-CN'], { type: 'region' })
+  : null;
 
 export function normalizeYouTubeKey(value: string) {
   return String(value || '')
@@ -292,19 +332,40 @@ export function formatCompactNumber(value?: number | null) {
 }
 
 export function countryLabel(code?: string) {
-  if (!code) return '未知';
-  return COUNTRY_LABELS[code.toUpperCase()] || code.toUpperCase();
+  const normalized = String(code || '').trim().toUpperCase();
+  if (!normalized) return '未知';
+  const configuredLabel = COUNTRY_LABELS[normalized];
+  if (configuredLabel) return configuredLabel;
+  if (/^[A-Z]{2}$/.test(normalized) && ZH_REGION_DISPLAY_NAMES) {
+    const localizedLabel = ZH_REGION_DISPLAY_NAMES.of(normalized);
+    if (localizedLabel && localizedLabel !== normalized) return localizedLabel;
+  }
+  return normalized;
 }
 
 export function inferLanguage(prospect: Pick<Prospect, 'title' | 'description' | 'recentVideos' | 'country'>) {
+  const countryCode = String(prospect.country || '').trim().toUpperCase();
   const text = [
     prospect.title,
     prospect.description,
     ...(prospect.recentVideos || []).map((video) => `${video.title} ${video.description || ''}`),
-  ].join(' ').toLowerCase();
+  ]
+    .join(' ')
+    .toLowerCase()
+    .replace(/https?:\/\/\S+|www\.\S+/gi, ' ')
+    .replace(/\b[\w.+-]+@[\w.-]+\.[a-z]{2,}\b/gi, ' ');
+
+  if (/[іїєґ]/i.test(text)) return 'uk';
+  if (/[ыэёъ]/i.test(text)) return 'ru';
+  const cyrillicCount = (text.match(/[\u0400-\u04ff]/g) || []).length;
+  if (cyrillicCount >= 3) {
+    if (countryCode === 'UA') return 'uk';
+    if (['BY', 'KZ', 'RU'].includes(countryCode)) return 'ru';
+  }
+
   const scores: Record<string, number> = {
     es: (text.match(/\b(el|la|los|las|para|con|viaje|coche|gracias|hola)\b/g) || []).length,
-    pt: (text.match(/\b(uma|para|com|viagem|carro|obrigado|olá)\b/g) || []).length,
+    pt: (text.match(/\b(uma|não|você|também|para|viagem|carro|obrigado|olá)\b/g) || []).length,
     nl: (text.match(/\b(het|een|voor|met|reizen|auto|bedankt)\b/g) || []).length,
     de: (text.match(/\b(der|die|das|für|mit|reise|auto|danke)\b/g) || []).length,
     fr: (text.match(/\b(le|la|les|pour|avec|voyage|voiture|merci)\b/g) || []).length,
@@ -313,25 +374,36 @@ export function inferLanguage(prospect: Pick<Prospect, 'title' | 'description' |
   const winner = Object.entries(scores).sort((a, b) => b[1] - a[1])[0];
   if (winner?.[1] > 0) return winner[0];
   const countryFallback: Record<string, string> = {
+    AT: 'de',
     BE: 'nl',
+    BG: 'bg',
     CA: 'en',
     CH: 'de',
+    CZ: 'cs',
+    DE: 'de',
     DK: 'da',
     ES: 'es',
     FI: 'fi',
     FR: 'fr',
     GB: 'en',
+    GR: 'el',
+    HU: 'hu',
     IE: 'en',
     IT: 'it',
     NL: 'nl',
     NO: 'no',
     PL: 'pl',
     PT: 'pt',
+    RO: 'ro',
+    RU: 'ru',
     SE: 'sv',
+    SK: 'sk',
+    TR: 'tr',
+    UA: 'uk',
     UK: 'en',
     US: 'en',
   };
-  return countryFallback[String(prospect.country || '').toUpperCase()] || '';
+  return countryFallback[countryCode] || '';
 }
 
 export function calculateRecentAverageViews(videos?: RecentVideo[]) {
@@ -363,6 +435,12 @@ export function migrateProspects(value: unknown): Prospect[] {
       ? 'resolved'
       : migratedWorkflowStatus;
     const publicEmail = String(item.publicEmail || '').trim();
+    const repairedLanguage = item.languageSource !== 'manual' && item.language === 'pt'
+      ? inferLanguage(item) || item.language
+      : item.language;
+    const shouldRepairOutreachLanguage = item.outreachLanguageSource !== 'manual'
+      && item.outreachLanguage === 'pt'
+      && repairedLanguage !== 'pt';
     return {
       ...item,
       schemaVersion: CREATOR_PROSPECTS_SCHEMA_VERSION,
@@ -390,10 +468,23 @@ export function migrateProspects(value: unknown): Prospect[] {
       resourceRecordId: item.resourceRecordId || (legacySingleTableRecord ? item.feishuRecordId : undefined),
       feishuRecordId: legacySingleTableRecord ? undefined : item.feishuRecordId,
       publicEmail,
+      language: repairedLanguage,
+      languageSource: item.languageSource !== 'manual' && repairedLanguage && repairedLanguage !== item.language
+        ? 'inferred'
+        : item.languageSource,
+      outreachLanguage: shouldRepairOutreachLanguage ? repairedLanguage : item.outreachLanguage,
+      outreachLanguageConfidence: shouldRepairOutreachLanguage
+        ? undefined
+        : item.outreachLanguageConfidence,
+      outreachLanguageSource: shouldRepairOutreachLanguage
+        ? undefined
+        : item.outreachLanguageSource,
       contactNameInferenceStatus: item.contactNameInferenceStatus === 'loading'
         ? undefined
         : item.contactNameInferenceStatus,
-      outreachLanguageInferenceStatus: item.outreachLanguageInferenceStatus === 'loading'
+      outreachLanguageInferenceStatus: shouldRepairOutreachLanguage
+        ? undefined
+        : item.outreachLanguageInferenceStatus === 'loading'
         ? undefined
         : item.outreachLanguageInferenceStatus,
       outreachGenerationStage: ['preparing', 'streaming_body', 'finalizing'].includes(item.outreachGenerationStage || '')
