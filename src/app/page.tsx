@@ -144,7 +144,7 @@ export default function DashboardPage() {
   const { influencers, addInfluencer, updateInfluencer } = useInfluencers();
   const { templates } = useEmailTemplates();
   const { reminders, pendingReminders, addReminder, completeReminder, skipReminder } = useReminders();
-  const { todos, todayTodos, addTodo, updateTodo, toggleTodo, deleteTodo } = useTodos();
+  const { todos, addTodo, updateTodo, toggleTodo, deleteTodo } = useTodos();
   const { events, addEvent, deleteEvent } = useCalendarEvents();
   const { settings, loading: settingsLoading } = useSettings();
   const { unreadCount } = useGmailThreads();
@@ -169,7 +169,8 @@ export default function DashboardPage() {
     inProgress: influencers.filter((item) => ['contacted', 'interested', 'negotiating'].includes(item.status)).length,
     published: influencers.filter((item) => item.status === 'published').length,
     upcoming: pendingReminders.length,
-    todayTodos: todayTodos.length + dailyGmail.items.filter((item) => !item.completed).length,
+    todayTodos: todos.filter((todo) => todo.status !== 'completed').length
+      + dailyGmail.items.filter((item) => !item.completed).length,
   };
 
   if (authLoading || (configured && !user)) {

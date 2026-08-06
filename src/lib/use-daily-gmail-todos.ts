@@ -2,7 +2,11 @@
 
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { loadCreatorResourceProfiles, type CreatorResourceProfile } from '@/lib/creator-resource-profile';
-import { isWithinDailyGmailWindow } from '@/lib/daily-gmail-todos';
+import {
+  getDailyGmailTaskKey,
+  isWithinDailyGmailWindow,
+  resolveIncomingGmailCompletedAt,
+} from '@/lib/daily-gmail-todos';
 import { useGmailAuth, type AppSettings } from '@/lib/data';
 import { normalizeThreadContactEmail } from '@/lib/gmail-thread-contact';
 import {
@@ -33,8 +37,11 @@ export type DailyGmailTodo = DailyGmailMessage & {
   completedAt?: string;
 };
 
+type StoredDailyGmailTask = Omit<DailyGmailTodo, 'snippet' | 'body' | 'summaryPending' | 'completed'>;
+
 const SUMMARY_CACHE_KEY = 'influencer-board-daily-gmail-summaries-v1';
 const COMPLETION_CACHE_KEY = 'influencer-board-daily-gmail-completions-v1';
+const TASK_CACHE_KEY = 'influencer-board-daily-gmail-tasks-v2';
 const AUTO_REFRESH_MS = 5 * 60_000;
 
 function loadSummaryCache() {
@@ -62,13 +69,33 @@ function loadCompletionCache() {
   }
 }
 
-function saveCompletionCache(cache: Record<string, string>) {
+function loadTaskCache() {
   try {
-    const entries = Object.entries(cache).slice(-500);
-    window.localStorage.setItem(COMPLETION_CACHE_KEY, JSON.stringify(Object.fromEntries(entries)));
+    return JSON.parse(window.localStorage.getItem(TASK_CACHE_KEY) || '{}') as Record<string, StoredDailyGmailTask>;
   } catch {
-    // 完成状态只影响本地界面，不应阻断 Gmail 来信显示。
+    return {};
   }
+}
+
+function saveTaskCache(cache: Record<string, StoredDailyGmailTask>) {
+  try {
+    window.localStorage.setItem(TASK_CACHE_KEY, JSON.stringify(cache));
+  } catch {
+    // 本地任务保存失败不应阻断 Gmail 页面读取，界面仍保留当前会话中的任务。
+  }
+}
+
+function taskCacheToItems(cache: Record<string, StoredDailyGmailTask>) {
+  return Object.values(cache)
+    .filter((task) => Boolean(task.threadId || task.messageId))
+    .map((task): DailyGmailTodo => ({
+      ...task,
+      snippet: '',
+      body: '',
+      summaryPending: false,
+      completed: Boolean(task.completedAt),
+    }))
+    .sort((a, b) => Date.parse(b.date) - Date.parse(a.date));
 }
 
 function compactText(value: string) {
@@ -130,7 +157,7 @@ export function useDailyGmailTodos(settings: AppSettings) {
   const [refreshing, setRefreshing] = useState(false);
   const [error, setError] = useState('');
   const runIdRef = useRef(0);
-  const completionCacheRef = useRef<Record<string, string>>({});
+  const taskCacheRef = useRef<Record<string, StoredDailyGmailTask>>({});
 
   const getAccessToken = useCallback(async (force = false) => {
     if (!auth?.isConnected) throw new Error('请先连接 Gmail。');
@@ -187,7 +214,6 @@ export function useDailyGmailTodos(settings: AppSettings) {
       const profileByEmail = selectProfileByEmail(profiles);
       const summaryCache = loadSummaryCache();
       const completionCache = loadCompletionCache();
-      completionCacheRef.current = completionCache;
       const matched = messages.flatMap((message) => {
         const profile = profileByEmail.get(normalizeThreadContactEmail(message.from));
         if (!profile) return [];
@@ -198,27 +224,40 @@ export function useDailyGmailTodos(settings: AppSettings) {
           summary: summaryCache[message.messageId] || fallbackSummary(message),
           summaryPending: !summaryCache[message.messageId],
           avatar: initialAvatar(profile),
-          completed: Boolean(completionCache[message.messageId]),
-          completedAt: completionCache[message.messageId] || undefined,
           profile,
         }];
       });
 
-      setItems(matched.map((item) => ({
-        messageId: item.messageId,
-        threadId: item.threadId,
-        from: item.from,
-        subject: item.subject,
-        snippet: item.snippet,
-        body: item.body,
-        date: item.date,
-        channelName: item.channelName,
-        channelUrl: item.channelUrl,
-        summary: item.summary,
-        summaryPending: item.summaryPending,
-        avatar: item.avatar,
-        completed: item.completed,
-        completedAt: item.completedAt,
+      const nextTaskCache = { ...taskCacheRef.current };
+      const pendingSummaryIds = new Set<string>();
+      matched.forEach((item) => {
+        const taskKey = getDailyGmailTaskKey(item.threadId, item.messageId);
+        const existing = nextTaskCache[taskKey];
+        if (existing && Date.parse(existing.date) > Date.parse(item.date)) return;
+        const completedAt = resolveIncomingGmailCompletedAt(
+          existing,
+          item,
+          completionCache[item.messageId],
+        );
+        nextTaskCache[taskKey] = {
+          messageId: item.messageId,
+          threadId: item.threadId,
+          from: item.from,
+          subject: item.subject,
+          date: item.date,
+          channelName: item.channelName,
+          channelUrl: item.channelUrl,
+          summary: item.summary,
+          avatar: item.avatar,
+          completedAt,
+        };
+        if (item.summaryPending) pendingSummaryIds.add(item.messageId);
+      });
+      taskCacheRef.current = nextTaskCache;
+      saveTaskCache(nextTaskCache);
+      setItems(taskCacheToItems(nextTaskCache).map((item) => ({
+        ...item,
+        summaryPending: pendingSummaryIds.has(item.messageId),
       })));
       setLoading(false);
       setRefreshing(false);
@@ -268,6 +307,19 @@ export function useDailyGmailTodos(settings: AppSettings) {
       });
       if (summaries.size) saveSummaryCache(summaryCache);
       const avatarByMessage = new Map(avatars);
+      const updatedTaskCache = { ...taskCacheRef.current };
+      Object.entries(updatedTaskCache).forEach(([taskKey, task]) => {
+        const summary = summaries.get(task.messageId);
+        const avatar = avatarByMessage.get(task.messageId);
+        if (!summary && !avatar) return;
+        updatedTaskCache[taskKey] = {
+          ...task,
+          summary: summary || task.summary,
+          avatar: avatar || task.avatar,
+        };
+      });
+      taskCacheRef.current = updatedTaskCache;
+      saveTaskCache(updatedTaskCache);
       setItems((current) => current.map((item) => ({
         ...item,
         summary: summaries.get(item.messageId) || item.summary,
@@ -283,6 +335,9 @@ export function useDailyGmailTodos(settings: AppSettings) {
   }, [getAccessToken, settings]);
 
   useEffect(() => {
+    const cachedTasks = loadTaskCache();
+    taskCacheRef.current = cachedTasks;
+    setItems(taskCacheToItems(cachedTasks));
     void load();
     const timer = window.setInterval(() => {
       if (document.visibilityState === 'visible') void load();
@@ -293,14 +348,18 @@ export function useDailyGmailTodos(settings: AppSettings) {
     };
   }, [load]);
 
-  const toggleCompleted = useCallback((messageId: string) => {
-    const completed = !Boolean(completionCacheRef.current[messageId]);
+  const toggleCompleted = useCallback((taskId: string) => {
+    const task = taskCacheRef.current[taskId];
+    if (!task) return;
+    const completed = !Boolean(task.completedAt);
     const completedAt = completed ? new Date().toISOString() : undefined;
-    if (completedAt) completionCacheRef.current[messageId] = completedAt;
-    else delete completionCacheRef.current[messageId];
-    saveCompletionCache(completionCacheRef.current);
+    const updatedTask = { ...task, completedAt };
+    taskCacheRef.current = { ...taskCacheRef.current, [taskId]: updatedTask };
+    saveTaskCache(taskCacheRef.current);
     setItems((current) => current.map((item) => (
-      item.messageId === messageId ? { ...item, completed, completedAt } : item
+      getDailyGmailTaskKey(item.threadId, item.messageId) === taskId
+        ? { ...item, completed, completedAt }
+        : item
     )));
   }, []);
 

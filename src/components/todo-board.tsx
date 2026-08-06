@@ -10,9 +10,10 @@ import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from '
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { 
   CheckCircle2, Circle, Clock, Flag, Pencil, Plus, Trash2,
-  Flame, AlertCircle, Sparkles, Mail, RefreshCw, ArrowRight
+  Flame, AlertCircle, Sparkles, Mail, RefreshCw, ArrowRight, ChevronDown, ChevronRight
 } from 'lucide-react';
 import { formatLocalDateKey, parseLocalDateKey } from '@/lib/local-date';
+import { getDailyGmailTaskKey, isCompletedToday } from '@/lib/daily-gmail-todos';
 import type { DailyGmailTodo } from '@/lib/use-daily-gmail-todos';
 import { YouTubeChannelAvatar } from '@/components/youtube-channel-avatar';
 
@@ -86,6 +87,7 @@ export function TodoBoard({
   const [editingTodoId, setEditingTodoId] = useState<string | null>(null);
   const [filterPriority, setFilterPriority] = useState<TodoPriority | 'all'>('all');
   const [todoDraft, setTodoDraft] = useState<TodoDraft>(createTodoDraft);
+  const [historyExpanded, setHistoryExpanded] = useState(false);
 
   const pendingTodos = todos.filter(t => t.status === 'pending');
   const completedTodos = todos.filter(t => t.status === 'completed');
@@ -103,7 +105,7 @@ export function TodoBoard({
     ...(filterPriority === 'all'
       ? gmailItems.filter((item) => !item.completed).map((item) => ({
           kind: 'gmail' as const,
-          key: `gmail-${item.messageId}`,
+          key: `gmail-${getDailyGmailTaskKey(item.threadId, item.messageId)}`,
           sortTime: toTimestamp(item.date),
           item,
         }))
@@ -118,11 +120,17 @@ export function TodoBoard({
     })),
     ...gmailItems.filter((item) => item.completed).map((item) => ({
       kind: 'gmail' as const,
-      key: `gmail-${item.messageId}`,
+      key: `gmail-${getDailyGmailTaskKey(item.threadId, item.messageId)}`,
       sortTime: toTimestamp(item.completedAt || item.date),
       item,
     })),
   ].sort((a, b) => b.sortTime - a.sortTime);
+  const completedTodayItems = completedItems.filter((entry) => (
+    isCompletedToday(entry.kind === 'manual' ? entry.todo.completedAt : entry.item.completedAt)
+  ));
+  const historicalCompletedItems = completedItems.filter((entry) => (
+    !isCompletedToday(entry.kind === 'manual' ? entry.todo.completedAt : entry.item.completedAt)
+  ));
 
   const openAddDialog = () => {
     setEditingTodoId(null);
@@ -196,6 +204,47 @@ export function TodoBoard({
     return `${date.toLocaleDateString('zh-CN', { month: 'short', day: 'numeric' })}${timeLabel}`;
   };
 
+  const renderCompletedList = (entries: UnifiedTodo[], showCompletedDate = false) => (
+    <div className="overflow-hidden rounded-xl border border-border/55 bg-accent/20">
+      {entries.map((entry) => entry.kind === 'manual' ? (
+        <div
+          key={entry.key}
+          className="group flex min-h-11 items-center gap-3 border-b border-border/45 px-3 py-1.5 text-muted-foreground last:border-b-0 hover:bg-accent/30"
+        >
+          <button type="button" onClick={() => onToggle(entry.todo.id)} className="flex-shrink-0" aria-label={`将“${entry.todo.title}”恢复为待完成`} title="点击恢复为待完成">
+            <CheckCircle2 className="h-4 w-4 text-green-500 transition-colors hover:text-blue-500" />
+          </button>
+          <div className="min-w-0 flex-1">
+            <p className="truncate text-xs line-through">{entry.todo.title}</p>
+          </div>
+          {showCompletedDate && entry.todo.completedAt && (
+            <span className="shrink-0 text-[10px]">{new Date(entry.todo.completedAt).toLocaleDateString('zh-CN', { month: 'short', day: 'numeric' })}</span>
+          )}
+          <button type="button" onClick={() => openEditDialog(entry.todo)} className="text-muted-foreground opacity-0 hover:text-blue-500 group-hover:opacity-100 group-focus-within:opacity-100" aria-label={`编辑“${entry.todo.title}”`} title="编辑任务">
+            <Pencil className="h-3.5 w-3.5" />
+          </button>
+          <button type="button" onClick={() => onDelete(entry.todo.id)} className="text-muted-foreground opacity-0 hover:text-red-500 group-hover:opacity-100 group-focus-within:opacity-100" aria-label={`删除“${entry.todo.title}”`} title="删除任务">
+            <Trash2 className="h-3.5 w-3.5" />
+          </button>
+        </div>
+      ) : (
+        <div key={entry.key} className="flex min-h-11 items-center gap-3 border-b border-border/45 px-3 py-1.5 text-muted-foreground last:border-b-0 hover:bg-accent/30">
+          <button type="button" onClick={() => onToggleGmail(getDailyGmailTaskKey(entry.item.threadId, entry.item.messageId))} className="flex-shrink-0" aria-label={`将“${entry.item.channelName}”的来信恢复为待完成`} title="点击恢复为待完成">
+            <CheckCircle2 className="h-4 w-4 text-green-500 transition-colors hover:text-blue-500" />
+          </button>
+          <YouTubeChannelAvatar avatar={entry.item.avatar} fallback={entry.item.channelName} label={entry.item.channelName} size="sm" />
+          <div className="min-w-0 flex-1">
+            <div className="flex items-center gap-2"><p className="truncate text-xs line-through">{entry.item.channelName}</p><Badge variant="outline" className="h-5 shrink-0 px-1.5 text-[9px]">Gmail</Badge><p className="min-w-0 flex-1 truncate text-[10px] line-through">{entry.item.subject || entry.item.summary}</p></div>
+          </div>
+          {showCompletedDate && entry.item.completedAt && (
+            <span className="shrink-0 text-[10px]">{new Date(entry.item.completedAt).toLocaleDateString('zh-CN', { month: 'short', day: 'numeric' })}</span>
+          )}
+          <button type="button" onClick={onOpenGmail} className="flex h-7 w-7 shrink-0 items-center justify-center rounded-md text-blue-600 hover:bg-blue-50" aria-label={`查看“${entry.item.channelName}”的邮件`} title="查看邮件"><ArrowRight className="h-3.5 w-3.5" /></button>
+        </div>
+      ))}
+    </div>
+  );
+
   return (
     <div className="h-full flex flex-col">
       {/* 头部 */}
@@ -207,7 +256,7 @@ export function TodoBoard({
           <div>
             <h2 className="text-xl font-semibold">今日待办</h2>
             <p className="text-sm text-muted-foreground">
-              {pendingItems.length} 项待完成 · {completedItems.length} 项已完成
+              {pendingItems.length} 项待完成 · {completedTodayItems.length} 项今日完成
             </p>
           </div>
         </div>
@@ -312,7 +361,7 @@ export function TodoBoard({
             ) : (
               <article key={entry.key} className="group relative flex min-h-[58px] items-center gap-3 border-b border-border/55 px-3 py-2 transition-colors duration-150 ease-out last:border-b-0 hover:bg-blue-50/35 motion-reduce:transition-none">
                 <span className="absolute inset-y-2 left-0 w-[3px] rounded-r-full bg-blue-500" />
-                <button type="button" className="shrink-0 text-slate-300 transition-colors hover:text-blue-500" onClick={() => onToggleGmail(entry.item.messageId)} aria-label={`将“${entry.item.channelName}”的来信标记为已完成`}>
+                <button type="button" className="shrink-0 text-slate-300 transition-colors hover:text-blue-500" onClick={() => onToggleGmail(getDailyGmailTaskKey(entry.item.threadId, entry.item.messageId))} aria-label={`将“${entry.item.channelName}”的来信标记为已完成`}>
                   <Circle className="h-5 w-5" />
                 </button>
                 <YouTubeChannelAvatar avatar={entry.item.avatar} fallback={entry.item.channelName} label={entry.item.channelName} size="sm" />
@@ -333,45 +382,30 @@ export function TodoBoard({
           </div>
         )}
 
-        {/* 已完成 */}
-        {completedItems.length > 0 && (
+        {/* 今日已完成 */}
+        {completedTodayItems.length > 0 && (
           <div className="mt-8">
             <h3 className="text-sm font-medium text-muted-foreground mb-3 flex items-center gap-2">
               <CheckCircle2 className="w-4 h-4 text-green-500" />
-              已完成 ({completedItems.length})
+              今日已完成 ({completedTodayItems.length})
             </h3>
-            <div className="overflow-hidden rounded-xl border border-border/55 bg-accent/20">
-              {completedItems.map((entry) => entry.kind === 'manual' ? (
-                <div
-                  key={entry.key}
-                  className="group flex min-h-11 items-center gap-3 border-b border-border/45 px-3 py-1.5 text-muted-foreground last:border-b-0 hover:bg-accent/30"
-                >
-                  <button type="button" onClick={() => onToggle(entry.todo.id)} className="flex-shrink-0" aria-label={`将“${entry.todo.title}”恢复为待完成`} title="点击恢复为待完成">
-                    <CheckCircle2 className="h-4 w-4 text-green-500 transition-colors hover:text-blue-500" />
-                  </button>
-                  <div className="min-w-0 flex-1">
-                    <p className="truncate text-xs line-through">{entry.todo.title}</p>
-                  </div>
-                  <button type="button" onClick={() => openEditDialog(entry.todo)} className="text-muted-foreground opacity-0 hover:text-blue-500 group-hover:opacity-100 group-focus-within:opacity-100" aria-label={`编辑“${entry.todo.title}”`} title="编辑任务">
-                    <Pencil className="h-3.5 w-3.5" />
-                  </button>
-                  <button type="button" onClick={() => onDelete(entry.todo.id)} className="text-muted-foreground opacity-0 hover:text-red-500 group-hover:opacity-100 group-focus-within:opacity-100" aria-label={`删除“${entry.todo.title}”`} title="删除任务">
-                    <Trash2 className="h-3.5 w-3.5" />
-                  </button>
-                </div>
-              ) : (
-                <div key={entry.key} className="flex min-h-11 items-center gap-3 border-b border-border/45 px-3 py-1.5 text-muted-foreground last:border-b-0 hover:bg-accent/30">
-                  <button type="button" onClick={() => onToggleGmail(entry.item.messageId)} className="flex-shrink-0" aria-label={`将“${entry.item.channelName}”的来信恢复为待完成`} title="点击恢复为待完成">
-                    <CheckCircle2 className="h-4 w-4 text-green-500 transition-colors hover:text-blue-500" />
-                  </button>
-                  <YouTubeChannelAvatar avatar={entry.item.avatar} fallback={entry.item.channelName} label={entry.item.channelName} size="sm" />
-                  <div className="min-w-0 flex-1">
-                    <div className="flex items-center gap-2"><p className="truncate text-xs line-through">{entry.item.channelName}</p><Badge variant="outline" className="h-5 shrink-0 px-1.5 text-[9px]">Gmail</Badge><p className="min-w-0 flex-1 truncate text-[10px] line-through">{entry.item.subject || entry.item.summary}</p></div>
-                  </div>
-                  <button type="button" onClick={onOpenGmail} className="flex h-7 w-7 shrink-0 items-center justify-center rounded-md text-blue-600 hover:bg-blue-50" aria-label={`查看“${entry.item.channelName}”的邮件`} title="查看邮件"><ArrowRight className="h-3.5 w-3.5" /></button>
-                </div>
-              ))}
-            </div>
+            {renderCompletedList(completedTodayItems)}
+          </div>
+        )}
+
+        {/* 历史已完成 */}
+        {historicalCompletedItems.length > 0 && (
+          <div className="mt-6">
+            <button
+              type="button"
+              onClick={() => setHistoryExpanded((expanded) => !expanded)}
+              className="mb-3 flex items-center gap-2 text-sm font-medium text-muted-foreground hover:text-foreground"
+              aria-expanded={historyExpanded}
+            >
+              {historyExpanded ? <ChevronDown className="h-4 w-4" /> : <ChevronRight className="h-4 w-4" />}
+              历史已完成 ({historicalCompletedItems.length})
+            </button>
+            {historyExpanded && renderCompletedList(historicalCompletedItems, true)}
           </div>
         )}
       </div>
