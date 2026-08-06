@@ -2,6 +2,10 @@
 
 import { useState, useMemo } from 'react';
 import { CalendarEvent, TodoItem } from '@/lib/types';
+import {
+  COOPERATION_STAGE_META,
+  type CooperationCalendarEvent,
+} from '@/lib/cooperation-projects';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Textarea } from '@/components/ui/textarea';
@@ -11,15 +15,23 @@ import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from '
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import {
   ChevronLeft, ChevronRight, Plus, Clock, Video,
-  Mail, CalendarDays, X, Trash2, Calendar
+  Mail, CalendarDays, X, Trash2, Calendar, RefreshCw,
+  BriefcaseBusiness, AlertTriangle, LoaderCircle,
 } from 'lucide-react';
 import { formatLocalDateKey, parseLocalDateKey } from '@/lib/local-date';
 
 interface WorkCalendarProps {
   events: CalendarEvent[];
   todos: TodoItem[];
+  cooperationEvents: CooperationCalendarEvent[];
+  cooperationConfigured: boolean;
+  cooperationLoading: boolean;
+  cooperationRefreshing: boolean;
+  cooperationError?: string;
   onAddEvent: (event: Omit<CalendarEvent, 'id'>) => void;
   onDeleteEvent: (id: string) => void;
+  onRefreshCooperation: () => void;
+  onOpenCooperationProject: (projectId: string) => void;
 }
 
 const WEEKDAYS = ['日', '一', '二', '三', '四', '五', '六'];
@@ -33,7 +45,30 @@ const EVENT_TYPE_CONFIG: Record<string, { label: string; color: string; bgColor:
   custom: { label: '自定义', color: 'text-gray-600', bgColor: 'bg-gray-100', icon: <CalendarDays className="w-3 h-3" /> },
 };
 
-export function WorkCalendar({ events, todos, onAddEvent, onDeleteEvent }: WorkCalendarProps) {
+function indexByDate<T>(items: T[], dateKey: (item: T) => string) {
+  const index = new Map<string, T[]>();
+  for (const item of items) {
+    const key = dateKey(item);
+    const current = index.get(key);
+    if (current) current.push(item);
+    else index.set(key, [item]);
+  }
+  return index;
+}
+
+export function WorkCalendar({
+  events,
+  todos,
+  cooperationEvents,
+  cooperationConfigured,
+  cooperationLoading,
+  cooperationRefreshing,
+  cooperationError,
+  onAddEvent,
+  onDeleteEvent,
+  onRefreshCooperation,
+  onOpenCooperationProject,
+}: WorkCalendarProps) {
   const [currentDate, setCurrentDate] = useState(new Date());
   const [selectedDate, setSelectedDate] = useState<Date | null>(null);
   const [showEventDialog, setShowEventDialog] = useState(false);
@@ -84,15 +119,43 @@ export function WorkCalendar({ events, todos, onAddEvent, onDeleteEvent }: WorkC
   const today = new Date();
   today.setHours(0, 0, 0, 0);
 
-  const getEventsForDate = (date: Date) => {
-    const dateKey = formatLocalDateKey(date);
-    return events.filter(e => e.date === dateKey);
-  };
+  const eventsByDate = useMemo(
+    () => indexByDate(events, (event) => event.date),
+    [events],
+  );
+  const todosByDate = useMemo(
+    () => indexByDate(
+      todos.filter((todo) => todo.status === 'pending' && Boolean(todo.dueDate)),
+      (todo) => todo.dueDate!,
+    ),
+    [todos],
+  );
+  const cooperationEventsByDate = useMemo(
+    () => indexByDate(cooperationEvents, (event) => event.dateKey),
+    [cooperationEvents],
+  );
 
-  const getTodosForDate = (date: Date) => {
-    const dateKey = formatLocalDateKey(date);
-    return todos.filter(t => t.dueDate === dateKey && t.status === 'pending');
-  };
+  const getEventsForDate = (date: Date) => eventsByDate.get(formatLocalDateKey(date)) || [];
+  const getTodosForDate = (date: Date) => todosByDate.get(formatLocalDateKey(date)) || [];
+  const getCooperationEventsForDate = (date: Date) => (
+    cooperationEventsByDate.get(formatLocalDateKey(date)) || []
+  );
+
+  const monthStats = useMemo(() => {
+    const year = currentDate.getFullYear();
+    const month = currentDate.getMonth();
+    const isCurrentMonth = (dateKey: string) => {
+      const date = parseLocalDateKey(dateKey);
+      return date.getFullYear() === year && date.getMonth() === month;
+    };
+    return {
+      cooperation: cooperationEvents.filter((event) => isCurrentMonth(event.dateKey)).length,
+      events: events.filter((event) => isCurrentMonth(event.date)).length,
+      todos: todos.filter((todo) => (
+        todo.status === 'pending' && Boolean(todo.dueDate) && isCurrentMonth(todo.dueDate!)
+      )).length,
+    };
+  }, [cooperationEvents, currentDate, events, todos]);
 
   const handlePrevMonth = () => {
     setCurrentDate(new Date(currentDate.getFullYear(), currentDate.getMonth() - 1, 1));
@@ -136,11 +199,23 @@ export function WorkCalendar({ events, todos, onAddEvent, onDeleteEvent }: WorkC
               {currentDate.getFullYear()} 年 {currentDate.getMonth() + 1} 月
             </h2>
             <p className="text-sm text-muted-foreground">
-              {events.length} 个日程 · {todos.filter(t => t.dueDate && parseLocalDateKey(t.dueDate) >= today).length} 个待办
+              本月 {monthStats.cooperation} 个合作节点 · {monthStats.events} 个日程 · {monthStats.todos} 个待办
             </p>
           </div>
         </div>
         <div className="flex items-center gap-1">
+          <Button
+            variant="outline"
+            size="sm"
+            disabled={!cooperationConfigured || cooperationLoading || cooperationRefreshing}
+            onClick={onRefreshCooperation}
+            title={cooperationConfigured ? '刷新飞书合作项目时间节点' : '请先配置详细合作记录表'}
+          >
+            {cooperationLoading || cooperationRefreshing
+              ? <LoaderCircle className="h-4 w-4 animate-spin" />
+              : <RefreshCw className="h-4 w-4" />}
+            刷新项目
+          </Button>
           <Button variant="outline" size="icon" onClick={handlePrevMonth}>
             <ChevronLeft className="w-4 h-4" />
           </Button>
@@ -157,6 +232,21 @@ export function WorkCalendar({ events, todos, onAddEvent, onDeleteEvent }: WorkC
           </Button>
         </div>
       </div>
+
+      {!cooperationConfigured ? (
+        <div className="mb-3 rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-xs text-amber-800">
+          尚未配置飞书“详细合作记录表”；手动日程和待办仍可正常使用。
+        </div>
+      ) : cooperationError ? (
+        <div className="mb-3 flex items-center gap-2 rounded-lg border border-red-200 bg-red-50 px-3 py-2 text-xs text-red-700">
+          <AlertTriangle className="h-4 w-4 shrink-0" />
+          合作节点读取失败：{cooperationError}。手动日程和待办未受影响。
+        </div>
+      ) : cooperationLoading && cooperationEvents.length === 0 ? (
+        <div className="mb-3 flex items-center gap-2 rounded-lg border border-blue-200 bg-blue-50 px-3 py-2 text-xs text-blue-700">
+          <LoaderCircle className="h-4 w-4 animate-spin" />正在读取飞书合作项目时间节点…
+        </div>
+      ) : null}
 
       {/* 星期标题 */}
       <div className="grid grid-cols-7 mb-2">
@@ -177,19 +267,16 @@ export function WorkCalendar({ events, todos, onAddEvent, onDeleteEvent }: WorkC
         {calendarDays.map((day, index) => {
           const dateEvents = getEventsForDate(day.date);
           const dateTodos = getTodosForDate(day.date);
+          const dateCooperationEvents = getCooperationEventsForDate(day.date);
           const isToday = day.date.getTime() === today.getTime();
           const isSelected = selectedDate?.getTime() === day.date.getTime();
           const isWeekend = day.date.getDay() === 0 || day.date.getDay() === 6;
 
           return (
-            <button
+            <div
               key={index}
-              onClick={() => {
-                setSelectedDate(day.date);
-                setShowEventDialog(true);
-              }}
               className={`
-                relative min-h-[60px] rounded-lg border border-transparent p-1 transition-[background-color,border-color,box-shadow] duration-200
+                relative min-h-[76px] rounded-lg border border-transparent p-1 transition-[background-color,border-color,box-shadow] duration-200
                 ${day.isCurrentMonth ? 'bg-white/58 hover:border-border/55 hover:bg-white/88' : 'bg-white/24'}
                 ${isToday ? 'ring-2 ring-blue-500' : ''}
                 ${isSelected ? 'bg-blue-50 ring-2 ring-blue-300' : ''}
@@ -197,17 +284,44 @@ export function WorkCalendar({ events, todos, onAddEvent, onDeleteEvent }: WorkC
                 hover:bg-accent/70
               `}
             >
-              <span className={`
-                block w-7 h-7 leading-7 mx-auto rounded-full text-sm font-medium
-                ${isToday ? 'bg-blue-500 text-white' : ''}
-                ${!day.isCurrentMonth ? 'text-muted-foreground/40' : ''}
-              `}>
-                {day.date.getDate()}
-              </span>
+              <button
+                type="button"
+                className="absolute inset-0 rounded-lg"
+                aria-label={`${day.date.toLocaleDateString('zh-CN')}，添加日程`}
+                onClick={() => {
+                  setSelectedDate(day.date);
+                  setShowEventDialog(true);
+                }}
+              />
+              <span className={`relative z-[1] block w-7 h-7 leading-7 mx-auto rounded-full text-sm font-medium pointer-events-none
+                  ${isToday ? 'bg-blue-500 text-white' : ''}
+                  ${!day.isCurrentMonth ? 'text-muted-foreground/40' : ''}
+                `}>
+                  {day.date.getDate()}
+                </span>
+
+              {dateCooperationEvents.length > 0 ? (
+                <div className="pointer-events-none relative z-[2] mt-0.5 space-y-0.5">
+                  {dateCooperationEvents.slice(0, 2).map((event) => (
+                    <button
+                      key={event.id}
+                      type="button"
+                      onClick={() => onOpenCooperationProject(event.projectId)}
+                      className={`pointer-events-auto block w-full truncate rounded px-1 py-0.5 text-left text-[9px] font-medium hover:ring-1 hover:ring-blue-300 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-500 ${event.colorClass}`}
+                      title={`${event.label} · ${event.project.channelName}`}
+                    >
+                      {event.label} · {event.project.channelName}
+                    </button>
+                  ))}
+                  {dateCooperationEvents.length > 2 ? (
+                    <p className="truncate px-1 text-left text-[9px] text-muted-foreground">还有 {dateCooperationEvents.length - 2} 项</p>
+                  ) : null}
+                </div>
+              ) : null}
               
               {/* 事件指示器 */}
               {dateEvents.length > 0 && (
-                <div className="absolute bottom-1 left-1 right-1 flex gap-0.5 justify-center">
+                <div className="pointer-events-none absolute bottom-1 left-1 right-1 flex gap-0.5 justify-center">
                   {dateEvents.slice(0, 3).map((event, i) => (
                     <span
                       key={i}
@@ -219,13 +333,13 @@ export function WorkCalendar({ events, todos, onAddEvent, onDeleteEvent }: WorkC
 
               {/* 待办指示器 */}
               {dateTodos.length > 0 && (
-                <div className="absolute top-1 right-1">
+                <div className="pointer-events-none absolute top-1 right-1">
                   <Badge variant="destructive" className="h-4 w-4 p-0 text-[10px] flex items-center justify-center">
                     {dateTodos.length}
                   </Badge>
                 </div>
               )}
-            </button>
+            </div>
           );
         })}
       </div>
@@ -248,8 +362,38 @@ export function WorkCalendar({ events, todos, onAddEvent, onDeleteEvent }: WorkC
               </Button>
             </div>
             
-            <div className="space-y-2 max-h-32 overflow-y-auto">
-              {getEventsForDate(selectedDate).map(event => (
+            <div className="max-h-56 space-y-4 overflow-y-auto">
+              {getCooperationEventsForDate(selectedDate).length > 0 ? (
+                <section className="space-y-2">
+                  <h4 className="flex items-center gap-1.5 text-xs font-semibold text-slate-600">
+                    <BriefcaseBusiness className="h-3.5 w-3.5" />合作项目节点
+                  </h4>
+                  {getCooperationEventsForDate(selectedDate).map((event) => (
+                    <button
+                      key={event.id}
+                      type="button"
+                      onClick={() => onOpenCooperationProject(event.projectId)}
+                      className={`block w-full rounded-lg p-2 text-left hover:ring-1 hover:ring-blue-300 ${event.colorClass}`}
+                    >
+                      <div className="flex items-center justify-between gap-3">
+                        <span className="truncate text-sm font-medium">{event.label} · {event.project.channelName}</span>
+                        {event.overdue ? <Badge variant="destructive" className="shrink-0 text-[10px]">逾期</Badge> : null}
+                      </div>
+                      <p className="mt-1 truncate text-[11px] opacity-80">
+                        {event.project.product} · {COOPERATION_STAGE_META[event.project.stage].label}
+                        {event.project.risks[0] ? ` · ${event.project.risks[0].label}` : ''}
+                      </p>
+                    </button>
+                  ))}
+                </section>
+              ) : null}
+
+              {getEventsForDate(selectedDate).length > 0 ? (
+                <section className="space-y-2">
+                  <h4 className="flex items-center gap-1.5 text-xs font-semibold text-slate-600">
+                    <CalendarDays className="h-3.5 w-3.5" />手动日程
+                  </h4>
+                  {getEventsForDate(selectedDate).map(event => (
                 <div
                   key={event.id}
                   className={`flex items-center gap-3 p-2 rounded-lg ${EVENT_TYPE_CONFIG[event.type]?.bgColor}`}
@@ -265,9 +409,16 @@ export function WorkCalendar({ events, todos, onAddEvent, onDeleteEvent }: WorkC
                     <Trash2 className="w-3 h-3" />
                   </button>
                 </div>
-              ))}
+                  ))}
+                </section>
+              ) : null}
               
-              {getTodosForDate(selectedDate).map(todo => (
+              {getTodosForDate(selectedDate).length > 0 ? (
+                <section className="space-y-2">
+                  <h4 className="flex items-center gap-1.5 text-xs font-semibold text-slate-600">
+                    <Clock className="h-3.5 w-3.5" />待办任务
+                  </h4>
+                  {getTodosForDate(selectedDate).map(todo => (
                 <div
                   key={todo.id}
                   className="flex items-center gap-3 p-2 rounded-lg bg-blue-50"
@@ -278,9 +429,11 @@ export function WorkCalendar({ events, todos, onAddEvent, onDeleteEvent }: WorkC
                   <span className="flex-1 text-sm truncate">{todo.title}</span>
                   <Badge variant="secondary" className="text-[10px]">待办</Badge>
                 </div>
-              ))}
+                  ))}
+                </section>
+              ) : null}
 
-              {getEventsForDate(selectedDate).length === 0 && getTodosForDate(selectedDate).length === 0 && (
+              {getCooperationEventsForDate(selectedDate).length === 0 && getEventsForDate(selectedDate).length === 0 && getTodosForDate(selectedDate).length === 0 && (
                 <p className="text-sm text-muted-foreground text-center py-4">暂无日程</p>
               )}
             </div>

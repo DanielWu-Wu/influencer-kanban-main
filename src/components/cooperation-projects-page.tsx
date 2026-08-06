@@ -81,6 +81,7 @@ import {
 import {
   COOPERATION_STAGE_META,
   COOPERATION_STAGES,
+  buildCooperationCalendarEvents,
   formatCooperationDate,
   formatCooperationFullDate,
   formatStageDuration,
@@ -88,6 +89,7 @@ import {
   matchesCooperationStageFilter,
   normalizeCooperationDateSelection,
   shouldShowStageDuration,
+  type CooperationCalendarEvent,
   type CooperationProject,
   type CooperationStage,
 } from '@/lib/cooperation-projects';
@@ -98,14 +100,6 @@ import {
 
 type ProjectsView = 'list' | 'board' | 'calendar';
 type RiskFilter = 'all' | 'risk' | 'overdue' | 'normal';
-
-type CalendarProjectEvent = {
-  id: string;
-  project: CooperationProject;
-  date: number;
-  label: string;
-  colorClass: string;
-};
 
 const WEEKDAYS = ['周一', '周二', '周三', '周四', '周五', '周六', '周日'];
 const EMPTY_FEISHU_MAPPING = {};
@@ -469,35 +463,16 @@ function ProjectsBoard({ projects, onSelect }: {
   );
 }
 
-function buildCalendarEvents(projects: CooperationProject[]) {
-  return projects.flatMap<CalendarProjectEvent>((project) => {
-    const candidates: Array<Omit<CalendarProjectEvent, 'id' | 'project'> & { key: string }> = [
-      { key: 'confirmed', date: project.cooperationDate || 0, label: '确认合作', colorClass: 'bg-emerald-50 text-emerald-700' },
-      { key: 'shipping', date: project.shippingDate || 0, label: '发货', colorClass: 'bg-sky-50 text-sky-700' },
-      { key: 'arrival', date: project.arrivalDate || 0, label: '到货', colorClass: 'bg-cyan-50 text-cyan-700' },
-      { key: 'filming-complete', date: project.filmingCompleteDate || 0, label: '拍摄完成', colorClass: 'bg-violet-50 text-violet-700' },
-      { key: 'expected', date: project.expectedPublishDate || 0, label: '预计上线', colorClass: 'bg-amber-50 text-amber-700' },
-      { key: 'published', date: project.actualPublishDate || 0, label: '实际上线', colorClass: 'bg-green-50 text-green-700' },
-    ];
-    return candidates
-      .filter((event) => event.date > 0)
-      .map((event) => ({
-        id: `${project.id}-${event.key}`,
-        project,
-        date: event.date,
-        label: event.label,
-        colorClass: event.colorClass,
-      }));
-  });
-}
-
 function ProjectsCalendar({ projects, month, onMonthChange, onSelect }: {
   projects: CooperationProject[];
   month: Date;
   onMonthChange: (month: Date) => void;
   onSelect: (project: CooperationProject) => void;
 }) {
-  const events = useMemo(() => buildCalendarEvents(projects), [projects]);
+  const events = useMemo<CooperationCalendarEvent[]>(
+    () => buildCooperationCalendarEvents(projects),
+    [projects],
+  );
   const monthStart = startOfMonth(month);
   const days = eachDayOfInterval({
     start: startOfWeek(monthStart, { weekStartsOn: 1 }),
@@ -991,9 +966,13 @@ const COOPERATION_BACKGROUND_REFRESH_MS = 5 * 60 * 1000;
 export function CooperationProjectsPage({
   active,
   onOpenSettings,
+  openProjectId,
+  onOpenProjectHandled,
 }: {
   active: boolean;
   onOpenSettings: () => void;
+  openProjectId?: string;
+  onOpenProjectHandled?: () => void;
 }) {
   const { settings, loading: settingsLoading } = useSettings();
   const url = settings.feishuCooperationUrl?.trim() || '';
@@ -1135,6 +1114,14 @@ export function CooperationProjectsPage({
     })),
     [avatarByProjectId, baseProjects],
   );
+
+  useEffect(() => {
+    if (!openProjectId || loading || !hasLoadedRef.current) return;
+    const project = projects.find((item) => item.id === openProjectId);
+    if (project) setSelectedProject(project);
+    else toast.error('没有找到对应的合作项目，记录可能已被删除或发生变化。');
+    onOpenProjectHandled?.();
+  }, [loading, onOpenProjectHandled, openProjectId, projects]);
 
   useEffect(() => {
     if (!selectedProject) return;

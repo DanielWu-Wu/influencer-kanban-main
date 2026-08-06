@@ -1,5 +1,6 @@
 import type { FeishuFieldKey, FeishuFieldMapping } from '@/lib/feishu-mapping';
 import type { CachedFeishuRecord } from '@/lib/feishu-record-cache';
+import { formatLocalDateKey } from '@/lib/local-date';
 
 export const COOPERATION_STAGES = [
   'confirmed',
@@ -134,6 +135,26 @@ export type CooperationProject = {
   risks: CooperationRisk[];
   milestones: CooperationMilestone[];
   rawFields: Record<string, unknown>;
+};
+
+export type CooperationCalendarEventKind =
+  | 'confirmed'
+  | 'shipping'
+  | 'arrival'
+  | 'filming_complete'
+  | 'expected_publish'
+  | 'published';
+
+export type CooperationCalendarEvent = {
+  id: string;
+  kind: CooperationCalendarEventKind;
+  projectId: string;
+  project: CooperationProject;
+  date: number;
+  dateKey: string;
+  label: string;
+  colorClass: string;
+  overdue: boolean;
 };
 
 const DAY_MS = 24 * 60 * 60 * 1000;
@@ -271,6 +292,80 @@ function startOfDay(value: number) {
   const date = new Date(value);
   date.setHours(0, 0, 0, 0);
   return date.getTime();
+}
+
+export function buildCooperationCalendarEvents(
+  projects: CooperationProject[],
+  now = Date.now(),
+) {
+  const today = startOfDay(now);
+  return projects.flatMap<CooperationCalendarEvent>((project) => {
+    const candidates: Array<{
+      kind: CooperationCalendarEventKind;
+      date?: number;
+      label: string;
+      colorClass: string;
+      overdue?: boolean;
+    }> = [
+      {
+        kind: 'confirmed',
+        date: project.cooperationDate,
+        label: '确认合作',
+        colorClass: 'bg-emerald-50 text-emerald-700',
+      },
+      {
+        kind: 'shipping',
+        date: project.shippingDate,
+        label: '发货',
+        colorClass: 'bg-sky-50 text-sky-700',
+      },
+      {
+        kind: 'arrival',
+        date: project.arrivalDate,
+        label: '到货',
+        colorClass: 'bg-cyan-50 text-cyan-700',
+      },
+      {
+        kind: 'filming_complete',
+        date: project.filmingCompleteDate,
+        label: '拍摄完成',
+        colorClass: 'bg-violet-50 text-violet-700',
+      },
+      {
+        kind: 'expected_publish',
+        date: project.expectedPublishDate,
+        label: '预计上线',
+        overdue: Boolean(
+          project.expectedPublishDate
+          && startOfDay(project.expectedPublishDate) < today
+          && !project.actualPublishDate
+        ),
+        colorClass: 'bg-amber-50 text-amber-700',
+      },
+      {
+        kind: 'published',
+        date: project.actualPublishDate,
+        label: '实际上线',
+        colorClass: 'bg-green-50 text-green-700',
+      },
+    ];
+
+    return candidates.flatMap<CooperationCalendarEvent>((candidate) => {
+      if (!candidate.date) return [];
+      const overdue = candidate.overdue === true;
+      return [{
+        id: `${project.id}-${candidate.kind}`,
+        kind: candidate.kind,
+        projectId: project.id,
+        project,
+        date: candidate.date,
+        dateKey: formatLocalDateKey(new Date(candidate.date)),
+        label: candidate.label,
+        colorClass: overdue ? 'bg-red-50 text-red-700' : candidate.colorClass,
+        overdue,
+      }];
+    });
+  });
 }
 
 function stageIndex(stage: CooperationStage) {

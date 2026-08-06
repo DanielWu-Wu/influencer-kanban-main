@@ -1,6 +1,6 @@
 'use client';
 
-import { useEffect, useState } from 'react';
+import { useCallback, useEffect, useState } from 'react';
 import { useRouter } from 'next/navigation';
 import { Button } from '@/components/ui/button';
 import { Sheet, SheetContent } from '@/components/ui/sheet';
@@ -47,6 +47,7 @@ import { GmailPage } from '@/components/gmail-page';
 import { CreatorProspectingPage } from '@/components/creator-prospecting-page';
 import { useAuth } from '@/components/auth-provider';
 import { useDailyGmailTodos } from '@/lib/use-daily-gmail-todos';
+import { useCooperationCalendarEvents } from '@/lib/use-cooperation-calendar-events';
 
 type View = 'kanban' | 'list' | 'email' | 'reminders' | 'settings' | 'todo' | 'calendar' | 'prospecting' | 'gmail' | 'prompts' | 'draft-prompts';
 
@@ -103,6 +104,7 @@ export default function DashboardPage() {
   const [gmailHasMounted, setGmailHasMounted] = useState(false);
   const [cooperationHasMounted, setCooperationHasMounted] = useState(false);
   const [influencerListHasMounted, setInfluencerListHasMounted] = useState(false);
+  const [openCooperationProjectId, setOpenCooperationProjectId] = useState<string>();
   const [showAddDialog, setShowAddDialog] = useState(false);
   const [editingInfluencer, setEditingInfluencer] = useState<Influencer | null>(null);
   const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
@@ -144,9 +146,22 @@ export default function DashboardPage() {
   const { reminders, pendingReminders, addReminder, completeReminder, skipReminder } = useReminders();
   const { todos, todayTodos, addTodo, updateTodo, toggleTodo, deleteTodo } = useTodos();
   const { events, addEvent, deleteEvent } = useCalendarEvents();
-  const { settings } = useSettings();
+  const { settings, loading: settingsLoading } = useSettings();
   const { unreadCount } = useGmailThreads();
   const dailyGmail = useDailyGmailTodos(settings);
+  const cooperationCalendar = useCooperationCalendarEvents({
+    active: currentView === 'calendar',
+    ready: !settingsLoading,
+    url: settings.feishuCooperationUrl || '',
+    mapping: settings.feishuCooperationFieldMapping || {},
+  });
+  const handleOpenCooperationProject = useCallback((projectId: string) => {
+    setOpenCooperationProjectId(projectId);
+    setCurrentView('kanban');
+  }, []);
+  const handleOpenCooperationProjectHandled = useCallback(() => {
+    setOpenCooperationProjectId(undefined);
+  }, []);
 
   const stats = {
     total: influencers.length,
@@ -407,6 +422,8 @@ export default function DashboardPage() {
               <CooperationProjectsPage
                 active={currentView === 'kanban'}
                 onOpenSettings={() => setCurrentView('settings')}
+                openProjectId={openCooperationProjectId}
+                onOpenProjectHandled={handleOpenCooperationProjectHandled}
               />
             </div>
           )}
@@ -516,7 +533,19 @@ export default function DashboardPage() {
 
           {currentView === 'calendar' && (
             <div className="app-workbench min-h-0 flex-1 rounded-xl p-4">
-              <WorkCalendar events={events} todos={todos} onAddEvent={addEvent} onDeleteEvent={deleteEvent} />
+              <WorkCalendar
+                events={events}
+                todos={todos}
+                cooperationEvents={cooperationCalendar.events}
+                cooperationConfigured={cooperationCalendar.configured}
+                cooperationLoading={cooperationCalendar.loading}
+                cooperationRefreshing={cooperationCalendar.refreshing}
+                cooperationError={cooperationCalendar.error}
+                onAddEvent={addEvent}
+                onDeleteEvent={deleteEvent}
+                onRefreshCooperation={() => { void cooperationCalendar.refresh(); }}
+                onOpenCooperationProject={handleOpenCooperationProject}
+              />
             </div>
           )}
 
