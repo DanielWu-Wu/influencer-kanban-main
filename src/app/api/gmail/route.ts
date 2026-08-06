@@ -196,7 +196,7 @@ export async function GET(request: NextRequest) {
 
     if (action === 'daily-inbox') {
       const maxResults = Math.min(Math.max(Number(searchParams.get('maxResults') || 50), 1), 50);
-      const q = 'in:inbox newer_than:2d -category:promotions -category:social';
+      const q = 'in:inbox newer_than:3d -category:promotions -category:social';
       const listResponse = await fetch(
         `https://gmail.googleapis.com/gmail/v1/users/me/threads?maxResults=${maxResults}&q=${encodeURIComponent(q)}`,
         { headers },
@@ -204,7 +204,7 @@ export async function GET(request: NextRequest) {
       if (!listResponse.ok) {
         const details = await listResponse.text();
         return NextResponse.json(
-          { error: '读取今日 Gmail 来信失败', details },
+          { error: '读取近 72 小时 Gmail 来信失败', details },
           { status: listResponse.status },
         );
       }

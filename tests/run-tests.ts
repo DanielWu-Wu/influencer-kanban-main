@@ -5,6 +5,7 @@ import './feishu-field-value.test';
 import './cooperation-projects.test';
 import './email-language.test';
 import './gmail-ai-reply.test';
+import './daily-gmail-todos.test';
 import './outreach-follow-up-sync.test';
 import './local-date.test';
 import './creator-country-label.test';

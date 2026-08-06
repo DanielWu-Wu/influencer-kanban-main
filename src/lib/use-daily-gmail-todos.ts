@@ -2,8 +2,8 @@
 
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { loadCreatorResourceProfiles, type CreatorResourceProfile } from '@/lib/creator-resource-profile';
+import { isWithinDailyGmailWindow } from '@/lib/daily-gmail-todos';
 import { useGmailAuth, type AppSettings } from '@/lib/data';
-import { formatLocalDateKey } from '@/lib/local-date';
 import { normalizeThreadContactEmail } from '@/lib/gmail-thread-contact';
 import {
   buildChannelAvatarLookup,
@@ -176,14 +176,12 @@ export function useDailyGmailTodos(settings: AppSettings) {
       }
       const gmailResult = await gmailResponse.json();
       if (!gmailResponse.ok || !gmailResult.success) {
-        throw new Error(String(gmailResult.error || '读取今日 Gmail 来信失败。'));
+        throw new Error(String(gmailResult.error || '读取近 72 小时 Gmail 来信失败。'));
       }
 
-      const today = formatLocalDateKey();
+      const now = Date.now();
       const messages = (Array.isArray(gmailResult.data) ? gmailResult.data : [])
-        .filter((message: DailyGmailMessage) => (
-          message.date && formatLocalDateKey(new Date(message.date)) === today
-        )) as DailyGmailMessage[];
+        .filter((message: DailyGmailMessage) => isWithinDailyGmailWindow(message.date, now)) as DailyGmailMessage[];
       const profiles = await loadCreatorResourceProfiles(settings);
       if (runId !== runIdRef.current) return;
       const profileByEmail = selectProfileByEmail(profiles);
@@ -278,7 +276,7 @@ export function useDailyGmailTodos(settings: AppSettings) {
       })));
     } catch (caughtError) {
       if (runId !== runIdRef.current) return;
-      setError(caughtError instanceof Error ? caughtError.message : '读取今日 Gmail 来信失败。');
+      setError(caughtError instanceof Error ? caughtError.message : '读取近 72 小时 Gmail 来信失败。');
       setLoading(false);
       setRefreshing(false);
     }

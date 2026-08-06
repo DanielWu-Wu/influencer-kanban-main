@@ -6,7 +6,6 @@ import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Textarea } from '@/components/ui/textarea';
 import { Badge } from '@/components/ui/badge';
-import { Card, CardContent } from '@/components/ui/card';
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from '@/components/ui/dialog';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { 
@@ -219,7 +218,7 @@ export function TodoBoard({
             size="sm"
             onClick={onRefreshGmail}
             disabled={gmailRefreshing}
-            title="刷新今日 Gmail 来信"
+            title="刷新近 72 小时 Gmail 来信"
           >
             <RefreshCw className={`mr-1 h-3.5 w-3.5 ${gmailRefreshing ? 'animate-spin' : ''}`} />
             刷新来信
@@ -250,7 +249,7 @@ export function TodoBoard({
             待完成 ({pendingItems.length})
           </h3>
           {gmailLoading && (
-            <span className="text-xs text-muted-foreground">正在读取今日 Gmail 来信…</span>
+            <span className="text-xs text-muted-foreground">正在读取近 72 小时 Gmail 来信…</span>
           )}
         </div>
 
@@ -270,59 +269,68 @@ export function TodoBoard({
             <p className="text-muted-foreground">当前没有未完成的任务</p>
           </div>
         ) : (
-          pendingItems.map((entry) => entry.kind === 'manual' ? (
-            <Card
-              key={entry.key}
-              className={`transition-[background-color,border-color,box-shadow] duration-200 hover:shadow-apple-hover ${entry.todo.dueDate && isOverdue(entry.todo.dueDate, entry.todo.dueTime) ? 'border-red-200 bg-red-50/30' : ''}`}
-            >
-              <CardContent className="flex items-start gap-4 p-4">
-                <button type="button" className="mt-0.5 flex-shrink-0" onClick={() => onToggle(entry.todo.id)} aria-label={`将“${entry.todo.title}”标记为已完成`}>
-                  <Circle className="w-6 h-6 text-gray-300 hover:text-blue-500 transition-colors" />
+          <div className="overflow-hidden rounded-xl border border-border/70 bg-background/70 shadow-[0_4px_14px_rgba(38,68,105,0.04)]">
+            {pendingItems.map((entry) => entry.kind === 'manual' ? (
+              <article
+                key={entry.key}
+                className={`group relative flex min-h-[58px] items-center gap-3 border-b border-border/55 px-3 py-2 transition-colors duration-150 ease-out last:border-b-0 hover:bg-accent/35 motion-reduce:transition-none ${entry.todo.dueDate && isOverdue(entry.todo.dueDate, entry.todo.dueTime) ? 'bg-red-50/30' : ''}`}
+              >
+                <span className={`absolute inset-y-2 left-0 w-[3px] rounded-r-full ${entry.todo.priority === 'urgent' || (entry.todo.dueDate && isOverdue(entry.todo.dueDate, entry.todo.dueTime)) ? 'bg-red-500' : 'bg-violet-400'}`} />
+                <button type="button" className="shrink-0 text-slate-300 transition-colors hover:text-blue-500" onClick={() => onToggle(entry.todo.id)} aria-label={`将“${entry.todo.title}”标记为已完成`}>
+                  <Circle className="h-5 w-5" />
                 </button>
-                <div className="flex-1 min-w-0">
-                  <p className="font-medium">{entry.todo.title}</p>
-                  {entry.todo.description && <p className="text-sm text-muted-foreground mt-1">{entry.todo.description}</p>}
-                  <div className="flex items-center gap-2 mt-3">
-                    <span className={`inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-xs ${PRIORITY_CONFIG[entry.todo.priority].bgColor} ${PRIORITY_CONFIG[entry.todo.priority].color}`}>
-                      {PRIORITY_CONFIG[entry.todo.priority].icon}{PRIORITY_CONFIG[entry.todo.priority].label}
-                    </span>
-                    {entry.todo.dueDate && (
-                      <span className={`inline-flex items-center gap-1 text-xs ${isOverdue(entry.todo.dueDate, entry.todo.dueTime) ? 'text-red-500' : 'text-muted-foreground'}`}>
-                        <Clock className="w-3 h-3" />{formatDueDate(entry.todo.dueDate, entry.todo.dueTime)}
-                      </span>
-                    )}
-                    {entry.todo.tags.map((tag) => <Badge key={tag} variant="secondary" className="text-xs">{tag}</Badge>)}
-                  </div>
-                </div>
-                <button type="button" onClick={() => openEditDialog(entry.todo)} className="text-gray-300 hover:text-blue-500 transition-colors" aria-label={`编辑“${entry.todo.title}”`} title="编辑任务">
-                  <Pencil className="w-4 h-4" />
-                </button>
-                <button type="button" onClick={() => onDelete(entry.todo.id)} className="text-gray-300 hover:text-red-500 transition-colors" aria-label={`删除“${entry.todo.title}”`} title="删除任务">
-                  <Trash2 className="w-4 h-4" />
-                </button>
-              </CardContent>
-            </Card>
-          ) : (
-            <Card key={entry.key} className="border-blue-100 bg-blue-50/25 transition-shadow hover:shadow-apple-hover">
-              <CardContent className="flex items-start gap-3 p-4">
-                <button type="button" className="mt-2 flex-shrink-0" onClick={() => onToggleGmail(entry.item.messageId)} aria-label={`将“${entry.item.channelName}”的来信标记为已完成`}>
-                  <Circle className="h-6 w-6 text-slate-300 transition-colors hover:text-blue-500" />
-                </button>
-                <YouTubeChannelAvatar avatar={entry.item.avatar} fallback={entry.item.channelName} label={entry.item.channelName} size="md" />
+                <span className="flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-violet-100 text-[10px] font-semibold text-violet-700">
+                  {entry.todo.title.trim().slice(0, 1) || '任'}
+                </span>
                 <div className="min-w-0 flex-1">
-                  <div className="flex items-start justify-between gap-3">
-                    <div className="min-w-0">
-                      <div className="flex items-center gap-2"><p className="truncate font-medium">{entry.item.channelName}</p><Badge variant="outline" className="shrink-0 text-[10px]"><Mail className="mr-1 h-3 w-3" />Gmail</Badge></div>
-                      <p className="mt-0.5 truncate text-xs text-muted-foreground">{entry.item.subject || '无主题'}</p>
-                    </div>
-                    <span className="shrink-0 text-xs text-muted-foreground">{new Date(entry.item.date).toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit' })}</span>
+                  <div className="flex min-w-0 items-center gap-2">
+                    <p className="max-w-[320px] truncate text-[13px] font-semibold text-foreground">{entry.todo.title}</p>
+                    <span className="shrink-0 rounded-md border border-violet-100 bg-violet-50 px-1.5 py-0.5 text-[9px] font-medium text-violet-600">手动</span>
+                    {entry.todo.tags.map((tag) => <Badge key={tag} variant="secondary" className="h-5 max-w-32 shrink truncate px-1.5 text-[9px]">{tag}</Badge>)}
                   </div>
-                  <p className="mt-2 text-sm leading-6 text-slate-700">{entry.item.summary}{entry.item.summaryPending && <span className="ml-2 text-xs text-blue-500">AI 正在优化摘要…</span>}</p>
+                  <p className="mt-1 truncate text-[11px] text-muted-foreground">{entry.todo.description || '未填写任务说明'}</p>
                 </div>
-                <Button type="button" variant="ghost" size="sm" onClick={onOpenGmail} className="shrink-0">查看邮件 <ArrowRight className="ml-1 h-3.5 w-3.5" /></Button>
-              </CardContent>
-            </Card>
-          ))
+                <div className="flex shrink-0 items-center gap-2 text-[10px]">
+                  <span className={`inline-flex items-center gap-1 rounded px-1.5 py-0.5 font-medium ${PRIORITY_CONFIG[entry.todo.priority].bgColor} ${PRIORITY_CONFIG[entry.todo.priority].color}`}>
+                    {PRIORITY_CONFIG[entry.todo.priority].icon}{PRIORITY_CONFIG[entry.todo.priority].label}
+                  </span>
+                  {entry.todo.dueDate && (
+                    <span className={`inline-flex min-w-24 items-center justify-end gap-1 ${isOverdue(entry.todo.dueDate, entry.todo.dueTime) ? 'text-red-500' : 'text-muted-foreground'}`}>
+                      <Clock className="h-3 w-3" />{formatDueDate(entry.todo.dueDate, entry.todo.dueTime)}
+                    </span>
+                  )}
+                </div>
+                <div className="flex shrink-0 items-center opacity-45 transition-opacity duration-150 ease-out group-hover:opacity-100 group-focus-within:opacity-100 motion-reduce:transition-none">
+                  <button type="button" onClick={() => openEditDialog(entry.todo)} className="flex h-7 w-7 items-center justify-center rounded-md text-blue-600 hover:bg-blue-50" aria-label={`编辑“${entry.todo.title}”`} title="编辑任务">
+                    <Pencil className="h-3.5 w-3.5" />
+                  </button>
+                  <button type="button" onClick={() => onDelete(entry.todo.id)} className="flex h-7 w-7 items-center justify-center rounded-md text-slate-400 hover:bg-red-50 hover:text-red-500" aria-label={`删除“${entry.todo.title}”`} title="删除任务">
+                    <Trash2 className="h-3.5 w-3.5" />
+                  </button>
+                </div>
+              </article>
+            ) : (
+              <article key={entry.key} className="group relative flex min-h-[58px] items-center gap-3 border-b border-border/55 px-3 py-2 transition-colors duration-150 ease-out last:border-b-0 hover:bg-blue-50/35 motion-reduce:transition-none">
+                <span className="absolute inset-y-2 left-0 w-[3px] rounded-r-full bg-blue-500" />
+                <button type="button" className="shrink-0 text-slate-300 transition-colors hover:text-blue-500" onClick={() => onToggleGmail(entry.item.messageId)} aria-label={`将“${entry.item.channelName}”的来信标记为已完成`}>
+                  <Circle className="h-5 w-5" />
+                </button>
+                <YouTubeChannelAvatar avatar={entry.item.avatar} fallback={entry.item.channelName} label={entry.item.channelName} size="sm" />
+                <div className="min-w-0 flex-1">
+                  <div className="flex min-w-0 items-center gap-2">
+                    <p className="max-w-[300px] truncate text-[13px] font-semibold text-foreground">{entry.item.channelName}</p>
+                    <Badge variant="outline" className="h-5 shrink-0 border-blue-100 bg-blue-50 px-1.5 text-[9px] font-medium text-blue-600"><Mail className="mr-1 h-2.5 w-2.5" />Gmail</Badge>
+                    <span className="min-w-0 truncate text-[11px] text-muted-foreground">{entry.item.subject || '无主题'}</span>
+                  </div>
+                  <p className="mt-1 truncate text-[11px] text-slate-600">{entry.item.summary}{entry.item.summaryPending && <span className="ml-2 text-[10px] text-blue-500">AI 正在优化摘要…</span>}</p>
+                </div>
+                <span className="w-12 shrink-0 text-right text-[10px] text-muted-foreground">{new Date(entry.item.date).toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit' })}</span>
+                <button type="button" onClick={onOpenGmail} className="flex h-7 w-7 shrink-0 items-center justify-center rounded-md text-blue-600 opacity-45 transition-[opacity,background-color] duration-150 ease-out hover:bg-blue-50 group-hover:opacity-100 group-focus-within:opacity-100 motion-reduce:transition-none" aria-label={`查看“${entry.item.channelName}”的邮件`} title="查看邮件">
+                  <ArrowRight className="h-3.5 w-3.5" />
+                </button>
+              </article>
+            ))}
+          </div>
         )}
 
         {/* 已完成 */}
@@ -332,37 +340,35 @@ export function TodoBoard({
               <CheckCircle2 className="w-4 h-4 text-green-500" />
               已完成 ({completedItems.length})
             </h3>
-            <div className="space-y-2">
+            <div className="overflow-hidden rounded-xl border border-border/55 bg-accent/20">
               {completedItems.map((entry) => entry.kind === 'manual' ? (
                 <div
                   key={entry.key}
-                  className="flex items-center gap-3 p-3 rounded-xl bg-accent/30 text-muted-foreground group"
+                  className="group flex min-h-11 items-center gap-3 border-b border-border/45 px-3 py-1.5 text-muted-foreground last:border-b-0 hover:bg-accent/30"
                 >
                   <button type="button" onClick={() => onToggle(entry.todo.id)} className="flex-shrink-0" aria-label={`将“${entry.todo.title}”恢复为待完成`} title="点击恢复为待完成">
-                    <CheckCircle2 className="w-5 h-5 text-green-500 transition-colors hover:text-blue-500" />
+                    <CheckCircle2 className="h-4 w-4 text-green-500 transition-colors hover:text-blue-500" />
                   </button>
                   <div className="min-w-0 flex-1">
-                    <p className="truncate line-through">{entry.todo.title}</p>
-                    {entry.todo.description && <p className="mt-0.5 truncate text-xs line-through">{entry.todo.description}</p>}
+                    <p className="truncate text-xs line-through">{entry.todo.title}</p>
                   </div>
-                  <button type="button" onClick={() => openEditDialog(entry.todo)} className="opacity-0 group-hover:opacity-100 text-muted-foreground hover:text-blue-500" aria-label={`编辑“${entry.todo.title}”`} title="编辑任务">
-                    <Pencil className="w-4 h-4" />
+                  <button type="button" onClick={() => openEditDialog(entry.todo)} className="text-muted-foreground opacity-0 hover:text-blue-500 group-hover:opacity-100 group-focus-within:opacity-100" aria-label={`编辑“${entry.todo.title}”`} title="编辑任务">
+                    <Pencil className="h-3.5 w-3.5" />
                   </button>
-                  <button type="button" onClick={() => onDelete(entry.todo.id)} className="opacity-0 group-hover:opacity-100 text-muted-foreground hover:text-red-500" aria-label={`删除“${entry.todo.title}”`} title="删除任务">
-                    <Trash2 className="w-4 h-4" />
+                  <button type="button" onClick={() => onDelete(entry.todo.id)} className="text-muted-foreground opacity-0 hover:text-red-500 group-hover:opacity-100 group-focus-within:opacity-100" aria-label={`删除“${entry.todo.title}”`} title="删除任务">
+                    <Trash2 className="h-3.5 w-3.5" />
                   </button>
                 </div>
               ) : (
-                <div key={entry.key} className="flex items-center gap-3 rounded-xl bg-accent/30 p-3 text-muted-foreground">
+                <div key={entry.key} className="flex min-h-11 items-center gap-3 border-b border-border/45 px-3 py-1.5 text-muted-foreground last:border-b-0 hover:bg-accent/30">
                   <button type="button" onClick={() => onToggleGmail(entry.item.messageId)} className="flex-shrink-0" aria-label={`将“${entry.item.channelName}”的来信恢复为待完成`} title="点击恢复为待完成">
-                    <CheckCircle2 className="w-5 h-5 text-green-500 transition-colors hover:text-blue-500" />
+                    <CheckCircle2 className="h-4 w-4 text-green-500 transition-colors hover:text-blue-500" />
                   </button>
                   <YouTubeChannelAvatar avatar={entry.item.avatar} fallback={entry.item.channelName} label={entry.item.channelName} size="sm" />
                   <div className="min-w-0 flex-1">
-                    <div className="flex items-center gap-2"><p className="truncate line-through">{entry.item.channelName}</p><Badge variant="outline" className="shrink-0 text-[10px]">Gmail</Badge></div>
-                    <p className="truncate text-xs line-through">{entry.item.subject || entry.item.summary}</p>
+                    <div className="flex items-center gap-2"><p className="truncate text-xs line-through">{entry.item.channelName}</p><Badge variant="outline" className="h-5 shrink-0 px-1.5 text-[9px]">Gmail</Badge><p className="min-w-0 flex-1 truncate text-[10px] line-through">{entry.item.subject || entry.item.summary}</p></div>
                   </div>
-                  <Button type="button" variant="ghost" size="sm" onClick={onOpenGmail} className="shrink-0">查看邮件 <ArrowRight className="ml-1 h-3.5 w-3.5" /></Button>
+                  <button type="button" onClick={onOpenGmail} className="flex h-7 w-7 shrink-0 items-center justify-center rounded-md text-blue-600 hover:bg-blue-50" aria-label={`查看“${entry.item.channelName}”的邮件`} title="查看邮件"><ArrowRight className="h-3.5 w-3.5" /></button>
                 </div>
               ))}
             </div>
