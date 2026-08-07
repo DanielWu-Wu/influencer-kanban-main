@@ -1,6 +1,6 @@
 'use client';
 
-import { createContext, Fragment, useContext, useEffect, useMemo, useState } from 'react';
+import { createContext, Fragment, useContext, useEffect, useMemo, useRef, useState } from 'react';
 import type { Session, User } from '@supabase/supabase-js';
 import { getSupabaseBrowserClient, getSupabaseConfig } from '@/lib/supabase/client';
 import type { AccountMeResponse, AccountProfile } from '@/lib/account-types';
@@ -47,6 +47,11 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   const [session, setSession] = useState<Session | null>(null);
   const [account, setAccount] = useState<AccountProfile | null>(null);
   const [loading, setLoading] = useState(configured);
+  const currentAccountId = useRef<string | null>(null);
+
+  useEffect(() => {
+    currentAccountId.current = account?.userId || null;
+  }, [account?.userId]);
 
   useEffect(() => {
     if (!supabase) {
@@ -76,8 +81,9 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       }
       // A signed-in user is not an invalid account while its profile request is
       // still in flight. Keep the login page in its loading state until the
-      // account check has actually completed.
-      setLoading(true);
+      // account check has actually completed. Background refreshes for the
+      // same user stay non-blocking so the current workspace remains mounted.
+      if (currentAccountId.current !== nextSession.user.id) setLoading(true);
       setSession(nextSession);
       void loadAccount(nextSession).then((nextAccount) => {
         if (!active) return;

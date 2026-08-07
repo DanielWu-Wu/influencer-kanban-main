@@ -94,18 +94,24 @@ function copyLegacyScopedCaches(userId: string) {
 }
 
 export function UserDataProvider({ children }: { children: React.ReactNode }) {
-  const { account, loading: authLoading } = useAuth();
+  const { account } = useAuth();
+  const accountUserId = account?.userId;
+  const accountStatus = account?.status;
+  const accountMustChangePassword = account?.mustChangePassword;
+  const accountIsAdmin = account?.isAdmin;
   const [data, setData] = useState<Record<string, unknown>>({});
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
   const writeQueues = useRef(new Map<string, Promise<void>>());
   const reportedErrors = useRef(new Set<string>());
-  const currentAccountId = useRef<string | null>(account?.userId || null);
-  currentAccountId.current = account?.userId || null;
+  const currentAccountId = useRef<string | null>(accountUserId || null);
 
   useEffect(() => {
-    if (authLoading) return;
-    if (!account || account.status !== 'active' || account.mustChangePassword) {
+    currentAccountId.current = accountUserId || null;
+  }, [accountUserId]);
+
+  useEffect(() => {
+    if (!accountUserId || accountStatus !== 'active' || accountMustChangePassword) {
       writeQueues.current.clear();
       setData({});
       setLoading(false);
@@ -118,8 +124,8 @@ export function UserDataProvider({ children }: { children: React.ReactNode }) {
       setLoading(true);
       setError('');
       try {
-        if (account.isAdmin) {
-          copyLegacyScopedCaches(account.userId);
+        if (accountIsAdmin) {
+          copyLegacyScopedCaches(accountUserId);
           const legacy = readLegacySnapshot();
           if (Object.keys(legacy).length) {
             const migrationResponse = await fetch('/api/account/migrate-legacy', {
@@ -153,10 +159,10 @@ export function UserDataProvider({ children }: { children: React.ReactNode }) {
     };
     void load();
     return () => { active = false; };
-  }, [account, authLoading]);
+  }, [accountIsAdmin, accountMustChangePassword, accountStatus, accountUserId]);
 
   const save = useCallback((key: UserDataKey, value: unknown) => {
-    const ownerId = account?.userId;
+    const ownerId = accountUserId;
     if (!ownerId) return;
     setData((current) => ({ ...current, [key]: value }));
     const previous = writeQueues.current.get(key) || Promise.resolve();
@@ -184,7 +190,7 @@ export function UserDataProvider({ children }: { children: React.ReactNode }) {
         if (writeQueues.current.get(key) === next) writeQueues.current.delete(key);
       });
     writeQueues.current.set(key, next);
-  }, [account?.userId]);
+  }, [accountUserId]);
 
   const value = useMemo<UserDataContextValue>(() => ({ data, loading, error, save }), [data, error, loading, save]);
   if (account?.status === 'active' && !account.mustChangePassword && loading) {

@@ -6,6 +6,27 @@ import {
 
 const LONG_BAN_DURATION = '876000h';
 
+type SupabaseDatabaseError = {
+  code?: string;
+  message?: string;
+};
+
+function throwDatabaseError(
+  context: string,
+  error: SupabaseDatabaseError,
+  fallbackMessage: string,
+): never {
+  console.error(`[admin-accounts:${context}] Supabase database operation failed`, {
+    code: error.code,
+    message: error.message?.slice(0, 240),
+  });
+  throw new Error(
+    error.code === '42501'
+      ? '账号管理数据库权限尚未配置。'
+      : fallbackMessage,
+  );
+}
+
 function normalizeEmail(value: unknown) {
   return typeof value === 'string' ? value.trim().toLowerCase() : '';
 }
@@ -27,7 +48,7 @@ export async function GET(request: NextRequest) {
         .order('created_at', { ascending: true }),
       admin.auth.admin.listUsers({ page: 1, perPage: 1000 }),
     ]);
-    if (profileError) throw profileError;
+    if (profileError) throwDatabaseError('list-profiles', profileError, '账号资料读取失败。');
     if (authError) throw authError;
 
     const authUsers = new Map(authData.users.map((user) => [user.id, user]));
@@ -94,7 +115,7 @@ export async function POST(request: NextRequest) {
     });
     if (profileError) {
       await admin.auth.admin.deleteUser(data.user.id);
-      throw profileError;
+      throwDatabaseError('create-profile', profileError, '账号资料创建失败。');
     }
 
     return NextResponse.json({ success: true, data: { userId: data.user.id } }, { status: 201 });
@@ -127,7 +148,7 @@ export async function PATCH(request: NextRequest) {
         .from('account_profiles')
         .update({ status: 'disabled', updated_at: now })
         .eq('user_id', userId);
-      if (profileError) throw profileError;
+      if (profileError) throwDatabaseError('disable-profile', profileError, '账号状态更新失败。');
       const { error } = await admin.auth.admin.updateUserById(userId, { ban_duration: LONG_BAN_DURATION });
       if (error) throw error;
     } else if (action === 'enable') {
@@ -137,7 +158,7 @@ export async function PATCH(request: NextRequest) {
         .from('account_profiles')
         .update({ status: 'active', updated_at: now })
         .eq('user_id', userId);
-      if (profileError) throw profileError;
+      if (profileError) throwDatabaseError('enable-profile', profileError, '账号状态更新失败。');
     } else if (action === 'reset_password') {
       const temporaryPassword = normalizePassword(body.temporaryPassword);
       if (temporaryPassword.length < 8) {
@@ -147,7 +168,7 @@ export async function PATCH(request: NextRequest) {
         .from('account_profiles')
         .update({ must_change_password: true, updated_at: now })
         .eq('user_id', userId);
-      if (profileError) throw profileError;
+      if (profileError) throwDatabaseError('reset-password-profile', profileError, '账号状态更新失败。');
       const { error } = await admin.auth.admin.updateUserById(userId, { password: temporaryPassword });
       if (error) throw error;
     } else {
