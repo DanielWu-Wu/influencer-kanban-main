@@ -1,7 +1,8 @@
 import { NextRequest, NextResponse } from 'next/server';
 import {
   APP_SESSION_COOKIE,
-  createAuthenticatedServerClient,
+  createAdminServerClient,
+  verifyAccessToken,
 } from '@/lib/supabase/server';
 
 export async function POST(request: NextRequest) {
@@ -10,18 +11,25 @@ export async function POST(request: NextRequest) {
     return NextResponse.json({ error: '缺少登录凭证。' }, { status: 400 });
   }
 
-  const supabase = createAuthenticatedServerClient(accessToken);
-  const { data, error } = await supabase.auth.getUser(accessToken);
-  if (error || !data.user) {
+  const user = await verifyAccessToken(accessToken, 'cloud-session');
+  if (!user) {
     return NextResponse.json({ error: '登录凭证无效。' }, { status: 401 });
   }
 
-  const { data: profile, error: profileError } = await supabase
+  const admin = createAdminServerClient();
+  const { data: profile, error: profileError } = await admin
     .from('account_profiles')
     .select('status,must_change_password')
-    .eq('user_id', data.user.id)
+    .eq('user_id', user.id)
     .maybeSingle();
-  if (profileError || !profile) {
+  if (profileError) {
+    console.error('[account-auth:cloud-session] Account profile lookup failed', {
+      code: profileError.code,
+      message: profileError.message.slice(0, 240),
+    });
+    return NextResponse.json({ error: '账号服务暂时不可用。' }, { status: 503 });
+  }
+  if (!profile) {
     return NextResponse.json({ error: '账号尚未由管理员开通。' }, { status: 403 });
   }
   if (profile.status !== 'active') {
