@@ -116,6 +116,7 @@ function getModelOptions(body: Record<string, unknown>, temperature: number): Ch
 }
 
 export async function POST(request: NextRequest) {
+  if (!(await getRequestUser(request))) return NextResponse.json({ error: '未登录或账号无权使用 AI Agent。' }, { status: 401 });
   try {
     const body = await request.json() as Record<string, unknown>;
     if (body.modelProvider === 'custom' && !body.customApiKey) {

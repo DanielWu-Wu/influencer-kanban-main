@@ -1,4 +1,4 @@
-import { NextRequest } from 'next/server';
+import { NextRequest, NextResponse } from 'next/server';
 import { DEFAULT_DRAFT_PROMPT } from '@/lib/ai-prompts';
 import {
   buildCompactGmailAIConversation,
@@ -171,6 +171,7 @@ function sseEvent(event: string, data: unknown) {
 }
 
 export async function POST(request: NextRequest) {
+  if (!(await getRequestUser(request))) return NextResponse.json({ error: '未登录或账号无权使用 AI。' }, { status: 401 });
   const body = await request.json().catch(() => ({})) as Record<string, unknown>;
   await hydrateSecrets(request, body);
 

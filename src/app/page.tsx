@@ -25,6 +25,7 @@ import {
   UserPlus,
   PanelLeftClose,
   PanelLeftOpen,
+  ShieldCheck,
 } from 'lucide-react';
 import {
   useInfluencers,
@@ -48,8 +49,10 @@ import { CreatorProspectingPage } from '@/components/creator-prospecting-page';
 import { useAuth } from '@/components/auth-provider';
 import { useDailyGmailTodos } from '@/lib/use-daily-gmail-todos';
 import { useCooperationCalendarEvents } from '@/lib/use-cooperation-calendar-events';
+import { AdminAccountsPanel } from '@/components/admin-accounts-panel';
+import { scopedLocalStorageKey } from '@/lib/account-cache-scope';
 
-type View = 'kanban' | 'list' | 'email' | 'reminders' | 'settings' | 'todo' | 'calendar' | 'prospecting' | 'gmail' | 'prompts' | 'draft-prompts';
+type View = 'kanban' | 'list' | 'email' | 'reminders' | 'settings' | 'accounts' | 'todo' | 'calendar' | 'prospecting' | 'gmail' | 'prompts' | 'draft-prompts';
 
 const label = {
   appShort: '\u7ea2\u4eba\u63a8\u5e7f',
@@ -68,6 +71,7 @@ const label = {
   settings: '\u8bbe\u7f6e',
   prompts: 'AI \u63d0\u793a\u8bcd',
   draftPrompts: 'AI \u8d77\u8349\u90ae\u4ef6\u63d0\u793a\u8bcd',
+  accounts: '\u8d26\u53f7\u7ba1\u7406',
   addInfluencer: '\u6dfb\u52a0\u7ea2\u4eba',
   search: '\u641c\u7d22\u9891\u9053\u540d\u79f0\u6216\u90ae\u7bb1...',
   allCountries: '\u5168\u90e8\u56fd\u5bb6',
@@ -82,7 +86,13 @@ const label = {
   goSettings: '\u53bb\u8bbe\u7f6e',
 };
 
-const NAV_ITEMS = [
+const NAV_ITEMS: Array<{
+  id: View;
+  label: string;
+  icon: typeof LayoutDashboard;
+  group: string;
+  adminOnly?: boolean;
+}> = [
   { id: 'todo', label: label.todo, icon: CheckSquare, group: label.dailyWork },
   { id: 'calendar', label: label.calendar, icon: CalendarDays, group: label.dailyWork },
   { id: 'prospecting', label: label.prospecting, icon: UserPlus, group: label.dailyWork },
@@ -93,13 +103,14 @@ const NAV_ITEMS = [
   { id: 'settings', label: label.settings, icon: Settings, group: label.tools },
   { id: 'prompts', label: label.prompts, icon: MessageSquareText, group: label.tools },
   { id: 'draft-prompts', label: label.draftPrompts, icon: FilePenLine, group: label.tools },
+  { id: 'accounts', label: label.accounts, icon: ShieldCheck, group: label.tools, adminOnly: true },
 ];
 
 const SIDEBAR_COLLAPSED_STORAGE_KEY = 'influencer-board-sidebar-collapsed';
 
 export default function DashboardPage() {
   const router = useRouter();
-  const { user, loading: authLoading, configured, signOut } = useAuth();
+  const { user, account, loading: authLoading, configured, signOut } = useAuth();
   const [currentView, setCurrentView] = useState<View>('todo');
   const [gmailHasMounted, setGmailHasMounted] = useState(false);
   const [cooperationHasMounted, setCooperationHasMounted] = useState(false);
@@ -113,6 +124,14 @@ export default function DashboardPage() {
   useEffect(() => {
     if (!authLoading && configured && !user) {
       router.replace('/login');
+      return;
+    }
+    if (!authLoading && configured && user && (!account || account.status === 'disabled')) {
+      void signOut().finally(() => router.replace('/login'));
+      return;
+    }
+    if (!authLoading && account?.mustChangePassword) {
+      router.replace('/change-password');
       return;
     }
     const params = new URLSearchParams(window.location.search);
@@ -129,7 +148,7 @@ export default function DashboardPage() {
     ) {
       setCurrentView('settings');
     }
-  }, [authLoading, configured, router, user]);
+  }, [account, authLoading, configured, router, signOut, user]);
 
   useEffect(() => {
     if (currentView === 'gmail') setGmailHasMounted(true);
@@ -138,7 +157,7 @@ export default function DashboardPage() {
   }, [currentView]);
 
   useEffect(() => {
-    setSidebarCollapsed(window.localStorage.getItem(SIDEBAR_COLLAPSED_STORAGE_KEY) === 'true');
+    setSidebarCollapsed(window.localStorage.getItem(scopedLocalStorageKey(SIDEBAR_COLLAPSED_STORAGE_KEY)) === 'true');
   }, []);
 
   const { influencers, addInfluencer, updateInfluencer } = useInfluencers();
@@ -173,7 +192,7 @@ export default function DashboardPage() {
       + dailyGmail.items.filter((item) => !item.completed).length,
   };
 
-  if (authLoading || (configured && !user)) {
+  if (authLoading || (configured && (!user || !account || account.status !== 'active'))) {
     return (
       <div className="flex min-h-screen items-center justify-center">
         <LoaderCircle className="h-6 w-6 animate-spin text-muted-foreground" />
@@ -207,7 +226,7 @@ export default function DashboardPage() {
   const toggleSidebar = () => {
     setSidebarCollapsed((collapsed) => {
       const nextCollapsed = !collapsed;
-      window.localStorage.setItem(SIDEBAR_COLLAPSED_STORAGE_KEY, String(nextCollapsed));
+      window.localStorage.setItem(scopedLocalStorageKey(SIDEBAR_COLLAPSED_STORAGE_KEY), String(nextCollapsed));
       return nextCollapsed;
     });
   };
@@ -218,7 +237,7 @@ export default function DashboardPage() {
         <div key={group} className="flex flex-col gap-1">
           {index > 0 && <div className={`${compact ? 'mx-1 mb-1' : 'mx-2 mb-2'} h-px bg-border/60`} />}
           {!compact && <p className="px-2 text-[11px] font-semibold tracking-[0.025em] text-muted-foreground">{group}</p>}
-          {NAV_ITEMS.filter((item) => item.group === group).map((item) => {
+          {NAV_ITEMS.filter((item) => item.group === group && (!item.adminOnly || account?.isAdmin)).map((item) => {
             const Icon = item.icon;
             const isActive = currentView === item.id;
             const badge =
@@ -498,6 +517,12 @@ export default function DashboardPage() {
           {currentView === 'settings' && (
             <div className="app-workbench flex min-h-0 flex-1 flex-col overflow-hidden rounded-xl p-4">
               <SettingsPanel />
+            </div>
+          )}
+
+          {currentView === 'accounts' && account?.isAdmin && (
+            <div className="app-workbench flex min-h-0 flex-1 flex-col overflow-hidden rounded-xl p-4">
+              <AdminAccountsPanel />
             </div>
           )}
 

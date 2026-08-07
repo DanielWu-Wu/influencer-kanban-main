@@ -48,6 +48,7 @@ import {
   textToEmailHtml,
 } from '@/lib/email-content';
 import type { AppSettings } from '@/lib/data';
+import { useAuth } from '@/components/auth-provider';
 import { chunkFeishuItems, type FeishuBatchResult } from '@/lib/feishu-batch';
 import { extractMappedFeishuChannelUrl } from '@/lib/feishu-field-value';
 import type { FeishuFieldKey, FeishuFieldMapping } from '@/lib/feishu-mapping';
@@ -516,6 +517,7 @@ function StatusCell({ record }: { record: FollowUpRecord }) {
 }
 
 export function OutreachFollowUpTab({ settings, auth, onAuthRefresh }: Props) {
+  const { user: appUser } = useAuth();
   const mapping = useMemo(
     () => settings.feishuProspectingFieldMapping || {},
     [settings.feishuProspectingFieldMapping],
@@ -554,8 +556,8 @@ export function OutreachFollowUpTab({ settings, auth, onAuthRefresh }: Props) {
     [settings.feishuFieldMapping],
   );
   const draftStorageKey = useMemo(
-    () => `${FOLLOW_UP_DRAFT_CACHE_KEY}:${auth?.email || 'anonymous'}`,
-    [auth?.email],
+    () => `${FOLLOW_UP_DRAFT_CACHE_KEY}:${appUser?.id || 'signed-out'}`,
+    [appUser?.id],
   );
   const canLoad = Boolean(settings.feishuProspectingUrl && mapping.developmentDate);
   const customStartAt = dateInputTimestamp(customStartDate);
@@ -787,11 +789,10 @@ export function OutreachFollowUpTab({ settings, auth, onAuthRefresh }: Props) {
     settings.youtubeDefaultRegion,
   ]);
 
-  const requestCheck = useCallback(async (record: FollowUpRecord, token: string) => {
+  const requestCheck = useCallback(async (record: FollowUpRecord) => {
     if (!record.email) throw new Error('该红人没有可用于 Gmail 检查的邮箱。');
     const query = new URLSearchParams({
       action: 'outreachFollowUp',
-      token,
       email: record.email,
       sentAt: String(record.developmentDate),
     });
@@ -821,10 +822,11 @@ export function OutreachFollowUpTab({ settings, auth, onAuthRefresh }: Props) {
     try {
       let check: FollowUpCheck;
       try {
-        check = await requestCheck(record, auth.accessToken);
+        check = await requestCheck(record);
       } catch (error) {
         if (!isGmailAuthError(error)) throw error;
-        check = await requestCheck(record, await refreshGmailAuth());
+        await refreshGmailAuth();
+        check = await requestCheck(record);
       }
       setRecords((current) => current.map((item) => (
         item.recordId === record.recordId

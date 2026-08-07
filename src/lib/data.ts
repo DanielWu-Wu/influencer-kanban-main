@@ -23,6 +23,8 @@ import type { RecordAssistantSettings } from './record-assistant';
 import type { EmailSignatureScope } from './email-content';
 import { getSupabaseBrowserClient } from './supabase/client';
 import { formatLocalDateKey, parseLocalDateKey } from './local-date';
+import { useUserDataStore } from '@/components/user-data-provider';
+import { USER_DATA_KEYS, type UserDataKey } from '@/lib/account-data-keys';
 
 export const STORAGE_KEYS = {
   INFLUENCERS: 'influencer-board-influencers',
@@ -48,15 +50,6 @@ function notifyCloudProductsUpdated(): void {
   if (typeof window === 'undefined') return;
   window.dispatchEvent(new Event(PRODUCTS_CLOUD_UPDATED_EVENT));
 }
-
-const GMAIL_STORAGE_KEYS = {
-  AUTH: 'gmail-auth',
-  THREADS: 'gmail-threads',
-  TRANSLATIONS: 'gmail-translations',
-  DRAFTS: 'gmail-drafts',
-  AI_SUGGESTIONS: 'gmail-ai-suggestions',
-  SETTINGS: 'gmail-settings',
-};
 
 export interface AppSettings {
   feishuUrl?: string;
@@ -199,32 +192,12 @@ Best regards,
   },
 ];
 
-function loadData<T>(key: string, defaultValue: T): T {
-  if (typeof window === 'undefined') return defaultValue;
-  try {
-    const stored = localStorage.getItem(key);
-    return stored ? JSON.parse(stored) : defaultValue;
-  } catch {
-    return defaultValue;
-  }
-}
-
-function saveData<T>(key: string, data: T): void {
-  if (typeof window === 'undefined') return;
-  localStorage.setItem(key, JSON.stringify(data));
-}
-
-function loadSettings(): AppSettings {
-  return loadData<AppSettings>(STORAGE_KEYS.SETTINGS, {});
-}
-
-function saveSettings(settings: AppSettings): void {
-  const safeSettings = { ...settings };
-  delete safeSettings.customApiKey;
-  delete safeSettings.customApiKeyConfigured;
-  delete safeSettings.gmailClientSecret;
-  delete safeSettings.youtubeApiKey;
-  saveData(STORAGE_KEYS.SETTINGS, safeSettings);
+function useCloudUserData<T>(key: UserDataKey, defaultValue: T) {
+  const { data, loading, error, save: saveStoreValue } = useUserDataStore();
+  const hasValue = Object.prototype.hasOwnProperty.call(data, key);
+  const value = hasValue ? data[key] as T : defaultValue;
+  const save = useCallback((next: T) => saveStoreValue(key, next), [key, saveStoreValue]);
+  return { value, save, loading, error };
 }
 
 function getCloudSafeSettings(settings: AppSettings) {
@@ -255,20 +228,10 @@ export function useSettings() {
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
-    const localSettings = loadSettings();
-    setSettings(localSettings);
-
-    const handleStorage = (event: StorageEvent) => {
-      if (event.key === STORAGE_KEYS.SETTINGS) {
-        setSettings(event.newValue ? JSON.parse(event.newValue) : {});
-      }
-    };
-
     const handleCustom = (event: Event) => {
       setSettings((event as CustomEvent<AppSettings>).detail);
     };
 
-    window.addEventListener('storage', handleStorage);
     window.addEventListener('settings-updated', handleCustom);
 
     const loadCloudSettings = async () => {
@@ -303,21 +266,16 @@ export function useSettings() {
           ? cloudRow.data as AppSettings
           : null;
       const nextSettings = {
-        ...localSettings,
         ...(cloudSettings || {}),
-        customApiKey: localSettings.customApiKey,
         customApiKeyConfigured: Boolean(secretStatus?.configured),
-        youtubeApiKey: localSettings.youtubeApiKey,
         youtubeApiKeyConfigured: Boolean(youtubeSecretStatus?.configured),
       };
       setSettings(nextSettings);
-      if (cloudSettings) saveSettings(nextSettings);
       setLoading(false);
     };
 
     void loadCloudSettings();
     return () => {
-      window.removeEventListener('storage', handleStorage);
       window.removeEventListener('settings-updated', handleCustom);
     };
   }, []);
@@ -325,7 +283,6 @@ export function useSettings() {
   const updateSettings = useCallback((updates: Partial<AppSettings>) => {
     setSettings((prev) => {
       const next = { ...prev, ...updates };
-      saveSettings(next);
       void syncSettingsToCloud(next);
       setTimeout(() => {
         window.dispatchEvent(new CustomEvent('settings-updated', { detail: next }));
@@ -338,18 +295,11 @@ export function useSettings() {
 }
 
 export function useInfluencers() {
-  const [influencers, setInfluencers] = useState<Influencer[]>([]);
-  const [loading, setLoading] = useState(true);
-
-  useEffect(() => {
-    setInfluencers(loadData<Influencer[]>(STORAGE_KEYS.INFLUENCERS, []));
-    setLoading(false);
-  }, []);
+  const { value: influencers, save: saveCloudInfluencers, loading } = useCloudUserData<Influencer[]>(USER_DATA_KEYS.INFLUENCERS, []);
 
   const saveInfluencers = useCallback((newData: Influencer[]) => {
-    setInfluencers(newData);
-    saveData(STORAGE_KEYS.INFLUENCERS, newData);
-  }, []);
+    saveCloudInfluencers(newData);
+  }, [saveCloudInfluencers]);
 
   const addInfluencer = useCallback(
     (influencer: Omit<Influencer, 'id' | 'createdAt' | 'updatedAt'>) => {
@@ -422,20 +372,10 @@ export function useProducts() {
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
-    const localProducts = loadData<Product[]>(STORAGE_KEYS.PRODUCTS, []);
-    setProducts(localProducts);
-
-    const handleStorage = (event: StorageEvent) => {
-      if (event.key === STORAGE_KEYS.PRODUCTS) {
-        setProducts(event.newValue ? JSON.parse(event.newValue) : []);
-      }
-    };
-
     const handleProductsUpdated = (event: Event) => {
       setProducts((event as CustomEvent<Product[]>).detail);
     };
 
-    window.addEventListener('storage', handleStorage);
     window.addEventListener(PRODUCTS_UPDATED_EVENT, handleProductsUpdated);
 
     const loadCloudProducts = async () => {
@@ -457,8 +397,8 @@ export function useProducts() {
         .order('updated_at', { ascending: false });
       if (error) {
         console.error('云端产品读取失败:', error);
-      } else if (data?.length) {
-        const cloudProducts: Product[] = data.map((row) => ({
+      } else {
+        const cloudProducts: Product[] = (data || []).map((row) => ({
           id: row.id,
           name: row.name,
           model: row.model || '',
@@ -473,7 +413,6 @@ export function useProducts() {
           updatedAt: row.updated_at,
         }));
         setProducts(cloudProducts);
-        saveData(STORAGE_KEYS.PRODUCTS, cloudProducts);
         notifyProductsUpdated(cloudProducts);
       }
       setLoading(false);
@@ -481,7 +420,6 @@ export function useProducts() {
 
     void loadCloudProducts();
     return () => {
-      window.removeEventListener('storage', handleStorage);
       window.removeEventListener(PRODUCTS_UPDATED_EVENT, handleProductsUpdated);
     };
   }, []);
@@ -516,7 +454,6 @@ export function useProducts() {
 
   const saveProducts = useCallback((newData: Product[]) => {
     setProducts(newData);
-    saveData(STORAGE_KEYS.PRODUCTS, newData);
     notifyProductsUpdated(newData);
   }, []);
 
@@ -555,7 +492,16 @@ export function useProducts() {
       saveProducts(products.filter((product) => product.id !== id));
       const supabase = getSupabaseBrowserClient();
       if (supabase) {
-        void supabase.from('products').delete().eq('id', id).then(({ error }) => {
+        void supabase.auth.getUser().then(({ data: authData }) => {
+          if (!authData.user) return null;
+          return supabase
+            .from('products')
+            .delete()
+            .eq('id', id)
+            .eq('user_id', authData.user.id);
+        }).then((result) => {
+          if (!result) return;
+          const error = result.error;
           if (error) {
             console.error('云端产品删除失败:', error);
           } else {
@@ -571,24 +517,11 @@ export function useProducts() {
 }
 
 export function useEmailTemplates() {
-  const [templates, setTemplates] = useState<EmailTemplate[]>(DEFAULT_TEMPLATES);
-  const [loading, setLoading] = useState(true);
-
-  useEffect(() => {
-    const stored = loadData<EmailTemplate[] | null>(STORAGE_KEYS.TEMPLATES, null);
-    if (stored?.length) {
-      setTemplates(stored);
-    } else {
-      setTemplates(DEFAULT_TEMPLATES);
-      saveData(STORAGE_KEYS.TEMPLATES, DEFAULT_TEMPLATES);
-    }
-    setLoading(false);
-  }, []);
+  const { value: templates, save: saveCloudTemplates, loading } = useCloudUserData<EmailTemplate[]>(USER_DATA_KEYS.TEMPLATES, DEFAULT_TEMPLATES);
 
   const saveTemplates = useCallback((newData: EmailTemplate[]) => {
-    setTemplates(newData);
-    saveData(STORAGE_KEYS.TEMPLATES, newData);
-  }, []);
+    saveCloudTemplates(newData);
+  }, [saveCloudTemplates]);
 
   const addTemplate = useCallback(
     (template: Omit<EmailTemplate, 'id'>) => {
@@ -617,18 +550,11 @@ export function useEmailTemplates() {
 }
 
 export function useReminders() {
-  const [reminders, setReminders] = useState<FollowUpReminder[]>([]);
-  const [loading, setLoading] = useState(true);
-
-  useEffect(() => {
-    setReminders(loadData<FollowUpReminder[]>(STORAGE_KEYS.REMINDERS, []));
-    setLoading(false);
-  }, []);
+  const { value: reminders, save: saveCloudReminders, loading } = useCloudUserData<FollowUpReminder[]>(USER_DATA_KEYS.REMINDERS, []);
 
   const saveReminders = useCallback((newData: FollowUpReminder[]) => {
-    setReminders(newData);
-    saveData(STORAGE_KEYS.REMINDERS, newData);
-  }, []);
+    saveCloudReminders(newData);
+  }, [saveCloudReminders]);
 
   const addReminder = useCallback(
     (reminder: Omit<FollowUpReminder, 'id'>) => {
@@ -662,18 +588,11 @@ export function useReminders() {
 }
 
 export function useEmailRecords() {
-  const [emails, setEmails] = useState<EmailRecord[]>([]);
-  const [loading, setLoading] = useState(true);
-
-  useEffect(() => {
-    setEmails(loadData<EmailRecord[]>(STORAGE_KEYS.EMAILS, []));
-    setLoading(false);
-  }, []);
+  const { value: emails, save: saveCloudEmails, loading } = useCloudUserData<EmailRecord[]>(USER_DATA_KEYS.EMAILS, []);
 
   const saveEmails = useCallback((newData: EmailRecord[]) => {
-    setEmails(newData);
-    saveData(STORAGE_KEYS.EMAILS, newData);
-  }, []);
+    saveCloudEmails(newData);
+  }, [saveCloudEmails]);
 
   const addEmail = useCallback(
     (email: Omit<EmailRecord, 'id'>) => {
@@ -693,18 +612,11 @@ export function useEmailRecords() {
 }
 
 export function useCollaborations() {
-  const [collaborations, setCollaborations] = useState<Collaboration[]>([]);
-  const [loading, setLoading] = useState(true);
-
-  useEffect(() => {
-    setCollaborations(loadData<Collaboration[]>(STORAGE_KEYS.COLLABORATIONS, []));
-    setLoading(false);
-  }, []);
+  const { value: collaborations, save: saveCloudCollaborations, loading } = useCloudUserData<Collaboration[]>(USER_DATA_KEYS.COLLABORATIONS, []);
 
   const saveCollaborations = useCallback((newData: Collaboration[]) => {
-    setCollaborations(newData);
-    saveData(STORAGE_KEYS.COLLABORATIONS, newData);
-  }, []);
+    saveCloudCollaborations(newData);
+  }, [saveCloudCollaborations]);
 
   const addCollaboration = useCallback(
     (collaboration: Omit<Collaboration, 'id' | 'createdAt' | 'updatedAt'>) => {
@@ -741,18 +653,11 @@ export function useCollaborations() {
 }
 
 export function useTodos() {
-  const [todos, setTodos] = useState<TodoItem[]>([]);
-  const [loading, setLoading] = useState(true);
-
-  useEffect(() => {
-    setTodos(loadData<TodoItem[]>(STORAGE_KEYS.TODOS, []));
-    setLoading(false);
-  }, []);
+  const { value: todos, save: saveCloudTodos, loading } = useCloudUserData<TodoItem[]>(USER_DATA_KEYS.TODOS, []);
 
   const saveTodos = useCallback((newData: TodoItem[]) => {
-    setTodos(newData);
-    saveData(STORAGE_KEYS.TODOS, newData);
-  }, []);
+    saveCloudTodos(newData);
+  }, [saveCloudTodos]);
 
   const addTodo = useCallback(
     (todo: Omit<TodoItem, 'id' | 'createdAt'>) => {
@@ -815,18 +720,11 @@ export function useTodos() {
 }
 
 export function useCalendarEvents() {
-  const [events, setEvents] = useState<CalendarEvent[]>([]);
-  const [loading, setLoading] = useState(true);
-
-  useEffect(() => {
-    setEvents(loadData<CalendarEvent[]>(STORAGE_KEYS.CALENDAR_EVENTS, []));
-    setLoading(false);
-  }, []);
+  const { value: events, save: saveCloudEvents, loading } = useCloudUserData<CalendarEvent[]>(USER_DATA_KEYS.CALENDAR_EVENTS, []);
 
   const saveEvents = useCallback((newData: CalendarEvent[]) => {
-    setEvents(newData);
-    saveData(STORAGE_KEYS.CALENDAR_EVENTS, newData);
-  }, []);
+    saveCloudEvents(newData);
+  }, [saveCloudEvents]);
 
   const addEvent = useCallback(
     (event: Omit<CalendarEvent, 'id'>) => {
@@ -869,15 +767,12 @@ export function useGmailAuth() {
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
-    const localAuth = loadData<GmailAuth | null>(GMAIL_STORAGE_KEYS.AUTH, null);
-    setAuth(localAuth);
     fetch('/api/auth/session', { cache: 'no-store' })
       .then(async (response) => {
         if (!response.ok) return;
         const result = await response.json();
         if (result.success && result.data) {
           setAuth(result.data);
-          saveData(GMAIL_STORAGE_KEYS.AUTH, result.data);
         }
       })
       .finally(() => setLoading(false));
@@ -885,7 +780,6 @@ export function useGmailAuth() {
 
   const saveAuth = useCallback((newAuth: GmailAuth | null) => {
     setAuth(newAuth);
-    saveData(GMAIL_STORAGE_KEYS.AUTH, newAuth);
   }, []);
 
   const connect = useCallback((authData: GmailAuth) => saveAuth(authData), [saveAuth]);
@@ -905,13 +799,11 @@ export function useGmailSettings() {
     matchWithInfluencers: true,
   };
   const { settings: appSettings, updateSettings: updateAppSettings } = useSettings();
-  const legacySettings = loadData<GmailSettings | null>(GMAIL_STORAGE_KEYS.SETTINGS, null);
-  const settings = appSettings.gmailSettings || legacySettings || defaultSettings;
+  const settings = appSettings.gmailSettings || defaultSettings;
 
   const updateSettings = useCallback(
     (updates: Partial<GmailSettings>) => {
       const next = { ...settings, ...updates };
-      saveData(GMAIL_STORAGE_KEYS.SETTINGS, next);
       updateAppSettings({ gmailSettings: next });
     },
     [settings, updateAppSettings],
@@ -921,18 +813,11 @@ export function useGmailSettings() {
 }
 
 export function useGmailThreads() {
-  const [threads, setThreads] = useState<GmailThread[]>([]);
-  const [loading, setLoading] = useState(true);
-
-  useEffect(() => {
-    setThreads(loadData<GmailThread[]>(GMAIL_STORAGE_KEYS.THREADS, []));
-    setLoading(false);
-  }, []);
+  const { value: threads, save: saveCloudThreads, loading } = useCloudUserData<GmailThread[]>(USER_DATA_KEYS.GMAIL_THREADS, []);
 
   const saveThreads = useCallback((newThreads: GmailThread[]) => {
-    setThreads(newThreads);
-    saveData(GMAIL_STORAGE_KEYS.THREADS, newThreads);
-  }, []);
+    saveCloudThreads(newThreads);
+  }, [saveCloudThreads]);
 
   const updateThread = useCallback(
     (thread: GmailThread) => {
@@ -969,11 +854,7 @@ export function useGmailThreads() {
 }
 
 export function useEmailTranslations() {
-  const [translations, setTranslations] = useState<EmailTranslation[]>([]);
-
-  useEffect(() => {
-    setTranslations(loadData<EmailTranslation[]>(GMAIL_STORAGE_KEYS.TRANSLATIONS, []));
-  }, []);
+  const { value: translations, save: saveTranslations } = useCloudUserData<EmailTranslation[]>(USER_DATA_KEYS.GMAIL_TRANSLATIONS, []);
 
   const addTranslation = useCallback(
     (translation: Omit<EmailTranslation, 'id' | 'createdAt'>) => {
@@ -982,17 +863,13 @@ export function useEmailTranslations() {
         id: generateId(),
         createdAt: new Date().toISOString(),
       };
-      setTranslations((current) => {
-        const next = [
-          newTranslation,
-          ...current.filter((item) => item.messageId !== translation.messageId),
-        ];
-        saveData(GMAIL_STORAGE_KEYS.TRANSLATIONS, next);
-        return next;
-      });
+      saveTranslations([
+        newTranslation,
+        ...translations.filter((item) => item.messageId !== translation.messageId),
+      ]);
       return newTranslation;
     },
-    [],
+    [saveTranslations, translations],
   );
 
   const getTranslation = useCallback(
@@ -1004,16 +881,11 @@ export function useEmailTranslations() {
 }
 
 export function useEmailAISuggestions() {
-  const [suggestions, setSuggestions] = useState<EmailDraftSuggestion[]>([]);
-
-  useEffect(() => {
-    setSuggestions(loadData<EmailDraftSuggestion[]>(GMAIL_STORAGE_KEYS.AI_SUGGESTIONS, []));
-  }, []);
+  const { value: suggestions, save: saveCloudSuggestions } = useCloudUserData<EmailDraftSuggestion[]>(USER_DATA_KEYS.GMAIL_AI_SUGGESTIONS, []);
 
   const saveSuggestions = useCallback((newSuggestions: EmailDraftSuggestion[]) => {
-    setSuggestions(newSuggestions);
-    saveData(GMAIL_STORAGE_KEYS.AI_SUGGESTIONS, newSuggestions);
-  }, []);
+    saveCloudSuggestions(newSuggestions);
+  }, [saveCloudSuggestions]);
 
   const addSuggestion = useCallback(
     (suggestion: Omit<EmailDraftSuggestion, 'id' | 'generatedAt'>) => {
@@ -1055,16 +927,11 @@ export function useEmailAISuggestions() {
 }
 
 export function useEmailDrafts() {
-  const [drafts, setDrafts] = useState<EmailDraft[]>([]);
-
-  useEffect(() => {
-    setDrafts(loadData<EmailDraft[]>(GMAIL_STORAGE_KEYS.DRAFTS, []));
-  }, []);
+  const { value: drafts, save: saveCloudDrafts } = useCloudUserData<EmailDraft[]>(USER_DATA_KEYS.GMAIL_DRAFTS, []);
 
   const saveDrafts = useCallback((newDrafts: EmailDraft[]) => {
-    setDrafts(newDrafts);
-    saveData(GMAIL_STORAGE_KEYS.DRAFTS, newDrafts);
-  }, []);
+    saveCloudDrafts(newDrafts);
+  }, [saveCloudDrafts]);
 
   const addDraft = useCallback(
     (draft: Omit<EmailDraft, 'id' | 'createdAt' | 'status'>) => {

@@ -1,0 +1,40 @@
+export const USER_DATA_KEYS = {
+  INFLUENCERS: 'influencers',
+  TEMPLATES: 'email_templates',
+  REMINDERS: 'reminders',
+  EMAILS: 'email_records',
+  COLLABORATIONS: 'collaborations',
+  TODOS: 'todos',
+  CALENDAR_EVENTS: 'calendar_events',
+  GMAIL_THREADS: 'gmail_threads',
+  GMAIL_TRANSLATIONS: 'gmail_translations',
+  GMAIL_DRAFTS: 'gmail_drafts',
+  GMAIL_AI_SUGGESTIONS: 'gmail_ai_suggestions',
+  DAILY_GMAIL_SUMMARIES: 'daily_gmail_summaries',
+  DAILY_GMAIL_COMPLETIONS: 'daily_gmail_completions',
+  DAILY_GMAIL_TASKS: 'daily_gmail_tasks',
+  OUTREACH_DRAFTS: 'outreach_drafts',
+  DELETED_CREATOR_PROSPECTS: 'deleted_creator_prospects',
+  LEGACY_BACKUP: '_legacy_backup_v1',
+} as const;
+
+export type UserDataKey = typeof USER_DATA_KEYS[keyof typeof USER_DATA_KEYS];
+
+export const PUBLIC_USER_DATA_KEYS = new Set<UserDataKey>([
+  USER_DATA_KEYS.INFLUENCERS,
+  USER_DATA_KEYS.TEMPLATES,
+  USER_DATA_KEYS.REMINDERS,
+  USER_DATA_KEYS.EMAILS,
+  USER_DATA_KEYS.COLLABORATIONS,
+  USER_DATA_KEYS.TODOS,
+  USER_DATA_KEYS.CALENDAR_EVENTS,
+  USER_DATA_KEYS.GMAIL_THREADS,
+  USER_DATA_KEYS.GMAIL_TRANSLATIONS,
+  USER_DATA_KEYS.GMAIL_DRAFTS,
+  USER_DATA_KEYS.GMAIL_AI_SUGGESTIONS,
+  USER_DATA_KEYS.DAILY_GMAIL_SUMMARIES,
+  USER_DATA_KEYS.DAILY_GMAIL_COMPLETIONS,
+  USER_DATA_KEYS.DAILY_GMAIL_TASKS,
+  USER_DATA_KEYS.OUTREACH_DRAFTS,
+  USER_DATA_KEYS.DELETED_CREATOR_PROSPECTS,
+]);

@@ -11,16 +11,32 @@ import { getSupabaseBrowserClient } from '@/lib/supabase/client';
 
 export default function LoginPage() {
   const router = useRouter();
-  const { user, loading, configured } = useAuth();
-  const [mode, setMode] = useState<'login' | 'signup' | 'forgot'>('login');
+  const { user, account, loading, configured, signOut } = useAuth();
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
   const [submitting, setSubmitting] = useState(false);
   const [message, setMessage] = useState<{ type: 'error' | 'success'; text: string } | null>(null);
 
   useEffect(() => {
-    if (!loading && user) router.replace('/');
-  }, [loading, router, user]);
+    if (new URLSearchParams(window.location.search).get('password_changed') === '1') {
+      setMessage({ type: 'success', text: '密码已修改，请使用新密码重新登录。' });
+    }
+  }, []);
+
+  useEffect(() => {
+    if (loading || !user) return;
+    if (!account) {
+      void signOut();
+      setMessage({ type: 'error', text: '账号尚未由主管理员开通，或账号服务暂时不可用。' });
+      return;
+    }
+    if (account.status === 'disabled') {
+      void signOut();
+      setMessage({ type: 'error', text: '账号已停用，请联系管理员。' });
+      return;
+    }
+    router.replace(account.mustChangePassword ? '/change-password' : '/');
+  }, [account, loading, router, signOut, user]);
 
   const handleSubmit = async (event: React.FormEvent) => {
     event.preventDefault();
@@ -30,35 +46,31 @@ export default function LoginPage() {
     setSubmitting(true);
     setMessage(null);
     try {
-      if (mode === 'forgot') {
-        const { error } = await supabase.auth.resetPasswordForEmail(email, {
-          redirectTo: `${window.location.origin}/reset-password`,
-        });
-        if (error) throw error;
-        setMessage({ type: 'success', text: '重置密码邮件已经发送，请检查邮箱。' });
-        return;
-      }
+      const { data, error } = await supabase.auth.signInWithPassword({ email, password });
+      if (error || !data.session) throw error || new Error('登录失败。');
 
-      if (mode === 'signup') {
-        const { data, error } = await supabase.auth.signUp({
-          email,
-          password,
-          options: {
-            emailRedirectTo: `${window.location.origin}/`,
-          },
-        });
-        if (error) throw error;
-        if (data.session) {
-          router.replace('/');
-        } else {
-          setMessage({ type: 'success', text: '注册成功，请打开验证邮件完成账号确认。' });
-        }
-        return;
+      const sessionResponse = await fetch('/api/cloud/session', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ accessToken: data.session.access_token }),
+      });
+      const sessionResult = await sessionResponse.json().catch(() => ({}));
+      const profileResponse = await fetch('/api/account/me', {
+        cache: 'no-store',
+        headers: { Authorization: `Bearer ${data.session.access_token}` },
+      });
+      const profileResult = await profileResponse.json().catch(() => ({}));
+      if (!profileResponse.ok || !profileResult.success) {
+        await supabase.auth.signOut();
+        throw new Error(profileResult.error || sessionResult.error || '账号尚未由管理员开通。');
       }
-
-      const { error } = await supabase.auth.signInWithPassword({ email, password });
-      if (error) throw error;
-      router.replace('/');
+      if (profileResult.data.status === 'disabled' || !sessionResponse.ok) {
+        await supabase.auth.signOut();
+        throw new Error(profileResult.data.status === 'disabled'
+          ? '账号已停用，请联系管理员。'
+          : sessionResult.error || '登录失败。');
+      }
+      router.replace(profileResult.data.mustChangePassword ? '/change-password' : '/');
     } catch (error) {
       setMessage({
         type: 'error',
@@ -69,7 +81,7 @@ export default function LoginPage() {
     }
   };
 
-  if (loading || user) {
+  if (loading) {
     return (
       <div className="flex min-h-screen items-center justify-center">
         <LoaderCircle className="h-6 w-6 animate-spin text-muted-foreground" />
@@ -93,12 +105,10 @@ export default function LoginPage() {
 
           <div className="mb-7">
             <h2 className="text-2xl font-semibold">
-              {mode === 'login' ? '登录工作台' : mode === 'signup' ? '创建账号' : '重置密码'}
+              登录工作台
             </h2>
             <p className="mt-2 text-sm leading-6 text-muted-foreground">
-              {mode === 'forgot'
-                ? '输入登录邮箱，我们会发送密码重置链接。'
-                : '登录后，产品资料和设置会在不同电脑之间自动同步。'}
+              账号由管理员创建。登录后只会加载属于你的资料、授权和工作内容。
             </p>
           </div>
 
@@ -124,24 +134,22 @@ export default function LoginPage() {
                 </div>
               </div>
 
-              {mode !== 'forgot' && (
-                <div className="space-y-2">
-                  <Label htmlFor="password">密码</Label>
-                  <div className="relative">
-                    <LockKeyhole className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
-                    <Input
-                      id="password"
-                      type="password"
-                      autoComplete={mode === 'login' ? 'current-password' : 'new-password'}
-                      minLength={8}
-                      className="pl-9"
-                      value={password}
-                      onChange={(event) => setPassword(event.target.value)}
-                      required
-                    />
-                  </div>
+              <div className="space-y-2">
+                <Label htmlFor="password">密码</Label>
+                <div className="relative">
+                  <LockKeyhole className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
+                  <Input
+                    id="password"
+                    type="password"
+                    autoComplete="current-password"
+                    minLength={8}
+                    className="pl-9"
+                    value={password}
+                    onChange={(event) => setPassword(event.target.value)}
+                    required
+                  />
                 </div>
-              )}
+              </div>
 
               {message && (
                 <div className={`rounded-md p-3 text-sm ${
@@ -155,33 +163,12 @@ export default function LoginPage() {
 
               <Button className="w-full" disabled={submitting}>
                 {submitting && <LoaderCircle className="h-4 w-4 animate-spin" />}
-                {mode === 'login' ? '登录' : mode === 'signup' ? '注册' : '发送重置邮件'}
+                登录
               </Button>
 
-              <div className="flex items-center justify-between text-sm">
-                <button
-                  type="button"
-                  className="text-muted-foreground hover:text-foreground"
-                  onClick={() => {
-                    setMode(mode === 'signup' ? 'login' : 'signup');
-                    setMessage(null);
-                  }}
-                >
-                  {mode === 'signup' ? '已有账号，返回登录' : '还没有账号？注册'}
-                </button>
-                {mode !== 'signup' && (
-                  <button
-                    type="button"
-                    className="text-muted-foreground hover:text-foreground"
-                    onClick={() => {
-                      setMode(mode === 'forgot' ? 'login' : 'forgot');
-                      setMessage(null);
-                    }}
-                  >
-                    {mode === 'forgot' ? '返回登录' : '忘记密码'}
-                  </button>
-                )}
-              </div>
+              <p className="text-center text-xs leading-5 text-muted-foreground">
+                需要新账号或忘记密码时，请联系主管理员处理。
+              </p>
             </form>
           )}
         </div>

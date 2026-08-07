@@ -3,6 +3,8 @@ import './globals.css';
 import { DelayedEmailProvider } from '@/components/delayed-email-provider';
 import { AuthProvider } from '@/components/auth-provider';
 import { RecordAssistantProvider } from '@/components/record-assistant-provider';
+import { UserDataProvider } from '@/components/user-data-provider';
+import { Toaster } from '@/components/ui/sonner';
 
 export const metadata: Metadata = {
   title: {
@@ -43,9 +45,12 @@ export default function RootLayout({
     <html lang="zh-CN" suppressHydrationWarning>
       <body className="antialiased">
         <AuthProvider>
-          <DelayedEmailProvider>
-            <RecordAssistantProvider>{children}</RecordAssistantProvider>
-          </DelayedEmailProvider>
+          <UserDataProvider>
+            <DelayedEmailProvider>
+              <RecordAssistantProvider>{children}</RecordAssistantProvider>
+            </DelayedEmailProvider>
+          </UserDataProvider>
+          <Toaster richColors position="top-center" />
         </AuthProvider>
       </body>
     </html>

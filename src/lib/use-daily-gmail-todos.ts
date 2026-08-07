@@ -9,6 +9,8 @@ import {
 } from '@/lib/daily-gmail-todos';
 import { useGmailAuth, type AppSettings } from '@/lib/data';
 import { normalizeThreadContactEmail } from '@/lib/gmail-thread-contact';
+import { useUserDataStore } from '@/components/user-data-provider';
+import { USER_DATA_KEYS } from '@/lib/account-data-keys';
 import {
   buildChannelAvatarLookup,
   channelAvatarLookupPriority,
@@ -39,51 +41,7 @@ export type DailyGmailTodo = DailyGmailMessage & {
 
 type StoredDailyGmailTask = Omit<DailyGmailTodo, 'snippet' | 'body' | 'summaryPending' | 'completed'>;
 
-const SUMMARY_CACHE_KEY = 'influencer-board-daily-gmail-summaries-v1';
-const COMPLETION_CACHE_KEY = 'influencer-board-daily-gmail-completions-v1';
-const TASK_CACHE_KEY = 'influencer-board-daily-gmail-tasks-v2';
 const AUTO_REFRESH_MS = 5 * 60_000;
-
-function loadSummaryCache() {
-  try {
-    return JSON.parse(window.localStorage.getItem(SUMMARY_CACHE_KEY) || '{}') as Record<string, string>;
-  } catch {
-    return {};
-  }
-}
-
-function saveSummaryCache(cache: Record<string, string>) {
-  try {
-    const entries = Object.entries(cache).slice(-300);
-    window.localStorage.setItem(SUMMARY_CACHE_KEY, JSON.stringify(Object.fromEntries(entries)));
-  } catch {
-    // 摘要缓存只是性能优化，不应阻断每日来信读取。
-  }
-}
-
-function loadCompletionCache() {
-  try {
-    return JSON.parse(window.localStorage.getItem(COMPLETION_CACHE_KEY) || '{}') as Record<string, string>;
-  } catch {
-    return {};
-  }
-}
-
-function loadTaskCache() {
-  try {
-    return JSON.parse(window.localStorage.getItem(TASK_CACHE_KEY) || '{}') as Record<string, StoredDailyGmailTask>;
-  } catch {
-    return {};
-  }
-}
-
-function saveTaskCache(cache: Record<string, StoredDailyGmailTask>) {
-  try {
-    window.localStorage.setItem(TASK_CACHE_KEY, JSON.stringify(cache));
-  } catch {
-    // 本地任务保存失败不应阻断 Gmail 页面读取，界面仍保留当前会话中的任务。
-  }
-}
 
 function taskCacheToItems(cache: Record<string, StoredDailyGmailTask>) {
   return Object.values(cache)
@@ -152,12 +110,21 @@ function initialAvatar(profile: CreatorResourceProfile): ChannelAvatarState {
 
 export function useDailyGmailTodos(settings: AppSettings) {
   const { auth, connect } = useGmailAuth();
+  const { data: accountData, save: saveAccountData } = useUserDataStore();
   const [items, setItems] = useState<DailyGmailTodo[]>([]);
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
   const [error, setError] = useState('');
   const runIdRef = useRef(0);
-  const taskCacheRef = useRef<Record<string, StoredDailyGmailTask>>({});
+  const summaryCacheRef = useRef(
+    (accountData[USER_DATA_KEYS.DAILY_GMAIL_SUMMARIES] || {}) as Record<string, string>,
+  );
+  const completionCacheRef = useRef(
+    (accountData[USER_DATA_KEYS.DAILY_GMAIL_COMPLETIONS] || {}) as Record<string, string>,
+  );
+  const taskCacheRef = useRef(
+    (accountData[USER_DATA_KEYS.DAILY_GMAIL_TASKS] || {}) as Record<string, StoredDailyGmailTask>,
+  );
 
   const getAccessToken = useCallback(async (force = false) => {
     if (!auth?.isConnected) throw new Error('请先连接 Gmail。');
@@ -191,15 +158,15 @@ export function useDailyGmailTodos(settings: AppSettings) {
         throw new Error('请先在设置中配置红人信息数据库及联系邮箱字段映射。');
       }
 
-      let accessToken = await getAccessToken(force);
-      const requestDailyMessages = (token: string) => fetch(
-        `/api/gmail?action=daily-inbox&maxResults=50&token=${encodeURIComponent(token)}`,
+      await getAccessToken(force);
+      const requestDailyMessages = () => fetch(
+        '/api/gmail?action=daily-inbox&maxResults=50',
         { cache: 'no-store' },
       );
-      let gmailResponse = await requestDailyMessages(accessToken);
+      let gmailResponse = await requestDailyMessages();
       if (gmailResponse.status === 401) {
-        accessToken = await getAccessToken(true);
-        gmailResponse = await requestDailyMessages(accessToken);
+        await getAccessToken(true);
+        gmailResponse = await requestDailyMessages();
       }
       const gmailResult = await gmailResponse.json();
       if (!gmailResponse.ok || !gmailResult.success) {
@@ -212,8 +179,8 @@ export function useDailyGmailTodos(settings: AppSettings) {
       const profiles = await loadCreatorResourceProfiles(settings);
       if (runId !== runIdRef.current) return;
       const profileByEmail = selectProfileByEmail(profiles);
-      const summaryCache = loadSummaryCache();
-      const completionCache = loadCompletionCache();
+      const summaryCache = summaryCacheRef.current;
+      const completionCache = completionCacheRef.current;
       const matched = messages.flatMap((message) => {
         const profile = profileByEmail.get(normalizeThreadContactEmail(message.from));
         if (!profile) return [];
@@ -254,7 +221,7 @@ export function useDailyGmailTodos(settings: AppSettings) {
         if (item.summaryPending) pendingSummaryIds.add(item.messageId);
       });
       taskCacheRef.current = nextTaskCache;
-      saveTaskCache(nextTaskCache);
+      saveAccountData(USER_DATA_KEYS.DAILY_GMAIL_TASKS, nextTaskCache);
       setItems(taskCacheToItems(nextTaskCache).map((item) => ({
         ...item,
         summaryPending: pendingSummaryIds.has(item.messageId),
@@ -305,7 +272,10 @@ export function useDailyGmailTodos(settings: AppSettings) {
       summaries.forEach((summary, id) => {
         summaryCache[id] = summary;
       });
-      if (summaries.size) saveSummaryCache(summaryCache);
+      if (summaries.size) {
+        summaryCacheRef.current = summaryCache;
+        saveAccountData(USER_DATA_KEYS.DAILY_GMAIL_SUMMARIES, summaryCache);
+      }
       const avatarByMessage = new Map(avatars);
       const updatedTaskCache = { ...taskCacheRef.current };
       Object.entries(updatedTaskCache).forEach(([taskKey, task]) => {
@@ -319,7 +289,7 @@ export function useDailyGmailTodos(settings: AppSettings) {
         };
       });
       taskCacheRef.current = updatedTaskCache;
-      saveTaskCache(updatedTaskCache);
+      saveAccountData(USER_DATA_KEYS.DAILY_GMAIL_TASKS, updatedTaskCache);
       setItems((current) => current.map((item) => ({
         ...item,
         summary: summaries.get(item.messageId) || item.summary,
@@ -332,10 +302,10 @@ export function useDailyGmailTodos(settings: AppSettings) {
       setLoading(false);
       setRefreshing(false);
     }
-  }, [getAccessToken, settings]);
+  }, [getAccessToken, saveAccountData, settings]);
 
   useEffect(() => {
-    const cachedTasks = loadTaskCache();
+    const cachedTasks = taskCacheRef.current;
     taskCacheRef.current = cachedTasks;
     setItems(taskCacheToItems(cachedTasks));
     void load();
@@ -355,13 +325,13 @@ export function useDailyGmailTodos(settings: AppSettings) {
     const completedAt = completed ? new Date().toISOString() : undefined;
     const updatedTask = { ...task, completedAt };
     taskCacheRef.current = { ...taskCacheRef.current, [taskId]: updatedTask };
-    saveTaskCache(taskCacheRef.current);
+    saveAccountData(USER_DATA_KEYS.DAILY_GMAIL_TASKS, taskCacheRef.current);
     setItems((current) => current.map((item) => (
       getDailyGmailTaskKey(item.threadId, item.messageId) === taskId
         ? { ...item, completed, completedAt }
         : item
     )));
-  }, []);
+  }, [saveAccountData]);
 
   return {
     items,

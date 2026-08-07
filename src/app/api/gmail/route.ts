@@ -2,6 +2,8 @@ import { NextRequest, NextResponse } from 'next/server';
 import { repairTextEncoding } from '@/lib/email-text';
 import { classifyFollowUpConversation } from '@/lib/outreach-follow-up';
 import { containsIgnoredGmailContactEmail } from '@/lib/gmail-thread-contact';
+import { refreshStoredGmailAuth } from '@/lib/gmail-cloud-auth';
+import { getRequestUser } from '@/lib/supabase/server';
 
 type GmailHeader = { name: string; value: string };
 type InlineImagePayload = {
@@ -169,15 +171,13 @@ function parseHistoryMessage(message: Record<string, unknown>) {
 
 // Gmail API 代理 - 获取邮件列表和详情
 export async function GET(request: NextRequest) {
+  const appAuth = await getRequestUser(request);
+  if (!appAuth) return NextResponse.json({ error: '未登录或账号无权访问 Gmail。' }, { status: 401 });
   try {
     const { searchParams } = new URL(request.url);
     const action = searchParams.get('action'); // 'threads' | 'message' | 'profile'
-    const accessToken = searchParams.get('token');
     const messageId = searchParams.get('messageId');
-
-    if (!accessToken) {
-      return NextResponse.json({ error: '缺少 access token' }, { status: 401 });
-    }
+    const { accessToken } = await refreshStoredGmailAuth(appAuth.supabase);
 
     const headers = {
       'Authorization': `Bearer ${accessToken}`,
@@ -437,11 +437,12 @@ export async function GET(request: NextRequest) {
 
 // 保存草稿
 export async function POST(request: NextRequest) {
+  const appAuth = await getRequestUser(request);
+  if (!appAuth) return NextResponse.json({ error: '未登录或账号无权访问 Gmail。' }, { status: 401 });
   try {
     const body = await request.json();
     const {
       action,
-      accessToken,
       to,
       subject,
       body: emailBody,
@@ -454,10 +455,7 @@ export async function POST(request: NextRequest) {
       maxResults: requestedMaxResults,
       knownMessageIds,
     } = body;
-
-    if (!accessToken) {
-      return NextResponse.json({ error: '缺少 access token' }, { status: 401 });
-    }
+    const { accessToken } = await refreshStoredGmailAuth(appAuth.supabase);
 
     const headers = {
       'Authorization': `Bearer ${accessToken}`,

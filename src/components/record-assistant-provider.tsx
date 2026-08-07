@@ -40,6 +40,7 @@ import { Switch } from '@/components/ui/switch';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { Textarea } from '@/components/ui/textarea';
 import { useGmailAuth, useProducts, useSettings } from '@/lib/data';
+import { scopedLocalStorageKey } from '@/lib/account-cache-scope';
 import type { FeishuFieldKey, FeishuFieldMapping } from '@/lib/feishu-mapping';
 import type { AgentAction, AgentFeishuRecord, AgentGmailContext } from '@/lib/agent-assistant';
 import {
@@ -115,7 +116,7 @@ const AGENT_EXAMPLES = [
 function readStoredList<T>(key: string) {
   if (typeof window === 'undefined') return [];
   try {
-    const raw = window.localStorage.getItem(key);
+    const raw = window.localStorage.getItem(scopedLocalStorageKey(key));
     return raw ? JSON.parse(raw) as T[] : [];
   } catch {
     return [];
@@ -124,7 +125,7 @@ function readStoredList<T>(key: string) {
 
 function writeStoredList<T>(key: string, value: T[]) {
   if (typeof window === 'undefined') return;
-  window.localStorage.setItem(key, JSON.stringify(value));
+  window.localStorage.setItem(scopedLocalStorageKey(key), JSON.stringify(value));
 }
 
 function clampFloatingPosition(position: FloatingPosition, viewportWidth: number, viewportHeight: number) {
@@ -151,7 +152,7 @@ function defaultFloatingPosition() {
 function readFloatingPosition() {
   if (typeof window === 'undefined') return defaultFloatingPosition();
   try {
-    const raw = window.localStorage.getItem(FLOAT_STORAGE_KEY);
+    const raw = window.localStorage.getItem(scopedLocalStorageKey(FLOAT_STORAGE_KEY));
     if (!raw) return defaultFloatingPosition();
     const parsed = JSON.parse(raw) as Partial<FloatingPosition>;
     if (typeof parsed.x !== 'number' || typeof parsed.y !== 'number') {
@@ -165,7 +166,7 @@ function readFloatingPosition() {
 
 function writeFloatingPosition(position: FloatingPosition) {
   if (typeof window === 'undefined') return;
-  window.localStorage.setItem(FLOAT_STORAGE_KEY, JSON.stringify(position));
+  window.localStorage.setItem(scopedLocalStorageKey(FLOAT_STORAGE_KEY), JSON.stringify(position));
 }
 
 function snapFloatingPosition(position: FloatingPosition) {
@@ -641,7 +642,6 @@ export function RecordAssistantProvider({ children }: { children: ReactNode }) {
     try {
       const params = new URLSearchParams({
         action: 'threads',
-        token: accessToken,
         maxResults: '8',
       });
       const response = await fetch(`/api/gmail?${params.toString()}`);
@@ -969,7 +969,7 @@ export function RecordAssistantProvider({ children }: { children: ReactNode }) {
 
   const contextValue = useMemo(() => ({ captureEvent, appendLog }), [appendLog, captureEvent]);
   const pendingCount = pending.length;
-  const shouldRenderAssistant = pathname !== '/login';
+  const shouldRenderAssistant = pathname !== '/login' && pathname !== '/change-password';
   const floatingHiddenSide = !open && !floatingHovered && !floatingDragging
     ? getFloatingHiddenSide(floatingPosition)
     : null;

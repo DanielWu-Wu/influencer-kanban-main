@@ -78,6 +78,7 @@ async function invokeOpenAICompatibleApi(
 }
 
 export async function POST(request: NextRequest) {
+  if (!(await getRequestUser(request))) return NextResponse.json({ error: '未登录或账号无权使用翻译。' }, { status: 401 });
   try {
     const body = await request.json();
     const {

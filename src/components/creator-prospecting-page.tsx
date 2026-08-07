@@ -78,6 +78,7 @@ import {
   isProspectWriteBlocked,
 } from '@/lib/feishu-write-guard';
 import { getSupabaseBrowserClient } from '@/lib/supabase/client';
+import { scopedLocalStorageKey } from '@/lib/account-cache-scope';
 import {
   calculateRecentAverageViews,
   canCreateFeishuRecord,
@@ -763,7 +764,7 @@ async function requestFeishuBatch(
 
 function loadDeletedProspectIds() {
   try {
-    const value = JSON.parse(localStorage.getItem(CREATOR_PROSPECTS_DELETED_STORAGE_KEY) || '[]');
+    const value = JSON.parse(localStorage.getItem(scopedLocalStorageKey(CREATOR_PROSPECTS_DELETED_STORAGE_KEY)) || '[]');
     return Array.isArray(value) ? value.filter((item): item is string => typeof item === 'string') : [];
   } catch {
     return [];
@@ -771,7 +772,7 @@ function loadDeletedProspectIds() {
 }
 
 function saveDeletedProspectIds(ids: string[]) {
-  localStorage.setItem(CREATOR_PROSPECTS_DELETED_STORAGE_KEY, JSON.stringify(Array.from(new Set(ids))));
+  localStorage.setItem(scopedLocalStorageKey(CREATOR_PROSPECTS_DELETED_STORAGE_KEY), JSON.stringify(Array.from(new Set(ids))));
 }
 
 function rememberDeletedProspect(id: string) {
@@ -857,7 +858,7 @@ export function CreatorProspectingPage() {
     const deletedIds = new Set(loadDeletedProspectIds());
     const localProspects = (() => {
       try {
-        return migrateProspects(JSON.parse(localStorage.getItem(CREATOR_PROSPECTS_STORAGE_KEY) || '[]'))
+        return migrateProspects(JSON.parse(localStorage.getItem(scopedLocalStorageKey(CREATOR_PROSPECTS_STORAGE_KEY)) || '[]'))
           .filter((item) => !deletedIds.has(item.id));
       } catch {
         return [];
@@ -914,7 +915,7 @@ export function CreatorProspectingPage() {
     if (!loaded) return;
     const flush = () => {
       localStorage.setItem(
-        CREATOR_PROSPECTS_STORAGE_KEY,
+        scopedLocalStorageKey(CREATOR_PROSPECTS_STORAGE_KEY),
         JSON.stringify(prospectsRef.current),
       );
     };

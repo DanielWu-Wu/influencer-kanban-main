@@ -1,3 +1,5 @@
+import { ACCOUNT_SCOPE_CHANGED_EVENT, getAccountCacheScope } from '@/lib/account-cache-scope';
+
 export type CachedFeishuRecord = {
   record_id: string;
   fields: Record<string, unknown>;
@@ -36,7 +38,7 @@ function normalizeFieldNames(fieldNames: string[] = []) {
 }
 
 function buildCacheKey(url: string, fieldNames: string[]) {
-  return `${url.trim()}::${fieldNames.length ? fieldNames.join('\u001f') : '*'}`;
+  return `${getAccountCacheScope()}::${url.trim()}::${fieldNames.length ? fieldNames.join('\u001f') : '*'}`;
 }
 
 async function loadFeishuRecords(url: string, fieldNames: string[]) {
@@ -124,7 +126,7 @@ export async function fetchFeishuRecordsCached(
 }
 
 export function invalidateFeishuRecordsCache(url: string) {
-  const prefix = `${url.trim()}::`;
+  const prefix = `${getAccountCacheScope()}::${url.trim()}::`;
   const keys = new Set([...recordCache.keys(), ...pendingRequests.keys()]);
   for (const key of keys) {
     if (!key.startsWith(prefix)) continue;
@@ -138,4 +140,8 @@ export function clearFeishuRecordsCache() {
   recordCache.clear();
   pendingRequests.clear();
   requestVersions.clear();
+}
+
+if (typeof window !== 'undefined') {
+  window.addEventListener(ACCOUNT_SCOPE_CHANGED_EVENT, clearFeishuRecordsCache);
 }

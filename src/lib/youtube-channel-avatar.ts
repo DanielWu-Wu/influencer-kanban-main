@@ -1,3 +1,10 @@
+import {
+  ACCOUNT_SCOPE_CHANGED_EVENT,
+  getAccountCacheScope,
+  scopedLocalStorageKey,
+  scopedLocalStorageKeyFor,
+} from '@/lib/account-cache-scope';
+
 export type ChannelAvatarState = {
   status: 'idle' | 'loading' | 'ready' | 'failed';
   avatarUrl?: string;
@@ -42,6 +49,10 @@ const CHANNEL_AVATAR_STABLE_FAILURE_TTL_MS = 24 * 60 * 60 * 1000;
 const CHANNEL_AVATAR_QUOTA_RESET_BUFFER_MS = 5 * 60 * 1000;
 const CHANNEL_AVATAR_BATCH_SIZE = 50;
 const pendingAvatarRequests = new Map<string, Promise<ChannelAvatarState>>();
+
+if (typeof window !== 'undefined') {
+  window.addEventListener(ACCOUNT_SCOPE_CHANGED_EVENT, () => pendingAvatarRequests.clear());
+}
 
 export function normalizeChannelUrl(value: string) {
   return value.trim().replace(/\/+$/, '');
@@ -134,11 +145,12 @@ export function channelAvatarLookupPriority(profile: {
 export function readChannelAvatarCache(key: string): ChannelAvatarState | null {
   if (typeof window === 'undefined') return null;
   try {
-    const raw = window.localStorage.getItem(`${CHANNEL_AVATAR_CACHE_PREFIX}${key}`);
+    const storageKey = scopedLocalStorageKey(`${CHANNEL_AVATAR_CACHE_PREFIX}${key}`);
+    const raw = window.localStorage.getItem(storageKey);
     if (!raw) return null;
     const entry = JSON.parse(raw) as ChannelAvatarCacheEntry;
     if (!entry.expiresAt || entry.expiresAt < Date.now()) {
-      window.localStorage.removeItem(`${CHANNEL_AVATAR_CACHE_PREFIX}${key}`);
+      window.localStorage.removeItem(storageKey);
       return null;
     }
     if (entry.status === 'success') {
@@ -159,16 +171,23 @@ export function readChannelAvatarCache(key: string): ChannelAvatarState | null {
 export function invalidateChannelAvatarCache(key?: string) {
   if (typeof window === 'undefined' || !key) return;
   try {
-    window.localStorage.removeItem(`${CHANNEL_AVATAR_CACHE_PREFIX}${key}`);
+    window.localStorage.removeItem(scopedLocalStorageKey(`${CHANNEL_AVATAR_CACHE_PREFIX}${key}`));
   } catch {
     // Avatar caching is optional; failure to clear it should not affect Gmail.
   }
 }
 
-function writeChannelAvatarCache(key: string, entry: ChannelAvatarCacheEntry) {
+function writeChannelAvatarCache(
+  key: string,
+  entry: ChannelAvatarCacheEntry,
+  scope = getAccountCacheScope(),
+) {
   if (typeof window === 'undefined') return;
   try {
-    window.localStorage.setItem(`${CHANNEL_AVATAR_CACHE_PREFIX}${key}`, JSON.stringify(entry));
+    window.localStorage.setItem(
+      scopedLocalStorageKeyFor(`${CHANNEL_AVATAR_CACHE_PREFIX}${key}`, scope),
+      JSON.stringify(entry),
+    );
   } catch {
     // localStorage can be unavailable or full; avatar caching is only an optimization.
   }
@@ -190,14 +209,14 @@ function channelPayloadToAvatar(
   };
 }
 
-function cacheResolvedAvatar(key: string, avatar: ChannelAvatarState) {
+function cacheResolvedAvatar(key: string, avatar: ChannelAvatarState, scope = getAccountCacheScope()) {
   writeChannelAvatarCache(key, {
     status: 'success',
     avatarUrl: avatar.avatarUrl,
     channelUrl: avatar.channelUrl,
     title: avatar.title,
     expiresAt: Date.now() + CHANNEL_AVATAR_SUCCESS_TTL_MS,
-  });
+  }, scope);
 }
 
 function nextPacificQuotaResetAt(now = Date.now()) {
@@ -241,18 +260,19 @@ function avatarFailureExpiresAt(error?: string) {
   return Date.now() + CHANNEL_AVATAR_TRANSIENT_FAILURE_TTL_MS;
 }
 
-function cacheFailedAvatar(key: string, error?: string) {
+function cacheFailedAvatar(key: string, error?: string, scope = getAccountCacheScope()) {
   writeChannelAvatarCache(key, {
     status: 'failed',
     error,
     expiresAt: avatarFailureExpiresAt(error),
-  });
+  }, scope);
 }
 
 export async function resolveChannelAvatars(
   lookups: ChannelAvatarLookup[],
   options: ResolveChannelAvatarOptions = {},
 ) {
+  const accountScope = getAccountCacheScope();
   const uniqueLookups = Array.from(new Map(lookups.map((lookup) => [lookup.key, lookup])).values());
   const results = new Map<string, ChannelAvatarState>();
   const uncached: ChannelAvatarLookup[] = [];
@@ -308,18 +328,18 @@ export async function resolveChannelAvatars(
         const avatar = channelPayloadToAvatar(channel, lookup.link, lookup.key);
         if (avatar) {
           results.set(lookup.key, avatar);
-          cacheResolvedAvatar(lookup.key, avatar);
+          cacheResolvedAvatar(lookup.key, avatar, accountScope);
         } else {
           const error = errorsBySource.get(lookupSource) || '频道未返回头像。';
           results.set(lookup.key, { status: 'failed', cacheKey: lookup.key, error });
-          cacheFailedAvatar(lookup.key, error);
+          cacheFailedAvatar(lookup.key, error, accountScope);
         }
       }
     } catch (error) {
       const message = error instanceof Error ? error.message : '频道头像读取失败。';
       for (const lookup of chunk) {
         results.set(lookup.key, { status: 'failed', cacheKey: lookup.key, error: message });
-        cacheFailedAvatar(lookup.key, message);
+        cacheFailedAvatar(lookup.key, message, accountScope);
       }
     }
   }));
@@ -330,10 +350,12 @@ export async function resolveChannelAvatar(
   lookup: ChannelAvatarLookup,
   options: ResolveChannelAvatarOptions = {},
 ): Promise<ChannelAvatarState> {
+  const accountScope = getAccountCacheScope();
+  const pendingKey = `${accountScope}::${lookup.key}`;
   const cached = readChannelAvatarCache(lookup.key);
   if (cached) return cached;
 
-  const pending = pendingAvatarRequests.get(lookup.key);
+  const pending = pendingAvatarRequests.get(pendingKey);
   if (pending) return pending;
 
   const request = (async () => {
@@ -370,17 +392,17 @@ export async function resolveChannelAvatar(
       if (!avatar) {
         throw new Error(result.errors?.[0]?.error || '频道未返回头像。');
       }
-      cacheResolvedAvatar(lookup.key, avatar);
+      cacheResolvedAvatar(lookup.key, avatar, accountScope);
       return avatar;
     } catch (error) {
       const message = error instanceof Error ? error.message : '频道头像读取失败。';
-      cacheFailedAvatar(lookup.key, message);
+      cacheFailedAvatar(lookup.key, message, accountScope);
       return { status: 'failed' as const, cacheKey: lookup.key, error: message };
     }
   })().finally(() => {
-    pendingAvatarRequests.delete(lookup.key);
+    pendingAvatarRequests.delete(pendingKey);
   });
 
-  pendingAvatarRequests.set(lookup.key, request);
+  pendingAvatarRequests.set(pendingKey, request);
   return request;
 }

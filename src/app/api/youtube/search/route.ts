@@ -61,6 +61,7 @@ function buildYouTubeUrl(path: string, params: Record<string, string>) {
 }
 
 export async function POST(request: NextRequest) {
+  if (!(await getRequestUser(request))) return NextResponse.json({ error: '未登录或账号无权使用 YouTube。' }, { status: 401 });
   const body = await request.json().catch(() => ({}));
   const query = typeof body.query === 'string' ? body.query.trim() : '';
   const apiKey = await resolveYouTubeKey(request, typeof body.apiKey === 'string' ? body.apiKey : undefined);

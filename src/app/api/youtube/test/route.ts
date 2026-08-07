@@ -21,6 +21,7 @@ async function getStoredYouTubeKey(request: NextRequest) {
 }
 
 export async function POST(request: NextRequest) {
+  if (!(await getRequestUser(request))) return NextResponse.json({ error: '未登录或账号无权使用 YouTube。' }, { status: 401 });
   const body = await request.json().catch(() => ({}));
   const providedKey = typeof body.apiKey === 'string' ? body.apiKey.trim() : '';
   const apiKey = providedKey || process.env.YOUTUBE_API_KEY || await getStoredYouTubeKey(request);

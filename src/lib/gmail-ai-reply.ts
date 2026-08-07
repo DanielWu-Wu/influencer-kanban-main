@@ -1,3 +1,5 @@
+import { ACCOUNT_SCOPE_CHANGED_EVENT, getAccountCacheScope } from '@/lib/account-cache-scope';
+
 export type GmailAIHistoryMessage = {
   id?: string;
   threadId?: string;
@@ -44,6 +46,15 @@ const historyCache = new Map<string, CacheEntry<GmailAIHistoryMessage[]>>();
 const historyRequests = new Map<string, Promise<GmailAIHistoryMessage[]>>();
 const analysisCache = new Map<string, CacheEntry<unknown>>();
 const analysisRequests = new Map<string, Promise<unknown>>();
+
+if (typeof window !== 'undefined') {
+  window.addEventListener(ACCOUNT_SCOPE_CHANGED_EVENT, () => {
+    historyCache.clear();
+    historyRequests.clear();
+    analysisCache.clear();
+    analysisRequests.clear();
+  });
+}
 
 function parseMessageTime(value?: string) {
   const timestamp = new Date(value || 0).getTime();
@@ -265,21 +276,22 @@ export async function getOrLoadGmailAIHistory(
   loader: () => Promise<GmailAIHistoryMessage[]>,
   force = false,
 ) {
+  const scopedKey = `${getAccountCacheScope()}::${key}`;
   if (!force) {
-    const cached = readCacheEntry(historyCache, key);
+    const cached = readCacheEntry(historyCache, scopedKey);
     if (cached) return { value: cached, cacheHit: true };
-    const pending = historyRequests.get(key);
+    const pending = historyRequests.get(scopedKey);
     if (pending) return { value: await pending, cacheHit: true };
   }
 
   const request = loader();
-  historyRequests.set(key, request);
+  historyRequests.set(scopedKey, request);
   try {
     const value = await request;
-    touchCacheEntry(historyCache, key, { fetchedAt: Date.now(), value });
+    touchCacheEntry(historyCache, scopedKey, { fetchedAt: Date.now(), value });
     return { value, cacheHit: false };
   } finally {
-    if (historyRequests.get(key) === request) historyRequests.delete(key);
+    if (historyRequests.get(scopedKey) === request) historyRequests.delete(scopedKey);
   }
 }
 
@@ -288,21 +300,22 @@ export async function getOrLoadGmailAIAnalysis<T>(
   loader: () => Promise<T>,
   force = false,
 ) {
+  const scopedKey = `${getAccountCacheScope()}::${key}`;
   if (!force) {
-    const cached = readCacheEntry(analysisCache, key) as T | null;
+    const cached = readCacheEntry(analysisCache, scopedKey) as T | null;
     if (cached) return { value: cached, cacheHit: true };
-    const pending = analysisRequests.get(key);
+    const pending = analysisRequests.get(scopedKey);
     if (pending) return { value: await pending as T, cacheHit: true };
   }
 
   const request = loader();
-  analysisRequests.set(key, request);
+  analysisRequests.set(scopedKey, request);
   try {
     const value = await request;
-    touchCacheEntry(analysisCache, key, { fetchedAt: Date.now(), value });
+    touchCacheEntry(analysisCache, scopedKey, { fetchedAt: Date.now(), value });
     return { value, cacheHit: false };
   } finally {
-    if (analysisRequests.get(key) === request) analysisRequests.delete(key);
+    if (analysisRequests.get(scopedKey) === request) analysisRequests.delete(scopedKey);
   }
 }
 

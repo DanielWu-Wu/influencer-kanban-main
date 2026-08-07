@@ -16,7 +16,7 @@ import {
   Settings, Mail, Zap,
   CheckCircle2, AlertTriangle,
   Plug, RefreshCw, Save, HelpCircle, Link2, Cpu,
-  ChevronDown, ChevronUp, Info, User, Clock, Heart, LogOut
+  ChevronDown, ChevronUp, Info, User, Clock, Heart, LogOut, KeyRound
 } from 'lucide-react';
 
 const STORED_AI_KEY = '••••••••••••';
@@ -187,6 +187,9 @@ export function SettingsPanel() {
               保存全部
             </>
           )}
+        </Button>
+        <Button variant="outline" size="sm" className="h-10" onClick={() => { window.location.href = '/change-password'; }}>
+          <KeyRound data-icon="inline-start" />修改密码
         </Button>
       </div>
 

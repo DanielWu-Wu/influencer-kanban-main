@@ -49,6 +49,7 @@ import {
   type ChannelAvatarState,
 } from '@/lib/youtube-channel-avatar';
 import { YouTubeChannelAvatar } from './youtube-channel-avatar';
+import { ACCOUNT_SCOPE_CHANGED_EVENT, getAccountCacheScope } from '@/lib/account-cache-scope';
 
 const GMAIL_PAGE_SIZE = 50;
 const GMAIL_DETAIL_BATCH_SIZE = 16;
@@ -84,6 +85,17 @@ type GmailThreadDetailCacheEntry = {
 
 const gmailThreadDetailCache = new Map<string, GmailThreadDetailCacheEntry>();
 const gmailThreadDetailRequests = new Map<string, Promise<GmailThread>>();
+
+function gmailThreadCacheKey(threadId: string, scope = getAccountCacheScope()) {
+  return `${scope}::${threadId}`;
+}
+
+if (typeof window !== 'undefined') {
+  window.addEventListener(ACCOUNT_SCOPE_CHANGED_EVENT, () => {
+    gmailThreadDetailCache.clear();
+    gmailThreadDetailRequests.clear();
+  });
+}
 
 const MAILBOX_LABELS: Record<GmailMailbox, string> = {
   inbox: '\u6536\u4ef6\u7bb1',
@@ -503,13 +515,14 @@ async function fetchWithTimeout(
 }
 
 function readCachedThreadDetail(thread: GmailThread) {
-  const cached = gmailThreadDetailCache.get(thread.id);
+  const cacheKey = gmailThreadCacheKey(thread.id);
+  const cached = gmailThreadDetailCache.get(cacheKey);
   if (
     !cached
     || Date.now() - cached.fetchedAt >= GMAIL_THREAD_DETAIL_CACHE_MS
     || cached.thread.lastMessageDate !== thread.lastMessageDate
   ) {
-    if (cached) gmailThreadDetailCache.delete(thread.id);
+    if (cached) gmailThreadDetailCache.delete(cacheKey);
     return null;
   }
 
@@ -521,23 +534,24 @@ function readCachedThreadDetail(thread: GmailThread) {
   };
 }
 
-function cacheThreadDetail(thread: GmailThread) {
-  if (!gmailThreadDetailCache.has(thread.id) && gmailThreadDetailCache.size >= 100) {
+function cacheThreadDetail(thread: GmailThread, cacheKey = gmailThreadCacheKey(thread.id)) {
+  if (!gmailThreadDetailCache.has(cacheKey) && gmailThreadDetailCache.size >= 100) {
     const oldestThreadId = gmailThreadDetailCache.keys().next().value;
     if (oldestThreadId) gmailThreadDetailCache.delete(oldestThreadId);
   }
-  gmailThreadDetailCache.delete(thread.id);
-  gmailThreadDetailCache.set(thread.id, {
+  gmailThreadDetailCache.delete(cacheKey);
+  gmailThreadDetailCache.set(cacheKey, {
     thread,
     fetchedAt: Date.now(),
   });
 }
 
 async function fetchThreadDetail(thread: GmailThread, accessToken: string) {
+  const cacheKey = gmailThreadCacheKey(thread.id);
   const cached = readCachedThreadDetail(thread);
   if (cached) return cached;
 
-  const pending = gmailThreadDetailRequests.get(thread.id);
+  const pending = gmailThreadDetailRequests.get(cacheKey);
   if (pending) return pending;
 
   const request = (async () => {
@@ -559,15 +573,15 @@ async function fetchThreadDetail(thread: GmailThread, accessToken: string) {
       accessToken,
       false,
     );
-    cacheThreadDetail(parsed);
+    cacheThreadDetail(parsed, cacheKey);
     return parsed;
   })();
 
-  gmailThreadDetailRequests.set(thread.id, request);
+  gmailThreadDetailRequests.set(cacheKey, request);
   try {
     return await request;
   } finally {
-    gmailThreadDetailRequests.delete(thread.id);
+    gmailThreadDetailRequests.delete(cacheKey);
   }
 }
 
@@ -624,6 +638,7 @@ export function GmailInbox({
   const avatarPrefetchRunRef = useRef(0);
   const openingThreadRef = useRef<string | null>(null);
   const openingThreadRunRef = useRef(0);
+  const accountCacheScopeRef = useRef(getAccountCacheScope());
   const threadPrefetchTimerRef = useRef<number | null>(null);
   const manuallyPreservedUnreadThreadIdsRef = useRef<Set<string>>(new Set());
   const [threads, setThreads] = useState<GmailThread[]>([]);
@@ -1164,7 +1179,8 @@ export function GmailInbox({
               : message.isRead,
         })),
       };
-      const cached = gmailThreadDetailCache.get(nextThread.id);
+      const cacheKey = gmailThreadCacheKey(nextThread.id, accountCacheScopeRef.current);
+      const cached = gmailThreadDetailCache.get(cacheKey);
       if (cached) {
         cacheThreadDetail({
           ...cached.thread,
@@ -1183,7 +1199,7 @@ export function GmailInbox({
                 ? false
                 : message.isRead,
           })),
-        });
+        }, cacheKey);
       }
       const wasCountedAsNormalUnread = thread.hasUnread && isNormalInboxThread(thread);
       const isCountedAsNormalUnread = nextThread.hasUnread && isNormalInboxThread(nextThread);
@@ -1218,7 +1234,7 @@ export function GmailInbox({
   };
 
   const prefetchThread = (thread: GmailThread) => {
-    if (readCachedThreadDetail(thread) || gmailThreadDetailRequests.has(thread.id)) return;
+    if (readCachedThreadDetail(thread) || gmailThreadDetailRequests.has(gmailThreadCacheKey(thread.id))) return;
     if (threadPrefetchTimerRef.current !== null) {
       window.clearTimeout(threadPrefetchTimerRef.current);
     }
@@ -1289,7 +1305,10 @@ export function GmailInbox({
     if (accessToken && openingThreadRunRef.current === runId) {
       void hydrateInlineAttachments(nextThread, accessToken).then((hydratedThread) => {
         if (hydratedThread === nextThread) return;
-        cacheThreadDetail(hydratedThread);
+        cacheThreadDetail(
+          hydratedThread,
+          gmailThreadCacheKey(hydratedThread.id, accountCacheScopeRef.current),
+        );
         if (openingThreadRunRef.current === runId) onSelectThread(hydratedThread);
       }).catch(() => {
         // Inline images are optional and must never delay or hide the email body.

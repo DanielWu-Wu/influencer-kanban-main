@@ -54,6 +54,7 @@ import {
   matchCreatorResourceProfiles,
 } from '@/lib/creator-resource-profile';
 import type { GmailAuth } from '@/lib/types';
+import { ACCOUNT_SCOPE_CHANGED_EVENT, getAccountCacheScope } from '@/lib/account-cache-scope';
 
 type NoticeType = 'logistics' | 'discount';
 type GmailHistoryMessage = {
@@ -103,6 +104,13 @@ const CONTACT_HISTORY_CACHE_MS = 2 * 60 * 1000;
 const contactHistoryCache = new Map<string, CachedContactHistory>();
 const pendingContactHistoryRequests = new Map<string, Promise<GmailHistoryMessage[]>>();
 
+if (typeof window !== 'undefined') {
+  window.addEventListener(ACCOUNT_SCOPE_CHANGED_EVENT, () => {
+    contactHistoryCache.clear();
+    pendingContactHistoryRequests.clear();
+  });
+}
+
 function tokenFingerprint(token: string) {
   let hash = 0;
   for (let index = 0; index < token.length; index += 1) {
@@ -112,7 +120,7 @@ function tokenFingerprint(token: string) {
 }
 
 async function requestContactHistory(email: string, accessToken: string) {
-  const cacheKey = `${email.toLowerCase()}|${tokenFingerprint(accessToken)}`;
+  const cacheKey = `${getAccountCacheScope()}|${email.toLowerCase()}|${tokenFingerprint(accessToken)}`;
   const cached = contactHistoryCache.get(cacheKey);
   if (cached && cached.expiresAt > Date.now()) return cached.messages;
 

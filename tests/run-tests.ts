@@ -12,3 +12,4 @@ import './creator-country-label.test';
 import './creator-language.test';
 import './feishu-write-guard.test';
 import './email-signature-scope.test';
+import './account-isolation.test';

@@ -518,6 +518,7 @@ async function fetchRecentVideos(apiKey: string, uploadsPlaylistId: string, maxV
 }
 
 export async function POST(request: NextRequest) {
+  if (!(await getRequestUser(request))) return NextResponse.json({ error: '未登录或账号无权使用 YouTube。' }, { status: 401 });
   const body = await request.json().catch(() => ({})) as {
     links?: unknown[];
     apiKey?: unknown;
