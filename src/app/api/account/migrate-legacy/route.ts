@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { USER_DATA_KEYS, type UserDataKey } from '@/lib/account-data-keys';
-import { createAdminServerClient, getRequestAdmin } from '@/lib/supabase/server';
+import { getRequestAdmin } from '@/lib/supabase/server';
+import { getUserSecret, setUserSecret } from '@/lib/user-private-storage';
 
 const LEGACY_USER_DATA_MAP: Record<string, UserDataKey> = {
   'influencer-board-influencers': USER_DATA_KEYS.INFLUENCERS,
@@ -55,6 +56,15 @@ function parseLegacyUserData(key: string, value: string) {
   return parsed;
 }
 
+function getMigrationErrorMessage(error: unknown) {
+  if (error instanceof Error) return error.message;
+  if (error && typeof error === 'object' && 'message' in error) {
+    const message = (error as { message?: unknown }).message;
+    if (typeof message === 'string' && message.trim()) return message;
+  }
+  return '历史数据迁移失败。';
+}
+
 export async function POST(request: NextRequest) {
   const currentAdmin = await getRequestAdmin(request);
   if (!currentAdmin) return NextResponse.json({ error: '只有主管理员可以迁移历史数据。' }, { status: 403 });
@@ -73,28 +83,19 @@ export async function POST(request: NextRequest) {
   }
 
   try {
-    const admin = createAdminServerClient();
+    // All business rows stay behind the signed-in administrator's existing
+    // per-user RLS boundary. Private values continue to use security-definer
+    // RPCs instead of exposing the user_secrets table to the browser.
+    const userClient = currentAdmin.supabase;
     const now = new Date().toISOString();
     const expectedSecretKeys = new Set<string>();
     const migratedProductIds: string[] = [];
     const migratedProspectIds: string[] = [];
     let settingsMigrated = false;
     const saveSecretIfMissing = async (key: string, value: unknown) => {
-      const { data: existing, error: readError } = await admin
-        .from('user_secrets')
-        .select('secret_key')
-        .eq('user_id', currentAdmin.user.id)
-        .eq('secret_key', key)
-        .maybeSingle();
-      if (readError) throw readError;
-      if (!existing) {
-        const { error } = await admin.from('user_secrets').upsert({
-          user_id: currentAdmin.user.id,
-          secret_key: key,
-          secret_value: JSON.stringify(value),
-          updated_at: now,
-        });
-        if (error) throw error;
+      const existing = await getUserSecret<unknown>(userClient, key);
+      if (existing === null) {
+        await setUserSecret(userClient, key, value);
       }
       expectedSecretKeys.add(key);
     };
@@ -111,7 +112,7 @@ export async function POST(request: NextRequest) {
         updated_at: now,
       }));
     if (rows.length) {
-      const { error: rowsError } = await admin.from('user_data').upsert(rows);
+      const { error: rowsError } = await userClient.from('user_data').upsert(rows);
       if (rowsError) throw rowsError;
     }
 
@@ -120,11 +121,12 @@ export async function POST(request: NextRequest) {
       const parsed = parseLegacyValue(legacySettings);
       if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) {
         const parsedSettings = parsed as Record<string, unknown>;
-        const { data: existing } = await admin
+        const { data: existing, error: existingSettingsError } = await userClient
           .from('app_settings')
           .select('data')
           .eq('user_id', currentAdmin.user.id)
           .maybeSingle();
+        if (existingSettingsError) throw existingSettingsError;
         const data = {
           ...parsedSettings,
           ...((existing?.data && typeof existing.data === 'object') ? existing.data : {}),
@@ -132,7 +134,7 @@ export async function POST(request: NextRequest) {
         delete data.customApiKey;
         delete data.gmailClientSecret;
         delete data.youtubeApiKey;
-        const { error } = await admin.from('app_settings').upsert({
+        const { error } = await userClient.from('app_settings').upsert({
           user_id: currentAdmin.user.id,
           data,
           updated_at: now,
@@ -159,7 +161,7 @@ export async function POST(request: NextRequest) {
       if (!Array.isArray(parsed)) {
         throw new Error('历史产品资料格式异常，原数据已保留，请修复后重试。');
       }
-      const { data: existingProducts, error: existingProductsError } = await admin
+      const { data: existingProducts, error: existingProductsError } = await userClient
         .from('products')
         .select('id')
         .eq('user_id', currentAdmin.user.id);
@@ -187,7 +189,7 @@ export async function POST(request: NextRequest) {
         const existingIds = new Set((existingProducts || []).map((product) => product.id));
         const missingProductRows = productRows.filter((product) => !existingIds.has(product.id));
         if (missingProductRows.length) {
-          const { error } = await admin.from('products').upsert(missingProductRows);
+          const { error } = await userClient.from('products').upsert(missingProductRows);
           if (error) throw error;
         }
       }
@@ -215,7 +217,7 @@ export async function POST(request: NextRequest) {
         throw new Error('历史红人开发资料格式异常，原数据已保留，请修复后重试。');
       }
       if (parsed.length) {
-        const { data: existingProspects, error: existingProspectsError } = await admin
+        const { data: existingProspects, error: existingProspectsError } = await userClient
           .from('creator_prospects')
           .select('id,updated_at')
           .eq('user_id', currentAdmin.user.id);
@@ -238,14 +240,14 @@ export async function POST(request: NextRequest) {
           || prospect.updated_at > (existingUpdatedAt.get(prospect.id) || '')
         ));
         if (newerProspectRows.length) {
-          const { error } = await admin.from('creator_prospects').upsert(newerProspectRows);
+          const { error } = await userClient.from('creator_prospects').upsert(newerProspectRows);
           if (error) throw error;
         }
       }
     }
 
     if (rows.length) {
-      const { data: verified, error: verifyError } = await admin
+      const { data: verified, error: verifyError } = await userClient
         .from('user_data')
         .select('data_key')
         .eq('user_id', currentAdmin.user.id)
@@ -255,17 +257,15 @@ export async function POST(request: NextRequest) {
       }
     }
 
-    const { data: verifiedSecrets, error: secretVerifyError } = await admin
-      .from('user_secrets')
-      .select('secret_key')
-      .eq('user_id', currentAdmin.user.id)
-      .in('secret_key', Array.from(expectedSecretKeys));
-    if (secretVerifyError || (verifiedSecrets?.length || 0) !== expectedSecretKeys.size) {
-      throw secretVerifyError || new Error('历史私密数据回读校验失败。');
+    for (const key of expectedSecretKeys) {
+      const verifiedSecret = await getUserSecret<unknown>(userClient, key);
+      if (verifiedSecret === null) {
+        throw new Error('历史私密数据回读校验失败。');
+      }
     }
 
     if (settingsMigrated) {
-      const { data: verifiedSettings, error: settingsVerifyError } = await admin
+      const { data: verifiedSettings, error: settingsVerifyError } = await userClient
         .from('app_settings')
         .select('user_id')
         .eq('user_id', currentAdmin.user.id)
@@ -277,7 +277,7 @@ export async function POST(request: NextRequest) {
 
     if (migratedProductIds.length) {
       const uniqueIds = Array.from(new Set(migratedProductIds));
-      const { data: verifiedProducts, error: productVerifyError } = await admin
+      const { data: verifiedProducts, error: productVerifyError } = await userClient
         .from('products')
         .select('id')
         .eq('user_id', currentAdmin.user.id)
@@ -289,7 +289,7 @@ export async function POST(request: NextRequest) {
 
     if (migratedProspectIds.length) {
       const uniqueIds = Array.from(new Set(migratedProspectIds));
-      const { data: verifiedProspects, error: prospectVerifyError } = await admin
+      const { data: verifiedProspects, error: prospectVerifyError } = await userClient
         .from('creator_prospects')
         .select('id')
         .eq('user_id', currentAdmin.user.id)
@@ -299,19 +299,13 @@ export async function POST(request: NextRequest) {
       }
     }
 
-    const { error: profileError } = await admin
-      .from('account_profiles')
-      .update({ legacy_migrated_at: now, updated_at: now })
-      .eq('user_id', currentAdmin.user.id);
-    if (profileError) throw profileError;
-
     return NextResponse.json({
       success: true,
       data: { migratedKeys: Object.keys(allowedLegacy) },
     });
   } catch (error) {
     return NextResponse.json(
-      { error: error instanceof Error ? error.message : '历史数据迁移失败。' },
+      { error: getMigrationErrorMessage(error) },
       { status: 500 },
     );
   }
