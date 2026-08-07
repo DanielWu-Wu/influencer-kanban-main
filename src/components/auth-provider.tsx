@@ -66,14 +66,19 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     });
 
     const { data: listener } = supabase.auth.onAuthStateChange((_event, nextSession) => {
-      setSession(nextSession);
       if (!nextSession) {
+        setSession(null);
         setAccount(null);
         setAccountCacheScope(null);
         setLoading(false);
         void syncServerSession(null);
         return;
       }
+      // A signed-in user is not an invalid account while its profile request is
+      // still in flight. Keep the login page in its loading state until the
+      // account check has actually completed.
+      setLoading(true);
+      setSession(nextSession);
       void loadAccount(nextSession).then((nextAccount) => {
         if (!active) return;
         setAccount(nextAccount);

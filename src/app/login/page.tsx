@@ -24,7 +24,7 @@ export default function LoginPage() {
   }, []);
 
   useEffect(() => {
-    if (loading || !user) return;
+    if (loading || submitting || !user) return;
     if (!account) {
       void signOut();
       setMessage({ type: 'error', text: '账号尚未由主管理员开通，或账号服务暂时不可用。' });
@@ -36,7 +36,7 @@ export default function LoginPage() {
       return;
     }
     router.replace(account.mustChangePassword ? '/change-password' : '/');
-  }, [account, loading, router, signOut, user]);
+  }, [account, loading, router, signOut, submitting, user]);
 
   const handleSubmit = async (event: React.FormEvent) => {
     event.preventDefault();
