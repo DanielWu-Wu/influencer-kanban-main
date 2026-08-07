@@ -129,8 +129,9 @@ export async function getRequestAccount(request: NextRequest) {
   if (!identity) return null;
 
   try {
-    const admin = createAdminServerClient();
-    const { data, error } = await admin
+    // Account profiles are intentionally read through the verified user's
+    // client so the existing "own profile only" RLS policy remains in force.
+    const { data, error } = await identity.supabase
       .from('account_profiles')
       .select('user_id,email,display_name,status,must_change_password,created_at,last_login_at')
       .eq('user_id', identity.user.id)

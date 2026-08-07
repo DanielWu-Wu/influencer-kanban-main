@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 import {
   APP_SESSION_COOKIE,
-  createAdminServerClient,
+  createAuthenticatedServerClient,
   verifyAccessToken,
 } from '@/lib/supabase/server';
 
@@ -16,8 +16,8 @@ export async function POST(request: NextRequest) {
     return NextResponse.json({ error: '登录凭证无效。' }, { status: 401 });
   }
 
-  const admin = createAdminServerClient();
-  const { data: profile, error: profileError } = await admin
+  const userClient = createAuthenticatedServerClient(accessToken);
+  const { data: profile, error: profileError } = await userClient
     .from('account_profiles')
     .select('status,must_change_password')
     .eq('user_id', user.id)
