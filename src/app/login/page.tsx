@@ -7,27 +7,48 @@ import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { useAuth } from '@/components/auth-provider';
+import { classifyAccountFailure } from '@/lib/account-load-state';
 import { getSupabaseBrowserClient } from '@/lib/supabase/client';
 
 export default function LoginPage() {
   const router = useRouter();
-  const { user, account, loading, configured, signOut } = useAuth();
+  const { user, account, accountIssue, loading, configured, refreshAccount, signOut } = useAuth();
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
   const [submitting, setSubmitting] = useState(false);
+  const [retryingAccount, setRetryingAccount] = useState(false);
   const [message, setMessage] = useState<{ type: 'error' | 'success'; text: string } | null>(null);
 
   useEffect(() => {
-    if (new URLSearchParams(window.location.search).get('password_changed') === '1') {
+    const params = new URLSearchParams(window.location.search);
+    if (params.get('password_changed') === '1') {
       setMessage({ type: 'success', text: '密码已修改，请使用新密码重新登录。' });
+      return;
+    }
+    const accountError = params.get('account_error');
+    if (accountError === 'disabled') {
+      setMessage({ type: 'error', text: '账号已停用，请联系管理员。' });
+    } else if (accountError === 'not_provisioned') {
+      setMessage({ type: 'error', text: '账号尚未由主管理员开通。' });
+    } else if (accountError === 'session_invalid') {
+      setMessage({ type: 'error', text: '登录状态已失效，请重新登录。' });
     }
   }, []);
 
   useEffect(() => {
     if (loading || submitting || !user) return;
     if (!account) {
+      if (accountIssue?.kind === 'unavailable') {
+        setMessage({ type: 'error', text: accountIssue.message });
+        return;
+      }
       void signOut();
-      setMessage({ type: 'error', text: '账号尚未由主管理员开通，或账号服务暂时不可用。' });
+      setMessage({
+        type: 'error',
+        text: accountIssue?.code === 'ACCOUNT_NOT_PROVISIONED'
+          ? '账号尚未由主管理员开通。'
+          : '登录状态已失效，请重新登录。',
+      });
       return;
     }
     if (account.status === 'disabled') {
@@ -36,7 +57,7 @@ export default function LoginPage() {
       return;
     }
     router.replace(account.mustChangePassword ? '/change-password' : '/');
-  }, [account, loading, router, signOut, submitting, user]);
+  }, [account, accountIssue, loading, router, signOut, submitting, user]);
 
   const handleSubmit = async (event: React.FormEvent) => {
     event.preventDefault();
@@ -55,20 +76,31 @@ export default function LoginPage() {
         body: JSON.stringify({ accessToken: data.session.access_token }),
       });
       const sessionResult = await sessionResponse.json().catch(() => ({}));
+      if (!sessionResponse.ok) {
+        if (classifyAccountFailure(sessionResponse.status) === 'invalid') {
+          await supabase.auth.signOut();
+        }
+        throw new Error(sessionResult.error || (sessionResponse.status >= 500
+          ? '账号服务暂时不可用，请检查网络后重试。'
+          : '登录失败。'));
+      }
+
       const profileResponse = await fetch('/api/account/me', {
         cache: 'no-store',
         headers: { Authorization: `Bearer ${data.session.access_token}` },
       });
       const profileResult = await profileResponse.json().catch(() => ({}));
       if (!profileResponse.ok || !profileResult.success) {
-        await supabase.auth.signOut();
-        throw new Error(profileResult.error || sessionResult.error || '账号尚未由管理员开通。');
+        if (classifyAccountFailure(profileResponse.status) === 'invalid') {
+          await supabase.auth.signOut();
+        }
+        throw new Error(profileResult.error || (profileResponse.status >= 500
+          ? '账号服务暂时不可用，请检查网络后重试。'
+          : '账号尚未由管理员开通。'));
       }
-      if (profileResult.data.status === 'disabled' || !sessionResponse.ok) {
+      if (profileResult.data.status === 'disabled') {
         await supabase.auth.signOut();
-        throw new Error(profileResult.data.status === 'disabled'
-          ? '账号已停用，请联系管理员。'
-          : sessionResult.error || '登录失败。');
+        throw new Error('账号已停用，请联系管理员。');
       }
       router.replace(profileResult.data.mustChangePassword ? '/change-password' : '/');
     } catch (error) {
@@ -159,6 +191,22 @@ export default function LoginPage() {
                 }`}>
                   {message.text}
                 </div>
+              )}
+
+              {user && !account && accountIssue?.kind === 'unavailable' && (
+                <Button
+                  type="button"
+                  variant="outline"
+                  className="w-full"
+                  disabled={retryingAccount}
+                  onClick={() => {
+                    setRetryingAccount(true);
+                    void refreshAccount().finally(() => setRetryingAccount(false));
+                  }}
+                >
+                  {retryingAccount && <LoaderCircle className="h-4 w-4 animate-spin" />}
+                  重新检查账号
+                </Button>
               )}
 
               <Button className="w-full" disabled={submitting}>

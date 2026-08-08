@@ -1,8 +1,30 @@
 import { createClient, type User } from '@supabase/supabase-js';
 import type { NextRequest } from 'next/server';
 import type { AccountProfile } from '@/lib/account-types';
+import { classifyAuthVerificationError } from '@/lib/account-load-state';
 
 export const APP_SESSION_COOKIE = 'influencer_app_session';
+
+type AccessTokenVerificationResult =
+  | { status: 'ok'; user: User }
+  | { status: 'invalid' }
+  | { status: 'unavailable' };
+
+type RequestIdentity = {
+  user: User;
+  accessToken: string;
+  supabase: ReturnType<typeof createAuthenticatedServerClient>;
+};
+
+export type RequestAccount = RequestIdentity & {
+  profile: AccountProfile;
+};
+
+export type RequestAccountResult =
+  | { status: 'ok'; account: RequestAccount }
+  | { status: 'unauthenticated' }
+  | { status: 'not_found' }
+  | { status: 'unavailable' };
 
 function getServerConfig() {
   const url = process.env.NEXT_PUBLIC_SUPABASE_URL;
@@ -71,24 +93,36 @@ function logAuthVerificationError(context: string, error: unknown) {
   });
 }
 
-export async function verifyAccessToken(
+export async function verifyAccessTokenResult(
   accessToken: string,
   context = 'request',
-): Promise<User | null> {
+): Promise<AccessTokenVerificationResult> {
   try {
     // Token authenticity is checked with the server-only key. The caller can
     // never choose a user id; all later reads are pinned to this verified user.
     const admin = createAdminServerClient();
     const { data, error } = await admin.auth.getUser(accessToken);
-    if (error || !data.user) {
+    if (error) {
       logAuthVerificationError(context, error);
-      return null;
+      const status = error && typeof error === 'object' && 'status' in error
+        ? Number((error as { status?: unknown }).status)
+        : undefined;
+      return { status: classifyAuthVerificationError(status) };
     }
-    return data.user;
+    if (!data.user) return { status: 'invalid' };
+    return { status: 'ok', user: data.user };
   } catch (error) {
     logAuthVerificationError(context, error);
-    return null;
+    return { status: 'unavailable' };
   }
+}
+
+export async function verifyAccessToken(
+  accessToken: string,
+  context = 'request',
+): Promise<User | null> {
+  const result = await verifyAccessTokenResult(accessToken, context);
+  return result.status === 'ok' ? result.user : null;
 }
 
 export function getRequestAccessToken(request: NextRequest) {
@@ -98,14 +132,24 @@ export function getRequestAccessToken(request: NextRequest) {
 }
 
 export async function getRequestIdentity(request: NextRequest) {
-  const accessToken = getRequestAccessToken(request);
-  if (!accessToken) return null;
+  const result = await getRequestIdentityResult(request);
+  return result.status === 'ok' ? result.identity : null;
+}
 
-  const user = await verifyAccessToken(accessToken, 'request-identity');
-  if (!user) return null;
+async function getRequestIdentityResult(request: NextRequest): Promise<
+  | { status: 'ok'; identity: RequestIdentity }
+  | { status: 'unauthenticated' }
+  | { status: 'unavailable' }
+> {
+  const accessToken = getRequestAccessToken(request);
+  if (!accessToken) return { status: 'unauthenticated' };
+
+  const verification = await verifyAccessTokenResult(accessToken, 'request-identity');
+  if (verification.status === 'unavailable') return { status: 'unavailable' };
+  if (verification.status !== 'ok') return { status: 'unauthenticated' };
 
   const supabase = createAuthenticatedServerClient(accessToken);
-  return { user, accessToken, supabase };
+  return { status: 'ok', identity: { user: verification.user, accessToken, supabase } };
 }
 
 function mapAccountProfile(
@@ -125,8 +169,15 @@ function mapAccountProfile(
 }
 
 export async function getRequestAccount(request: NextRequest) {
-  const identity = await getRequestIdentity(request);
-  if (!identity) return null;
+  const result = await getRequestAccountResult(request);
+  return result.status === 'ok' ? result.account : null;
+}
+
+export async function getRequestAccountResult(request: NextRequest): Promise<RequestAccountResult> {
+  const identityResult = await getRequestIdentityResult(request);
+  if (identityResult.status === 'unavailable') return { status: 'unavailable' };
+  if (identityResult.status !== 'ok') return { status: 'unauthenticated' };
+  const { identity } = identityResult;
 
   try {
     // Account profiles are intentionally read through the verified user's
@@ -141,18 +192,21 @@ export async function getRequestAccount(request: NextRequest) {
         code: error.code,
         message: error.message.slice(0, 240),
       });
-      return null;
+      return { status: 'unavailable' };
     }
-    if (!data) return null;
+    if (!data) return { status: 'not_found' };
 
     const isAdmin = identity.user.id === process.env.APP_ADMIN_USER_ID;
     return {
-      ...identity,
-      profile: mapAccountProfile(data, isAdmin),
+      status: 'ok',
+      account: {
+        ...identity,
+        profile: mapAccountProfile(data, isAdmin),
+      },
     };
   } catch (error) {
     logAuthVerificationError('account-profile', error);
-    return null;
+    return { status: 'unavailable' };
   }
 }
 

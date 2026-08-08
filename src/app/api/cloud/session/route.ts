@@ -2,7 +2,7 @@ import { NextRequest, NextResponse } from 'next/server';
 import {
   APP_SESSION_COOKIE,
   createAuthenticatedServerClient,
-  verifyAccessToken,
+  verifyAccessTokenResult,
 } from '@/lib/supabase/server';
 
 export async function POST(request: NextRequest) {
@@ -11,10 +11,22 @@ export async function POST(request: NextRequest) {
     return NextResponse.json({ error: '缺少登录凭证。' }, { status: 400 });
   }
 
-  const user = await verifyAccessToken(accessToken, 'cloud-session');
-  if (!user) {
-    return NextResponse.json({ error: '登录凭证无效。' }, { status: 401 });
+  const verification = await verifyAccessTokenResult(accessToken, 'cloud-session');
+  if (verification.status === 'unavailable') {
+    return NextResponse.json({
+      success: false,
+      code: 'ACCOUNT_SERVICE_UNAVAILABLE',
+      error: '账号服务暂时不可用，请稍后重试。',
+    }, { status: 503 });
   }
+  if (verification.status !== 'ok') {
+    return NextResponse.json({
+      success: false,
+      code: 'SESSION_INVALID',
+      error: '登录凭证无效。',
+    }, { status: 401 });
+  }
+  const { user } = verification;
 
   const userClient = createAuthenticatedServerClient(accessToken);
   const { data: profile, error: profileError } = await userClient
@@ -27,13 +39,25 @@ export async function POST(request: NextRequest) {
       code: profileError.code,
       message: profileError.message.slice(0, 240),
     });
-    return NextResponse.json({ error: '账号服务暂时不可用。' }, { status: 503 });
+    return NextResponse.json({
+      success: false,
+      code: 'ACCOUNT_SERVICE_UNAVAILABLE',
+      error: '账号服务暂时不可用，请稍后重试。',
+    }, { status: 503 });
   }
   if (!profile) {
-    return NextResponse.json({ error: '账号尚未由管理员开通。' }, { status: 403 });
+    return NextResponse.json({
+      success: false,
+      code: 'ACCOUNT_NOT_PROVISIONED',
+      error: '账号尚未由管理员开通。',
+    }, { status: 403 });
   }
   if (profile.status !== 'active') {
-    return NextResponse.json({ error: '账号已停用，请联系管理员。' }, { status: 403 });
+    return NextResponse.json({
+      success: false,
+      code: 'ACCOUNT_DISABLED',
+      error: '账号已停用，请联系管理员。',
+    }, { status: 403 });
   }
 
   const response = NextResponse.json({ success: true });

@@ -12,15 +12,17 @@ import { Input } from '@/components/ui/input';
 
 export default function ChangePasswordPage() {
   const router = useRouter();
-  const { user, account, loading, signOut } = useAuth();
+  const { user, account, accountIssue, loading, refreshAccount, signOut } = useAuth();
   const [currentPassword, setCurrentPassword] = useState('');
   const [newPassword, setNewPassword] = useState('');
   const [confirmation, setConfirmation] = useState('');
   const [submitting, setSubmitting] = useState(false);
+  const [retryingAccount, setRetryingAccount] = useState(false);
   const [error, setError] = useState('');
 
   useEffect(() => {
     if (loading) return;
+    if (user && !account && accountIssue?.kind === 'unavailable') return;
     if (!user || !account || account.status === 'disabled') {
       if (user) {
         void signOut().finally(() => router.replace('/login'));
@@ -28,7 +30,7 @@ export default function ChangePasswordPage() {
         router.replace('/login');
       }
     }
-  }, [account, loading, router, signOut, user]);
+  }, [account, accountIssue, loading, router, signOut, user]);
 
   const handleSubmit = async (event: React.FormEvent) => {
     event.preventDefault();
@@ -54,6 +56,33 @@ export default function ChangePasswordPage() {
       setSubmitting(false);
     }
   };
+
+  if (!loading && user && !account && accountIssue?.kind === 'unavailable') {
+    return (
+      <main className="workspace-shell flex min-h-screen items-center justify-center p-6">
+        <Card className="w-full max-w-md">
+          <CardHeader>
+            <CardTitle>暂时无法检查账号状态</CardTitle>
+            <CardDescription>{accountIssue.message}</CardDescription>
+          </CardHeader>
+          <CardContent>
+            <Button
+              className="w-full"
+              variant="outline"
+              disabled={retryingAccount}
+              onClick={() => {
+                setRetryingAccount(true);
+                void refreshAccount().finally(() => setRetryingAccount(false));
+              }}
+            >
+              {retryingAccount && <LoaderCircle data-icon="inline-start" className="animate-spin" />}
+              重新检查账号
+            </Button>
+          </CardContent>
+        </Card>
+      </main>
+    );
+  }
 
   if (loading || !user || !account) {
     return <div className="flex min-h-screen items-center justify-center"><LoaderCircle className="animate-spin" /></div>;

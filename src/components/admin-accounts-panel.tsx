@@ -1,7 +1,7 @@
 'use client';
 
 import { useCallback, useEffect, useState } from 'react';
-import { KeyRound, LoaderCircle, Plus, RefreshCw, ShieldCheck, UserRoundCheck, UserRoundX } from 'lucide-react';
+import { KeyRound, LoaderCircle, Pencil, Plus, RefreshCw, ShieldCheck, UserRoundCheck, UserRoundX } from 'lucide-react';
 import { toast } from 'sonner';
 import type { AdminAccountSummary } from '@/lib/account-types';
 import { Alert, AlertDescription, AlertTitle } from '@/components/ui/alert';
@@ -42,9 +42,11 @@ export function AdminAccountsPanel() {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
   const [createOpen, setCreateOpen] = useState(false);
+  const [editAccount, setEditAccount] = useState<AdminAccountSummary | null>(null);
   const [resetAccount, setResetAccount] = useState<AdminAccountSummary | null>(null);
   const [disableAccount, setDisableAccount] = useState<AdminAccountSummary | null>(null);
   const [displayName, setDisplayName] = useState('');
+  const [editDisplayName, setEditDisplayName] = useState('');
   const [email, setEmail] = useState('');
   const [temporaryPassword, setTemporaryPassword] = useState('');
   const [submitting, setSubmitting] = useState(false);
@@ -124,13 +126,53 @@ export function AdminAccountsPanel() {
     }
   };
 
+  const updateDisplayName = async (event: React.FormEvent) => {
+    event.preventDefault();
+    if (!editAccount) return;
+
+    const nextDisplayName = editDisplayName.trim();
+    if (!nextDisplayName) {
+      setError('请输入姓名备注。');
+      return;
+    }
+
+    setSubmitting(true);
+    setError('');
+    try {
+      const response = await fetch('/api/admin/accounts', {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          userId: editAccount.userId,
+          action: 'update_display_name',
+          displayName: nextDisplayName,
+        }),
+      });
+      const result = await response.json();
+      if (!response.ok || !result.success) throw new Error(result.error || '姓名备注更新失败。');
+
+      setAccounts((currentAccounts) => currentAccounts.map((account) => (
+        account.userId === editAccount.userId
+          ? { ...account, displayName: nextDisplayName }
+          : account
+      )));
+      setEditAccount(null);
+      setEditDisplayName('');
+      toast.success('姓名备注已保存。');
+    } catch (updateError) {
+      setError(updateError instanceof Error ? updateError.message : '姓名备注更新失败。');
+    } finally {
+      setSubmitting(false);
+    }
+  };
+
   return (
     <div className="flex h-full flex-col gap-4 overflow-hidden">
       <Card>
         <CardHeader className="flex-row items-center justify-between">
           <div>
             <CardTitle className="flex items-center gap-2"><ShieldCheck className="size-5" />账号管理</CardTitle>
-            <CardDescription>创建和停用成员账号。管理员无法查看成员的业务数据、授权或密钥。</CardDescription>
+            <CardDescription>创建账号、填写姓名备注和管理账号状态。管理员无法查看成员的业务数据、授权或密钥。</CardDescription>
           </div>
           <div className="flex gap-2">
             <Button variant="outline" onClick={() => void loadAccounts()} disabled={loading}>
@@ -181,6 +223,17 @@ export function AdminAccountsPanel() {
                   <TableCell className="text-sm text-muted-foreground">{formatAccountDate(item.lastLoginAt)}</TableCell>
                   <TableCell>
                     <div className="flex justify-end gap-2">
+                      <Button
+                        variant="outline"
+                        size="sm"
+                        onClick={() => {
+                          setError('');
+                          setEditAccount(item);
+                          setEditDisplayName(item.displayName);
+                        }}
+                      >
+                        <Pencil data-icon="inline-start" />编辑姓名备注
+                      </Button>
                       {!item.isAdmin ? (
                         <>
                           <Button variant="outline" size="sm" onClick={() => { setError(''); setTemporaryPassword(''); setResetAccount(item); }}>
@@ -214,11 +267,54 @@ export function AdminAccountsPanel() {
               <DialogDescription>系统不会发送邮件。请把邮箱和临时密码安全地交给成员。</DialogDescription>
             </DialogHeader>
             <FieldGroup className="py-5">
-              <Field><FieldLabel htmlFor="account-name">成员姓名</FieldLabel><Input id="account-name" value={displayName} onChange={(event) => setDisplayName(event.target.value)} required /></Field>
+              <Field><FieldLabel htmlFor="account-name">姓名备注</FieldLabel><Input id="account-name" value={displayName} onChange={(event) => setDisplayName(event.target.value)} maxLength={80} required /></Field>
               <Field><FieldLabel htmlFor="account-email">登录邮箱</FieldLabel><Input id="account-email" type="email" autoComplete="off" value={email} onChange={(event) => setEmail(event.target.value)} required /></Field>
               <Field><FieldLabel htmlFor="account-password">临时密码</FieldLabel><Input id="account-password" type="password" autoComplete="new-password" minLength={8} value={temporaryPassword} onChange={(event) => setTemporaryPassword(event.target.value)} required /></Field>
             </FieldGroup>
             <DialogFooter><Button type="button" variant="outline" onClick={() => setCreateOpen(false)}>取消</Button><Button type="submit" disabled={submitting}>{submitting ? <LoaderCircle data-icon="inline-start" className="animate-spin" /> : <Plus data-icon="inline-start" />}创建账号</Button></DialogFooter>
+          </form>
+        </DialogContent>
+      </Dialog>
+
+      <Dialog
+        open={Boolean(editAccount)}
+        onOpenChange={(open) => {
+          if (!open) {
+            setEditAccount(null);
+            setEditDisplayName('');
+          }
+        }}
+      >
+        <DialogContent>
+          <form onSubmit={updateDisplayName}>
+            <DialogHeader>
+              <DialogTitle>编辑姓名备注</DialogTitle>
+              <DialogDescription>
+                用于管理员在账号列表中识别成员，不会修改登录邮箱或成员权限。
+              </DialogDescription>
+            </DialogHeader>
+            <FieldGroup className="py-5">
+              <Field>
+                <FieldLabel htmlFor="edit-account-name">姓名备注</FieldLabel>
+                <Input
+                  id="edit-account-name"
+                  value={editDisplayName}
+                  onChange={(event) => setEditDisplayName(event.target.value)}
+                  maxLength={80}
+                  autoFocus
+                  required
+                />
+              </Field>
+            </FieldGroup>
+            <DialogFooter>
+              <Button type="button" variant="outline" onClick={() => setEditAccount(null)}>
+                取消
+              </Button>
+              <Button type="submit" disabled={submitting || !editDisplayName.trim()}>
+                {submitting ? <LoaderCircle data-icon="inline-start" className="animate-spin" /> : null}
+                保存备注
+              </Button>
+            </DialogFooter>
           </form>
         </DialogContent>
       </Dialog>

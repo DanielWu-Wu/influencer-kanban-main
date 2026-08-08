@@ -26,6 +26,7 @@ import {
   PanelLeftClose,
   PanelLeftOpen,
   ShieldCheck,
+  TriangleAlert,
 } from 'lucide-react';
 import {
   useInfluencers,
@@ -110,7 +111,15 @@ const SIDEBAR_COLLAPSED_STORAGE_KEY = 'influencer-board-sidebar-collapsed';
 
 export default function DashboardPage() {
   const router = useRouter();
-  const { user, account, loading: authLoading, configured, signOut } = useAuth();
+  const {
+    user,
+    account,
+    accountIssue,
+    loading: authLoading,
+    configured,
+    refreshAccount,
+    signOut,
+  } = useAuth();
   const [currentView, setCurrentView] = useState<View>('todo');
   const [gmailHasMounted, setGmailHasMounted] = useState(false);
   const [cooperationHasMounted, setCooperationHasMounted] = useState(false);
@@ -120,14 +129,29 @@ export default function DashboardPage() {
   const [editingInfluencer, setEditingInfluencer] = useState<Influencer | null>(null);
   const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
+  const [accountRetrying, setAccountRetrying] = useState(false);
 
   useEffect(() => {
     if (!authLoading && configured && !user) {
       router.replace('/login');
       return;
     }
+    if (
+      !authLoading
+      && configured
+      && user
+      && !account
+      && accountIssue?.kind === 'unavailable'
+    ) {
+      return;
+    }
     if (!authLoading && configured && user && (!account || account.status === 'disabled')) {
-      void signOut().finally(() => router.replace('/login'));
+      const reason = account?.status === 'disabled' || accountIssue?.code === 'ACCOUNT_DISABLED'
+        ? 'disabled'
+        : accountIssue?.code === 'ACCOUNT_NOT_PROVISIONED'
+          ? 'not_provisioned'
+          : 'session_invalid';
+      void signOut().finally(() => router.replace(`/login?account_error=${reason}`));
       return;
     }
     if (!authLoading && account?.mustChangePassword) {
@@ -148,7 +172,7 @@ export default function DashboardPage() {
     ) {
       setCurrentView('settings');
     }
-  }, [account, authLoading, configured, router, signOut, user]);
+  }, [account, accountIssue, authLoading, configured, router, signOut, user]);
 
   useEffect(() => {
     if (currentView === 'gmail') setGmailHasMounted(true);
@@ -191,6 +215,38 @@ export default function DashboardPage() {
     todayTodos: todos.filter((todo) => todo.status !== 'completed').length
       + dailyGmail.items.filter((item) => !item.completed).length,
   };
+
+  if (
+    !authLoading
+    && configured
+    && user
+    && !account
+    && accountIssue?.kind === 'unavailable'
+  ) {
+    return (
+      <div className="workspace-shell flex min-h-screen items-center justify-center p-6">
+        <div className="glass-panel-strong w-full max-w-md rounded-lg p-6 text-center">
+          <TriangleAlert className="mx-auto h-7 w-7 text-amber-600" />
+          <h1 className="mt-3 text-lg font-semibold">暂时无法检查账号状态</h1>
+          <p className="mt-2 text-sm leading-6 text-muted-foreground">
+            {accountIssue.message} 系统不会把这次连接失败当成账号停用。
+          </p>
+          <Button
+            className="mt-5"
+            variant="outline"
+            disabled={accountRetrying}
+            onClick={() => {
+              setAccountRetrying(true);
+              void refreshAccount().finally(() => setAccountRetrying(false));
+            }}
+          >
+            {accountRetrying && <LoaderCircle className="h-4 w-4 animate-spin" />}
+            重新检查
+          </Button>
+        </div>
+      </div>
+    );
+  }
 
   if (authLoading || (configured && (!user || !account || account.status !== 'active'))) {
     return (
@@ -286,6 +342,25 @@ export default function DashboardPage() {
 
   return (
     <div className="workspace-shell h-dvh overflow-hidden">
+      {account && accountIssue?.kind === 'unavailable' && (
+        <div className="fixed left-1/2 top-17 z-[70] flex max-w-[calc(100vw-2rem)] -translate-x-1/2 items-center gap-3 rounded-lg border border-amber-200 bg-amber-50/95 px-4 py-2 text-sm text-amber-900 shadow-lg backdrop-blur-sm">
+          <TriangleAlert className="h-4 w-4 shrink-0" />
+          <span className="truncate">账号服务连接异常，当前工作台已保留，将继续自动重试。</span>
+          <Button
+            size="sm"
+            variant="outline"
+            className="h-7 shrink-0 border-amber-300 bg-white/80"
+            disabled={accountRetrying}
+            onClick={() => {
+              setAccountRetrying(true);
+              void refreshAccount().finally(() => setAccountRetrying(false));
+            }}
+          >
+            {accountRetrying ? <LoaderCircle className="h-3.5 w-3.5 animate-spin" /> : null}
+            重试
+          </Button>
+        </div>
+      )}
       <header className="app-topbar sticky top-0 z-50">
         <div className="flex h-15 items-center justify-between px-4 md:px-5">
           <div className="flex items-center gap-3">

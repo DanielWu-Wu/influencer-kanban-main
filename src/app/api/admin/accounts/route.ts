@@ -35,6 +35,10 @@ function normalizePassword(value: unknown) {
   return typeof value === 'string' ? value : '';
 }
 
+function normalizeDisplayName(value: unknown) {
+  return typeof value === 'string' ? value.trim() : '';
+}
+
 export async function GET(request: NextRequest) {
   const currentAdmin = await getRequestAdmin(request);
   if (!currentAdmin) return NextResponse.json({ error: '没有账号管理权限。' }, { status: 403 });
@@ -80,13 +84,16 @@ export async function POST(request: NextRequest) {
 
   const body = await request.json().catch(() => ({})) as Record<string, unknown>;
   const email = normalizeEmail(body.email);
-  const displayName = typeof body.displayName === 'string' ? body.displayName.trim() : '';
+  const displayName = normalizeDisplayName(body.displayName);
   const temporaryPassword = normalizePassword(body.temporaryPassword);
   if (!email || !email.includes('@')) {
     return NextResponse.json({ error: '请输入有效邮箱。' }, { status: 400 });
   }
   if (!displayName) {
     return NextResponse.json({ error: '请输入成员姓名。' }, { status: 400 });
+  }
+  if (displayName.length > 80) {
+    return NextResponse.json({ error: '姓名备注最多 80 个字符。' }, { status: 400 });
   }
   if (temporaryPassword.length < 8) {
     return NextResponse.json({ error: '临时密码至少需要 8 位。' }, { status: 400 });
@@ -136,14 +143,35 @@ export async function PATCH(request: NextRequest) {
   const userId = typeof body.userId === 'string' ? body.userId : '';
   const action = typeof body.action === 'string' ? body.action : '';
   if (!userId) return NextResponse.json({ error: '缺少成员账号。' }, { status: 400 });
-  if (userId === currentAdmin.user.id || userId === process.env.APP_ADMIN_USER_ID) {
+  if (
+    action !== 'update_display_name'
+    && (userId === currentAdmin.user.id || userId === process.env.APP_ADMIN_USER_ID)
+  ) {
     return NextResponse.json({ error: '主管理员账号不能停用或重置。' }, { status: 400 });
   }
 
   try {
     const admin = createAdminServerClient();
     const now = new Date().toISOString();
-    if (action === 'disable') {
+    if (action === 'update_display_name') {
+      const displayName = normalizeDisplayName(body.displayName);
+      if (!displayName) {
+        return NextResponse.json({ error: '请输入姓名备注。' }, { status: 400 });
+      }
+      if (displayName.length > 80) {
+        return NextResponse.json({ error: '姓名备注最多 80 个字符。' }, { status: 400 });
+      }
+      const { data: updatedProfile, error: profileError } = await admin
+        .from('account_profiles')
+        .update({ display_name: displayName, updated_at: now })
+        .eq('user_id', userId)
+        .select('user_id')
+        .maybeSingle();
+      if (profileError) throwDatabaseError('update-display-name', profileError, '姓名备注更新失败。');
+      if (!updatedProfile) {
+        return NextResponse.json({ error: '未找到这个成员账号，请刷新后重试。' }, { status: 404 });
+      }
+    } else if (action === 'disable') {
       const { error: profileError } = await admin
         .from('account_profiles')
         .update({ status: 'disabled', updated_at: now })
