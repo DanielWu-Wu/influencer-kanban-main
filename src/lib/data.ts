@@ -1,6 +1,6 @@
 'use client';
 
-import { useState, useEffect, useCallback, useMemo } from 'react';
+import { useState, useEffect, useCallback, useMemo, useRef } from 'react';
 import {
   Influencer,
   EmailTemplate,
@@ -211,27 +211,47 @@ function getCloudSafeSettings(settings: AppSettings) {
   return safeSettings;
 }
 
+const settingsWriteQueues = new Map<string, Promise<void>>();
+
 async function syncSettingsToCloud(settings: AppSettings) {
   const supabase = getSupabaseBrowserClient();
-  if (!supabase) return;
+  if (!supabase) throw new Error('Supabase 尚未连接，设置未保存。');
   const { data: authData } = await supabase.auth.getUser();
-  if (!authData.user) return;
+  const ownerId = authData.user?.id;
+  if (!ownerId) throw new Error('当前账号未登录，设置未保存。');
 
-  const { error } = await supabase.from('app_settings').upsert({
-    user_id: authData.user.id,
-    data: getCloudSafeSettings(settings),
-    updated_at: new Date().toISOString(),
-  });
-  if (error) console.error('云端设置保存失败:', error);
+  const previous = settingsWriteQueues.get(ownerId) || Promise.resolve();
+  const next = previous
+    .catch(() => undefined)
+    .then(async () => {
+      const { data: currentAuthData } = await supabase.auth.getUser();
+      if (currentAuthData.user?.id !== ownerId) {
+        throw new Error('账号已经切换，本次设置未保存。');
+      }
+      const { error } = await supabase.from('app_settings').upsert({
+        user_id: ownerId,
+        data: getCloudSafeSettings(settings),
+        updated_at: new Date().toISOString(),
+      });
+      if (error) throw new Error(error.message || '云端设置保存失败。');
+    })
+    .finally(() => {
+      if (settingsWriteQueues.get(ownerId) === next) settingsWriteQueues.delete(ownerId);
+    });
+  settingsWriteQueues.set(ownerId, next);
+  return next;
 }
 
 export function useSettings() {
   const [settings, setSettings] = useState<AppSettings>({});
   const [loading, setLoading] = useState(true);
+  const settingsRef = useRef<AppSettings>({});
 
   useEffect(() => {
     const handleCustom = (event: Event) => {
-      setSettings((event as CustomEvent<AppSettings>).detail);
+      const next = (event as CustomEvent<AppSettings>).detail;
+      settingsRef.current = next;
+      setSettings(next);
     };
 
     window.addEventListener('settings-updated', handleCustom);
@@ -272,6 +292,7 @@ export function useSettings() {
         customApiKeyConfigured: Boolean(secretStatus?.configured),
         youtubeApiKeyConfigured: Boolean(youtubeSecretStatus?.configured),
       };
+      settingsRef.current = nextSettings;
       setSettings(nextSettings);
       setLoading(false);
     };
@@ -282,18 +303,40 @@ export function useSettings() {
     };
   }, []);
 
-  const updateSettings = useCallback((updates: Partial<AppSettings>) => {
-    setSettings((prev) => {
-      const next = { ...prev, ...updates };
-      void syncSettingsToCloud(next);
-      setTimeout(() => {
-        window.dispatchEvent(new CustomEvent('settings-updated', { detail: next }));
-      }, 0);
-      return next;
-    });
+  const publishSettings = useCallback((next: AppSettings) => {
+    settingsRef.current = next;
+    setSettings(next);
+    window.dispatchEvent(new CustomEvent('settings-updated', { detail: next }));
   }, []);
 
-  return { settings, updateSettings, loading };
+  const updateSettings = useCallback((updates: Partial<AppSettings>) => {
+    const next = { ...settingsRef.current, ...updates };
+    publishSettings(next);
+    void syncSettingsToCloud(next).catch((saveError) => {
+      console.error('云端设置保存失败:', saveError);
+    });
+  }, [publishSettings]);
+
+  const saveSettings = useCallback(async (updates: Partial<AppSettings>) => {
+    const previous = settingsRef.current;
+    const next = { ...previous, ...updates };
+    publishSettings(next);
+    try {
+      await syncSettingsToCloud(next);
+    } catch (saveError) {
+      const current = settingsRef.current;
+      const rollback = { ...current };
+      for (const key of Object.keys(updates) as Array<keyof AppSettings>) {
+        if (current[key] === next[key]) {
+          (rollback as Record<keyof AppSettings, AppSettings[keyof AppSettings]>)[key] = previous[key];
+        }
+      }
+      publishSettings(rollback);
+      throw saveError;
+    }
+  }, [publishSettings]);
+
+  return { settings, updateSettings, saveSettings, loading };
 }
 
 export function useInfluencers() {

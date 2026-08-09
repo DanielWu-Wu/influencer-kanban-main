@@ -19,13 +19,43 @@ import {
   Save,
   Sparkles,
   Trash2,
+  Undo2,
 } from 'lucide-react';
 import { toast, Toaster } from 'sonner';
+import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+} from '@/components/ui/alert-dialog';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from '@/components/ui/dialog';
+import { Field, FieldDescription, FieldError, FieldGroup, FieldLabel } from '@/components/ui/field';
 import { Input } from '@/components/ui/input';
 import { Separator } from '@/components/ui/separator';
+import {
+  Select,
+  SelectContent,
+  SelectGroup,
+  SelectItem,
+  SelectLabel,
+  SelectTrigger,
+  SelectValue,
+} from '@/components/ui/select';
+import { Spinner } from '@/components/ui/spinner';
 import { Textarea } from '@/components/ui/textarea';
 import {
   BUILT_IN_PROMPT_TEMPLATES,
@@ -42,6 +72,12 @@ import {
   type PromptType,
 } from '@/lib/ai-prompts';
 import { generateId, useSettings, type AppSettings } from '@/lib/data';
+import {
+  findPromptTemplateNameConflict,
+  getPromptSaveIntent,
+  hasPromptSectionChanges,
+  updatePromptTemplateContent,
+} from '@/lib/prompt-template-settings';
 
 type PromptValues = Record<PromptType, string>;
 
@@ -194,58 +230,51 @@ function getSavedPromptValues(settings: AppSettings): PromptValues {
   };
 }
 
+function getPromptSettingsPatch(type: PromptType, content: string): Partial<AppSettings> {
+  if (type === 'translate') return { translatePrompt: content };
+  if (type === 'analysis') return { aiAnalysisPrompt: content };
+  if (type === 'cooperationIdea') return { aiCooperationIdeaPrompt: content };
+  if (type === 'draft') return { aiDraftPrompt: content, aiEmailPrompt: content };
+  if (type === 'outreach') return { aiOutreachPrompt: content };
+  if (type === 'outreachFollowUp1') return { aiOutreachFollowUp1Prompt: content };
+  if (type === 'outreachFollowUp2') return { aiOutreachFollowUp2Prompt: content };
+  if (type === 'logisticsNotice') return { aiLogisticsNoticePrompt: content };
+  return { aiDiscountNoticePrompt: content };
+}
+
 export default function PromptManager({ mode = 'general' }: { mode?: PromptManagerMode }) {
   const pageConfig = PAGE_CONFIG[mode];
-  const { settings, updateSettings, loading } = useSettings();
+  const { settings, updateSettings, saveSettings, loading } = useSettings();
   const [prompts, setPrompts] = useState<PromptValues>(initialPrompts);
+  const [savedPrompts, setSavedPrompts] = useState<PromptValues>(initialPrompts);
   const [customTemplates, setCustomTemplates] = useState<PromptTemplate[]>([]);
-  const [templateNames, setTemplateNames] = useState<Record<PromptType, string>>({
-    translate: '',
-    analysis: '',
-    cooperationIdea: '',
-    draft: '',
-    outreach: '',
-    outreachFollowUp1: '',
-    outreachFollowUp2: '',
-    logisticsNotice: '',
-    discountNotice: '',
-  });
   const [selectedTemplates, setSelectedTemplates] = useState<Record<PromptType, string>>(
     () => ({ ...DEFAULT_SELECTED_PROMPT_TEMPLATES }),
   );
+  const [savedSelectedTemplates, setSavedSelectedTemplates] = useState<Record<PromptType, string>>(
+    () => ({ ...DEFAULT_SELECTED_PROMPT_TEMPLATES }),
+  );
+  const promptsHydratedRef = useRef(false);
   const selectedTemplatesHydratedRef = useRef(false);
   const [expandedSection, setExpandedSection] = useState<PromptType | null>(null);
-  const [saved, setSaved] = useState(false);
+  const [savingType, setSavingType] = useState<PromptType | null>(null);
+  const [saveErrors, setSaveErrors] = useState<Partial<Record<PromptType, string>>>({});
+  const [saveAsType, setSaveAsType] = useState<PromptType | null>(null);
+  const [saveAsName, setSaveAsName] = useState('');
+  const [saveAsError, setSaveAsError] = useState('');
+  const [pendingTemplateChange, setPendingTemplateChange] = useState<{
+    type: PromptType;
+    templateId: string;
+  } | null>(null);
+  const [deleteType, setDeleteType] = useState<PromptType | null>(null);
 
   useEffect(() => {
-    if (loading) return;
-    setPrompts({
-      translate: settings.translatePrompt || DEFAULT_TRANSLATE_PROMPT,
-      analysis: settings.aiAnalysisPrompt || DEFAULT_ANALYSIS_PROMPT,
-      cooperationIdea:
-        settings.aiCooperationIdeaPrompt || DEFAULT_COOPERATION_IDEA_PROMPT,
-      draft: settings.aiDraftPrompt || settings.aiEmailPrompt || DEFAULT_DRAFT_PROMPT,
-      outreach: settings.aiOutreachPrompt || DEFAULT_OUTREACH_PROMPT,
-      outreachFollowUp1:
-        settings.aiOutreachFollowUp1Prompt || DEFAULT_OUTREACH_FOLLOW_UP_1_PROMPT,
-      outreachFollowUp2:
-        settings.aiOutreachFollowUp2Prompt || DEFAULT_OUTREACH_FOLLOW_UP_2_PROMPT,
-      logisticsNotice: settings.aiLogisticsNoticePrompt || DEFAULT_LOGISTICS_NOTICE_PROMPT,
-      discountNotice: settings.aiDiscountNoticePrompt || DEFAULT_DISCOUNT_NOTICE_PROMPT,
-    });
-  }, [
-    loading,
-    settings.aiAnalysisPrompt,
-    settings.aiCooperationIdeaPrompt,
-    settings.aiDraftPrompt,
-    settings.aiDiscountNoticePrompt,
-    settings.aiEmailPrompt,
-    settings.aiLogisticsNoticePrompt,
-    settings.aiOutreachPrompt,
-    settings.aiOutreachFollowUp1Prompt,
-    settings.aiOutreachFollowUp2Prompt,
-    settings.translatePrompt,
-  ]);
+    if (loading || promptsHydratedRef.current) return;
+    const savedValues = getSavedPromptValues(settings);
+    setPrompts(savedValues);
+    setSavedPrompts(savedValues);
+    promptsHydratedRef.current = true;
+  }, [loading, settings]);
 
   useEffect(() => {
     if (!loading) setCustomTemplates(settings.promptTemplates || []);
@@ -281,6 +310,7 @@ export default function PromptManager({ mode = 'general' }: { mode?: PromptManag
     }
 
     setSelectedTemplates(restoredSelections);
+    setSavedSelectedTemplates(restoredSelections);
     selectedTemplatesHydratedRef.current = true;
     const selectionNeedsMigration = (Object.keys(restoredSelections) as PromptType[])
       .some((type) => savedSelections[type] !== restoredSelections[type]);
@@ -294,91 +324,156 @@ export default function PromptManager({ mode = 'general' }: { mode?: PromptManag
     [customTemplates],
   );
 
-  const persistTemplates = (templates: PromptTemplate[]) => {
-    setCustomTemplates(templates);
-    updateSettings({ promptTemplates: templates });
-  };
-
-  const handleSaveAll = () => {
-    if (mode === 'general') {
-      updateSettings({
-        translatePrompt: prompts.translate,
-        aiAnalysisPrompt: prompts.analysis,
-        aiCooperationIdeaPrompt: prompts.cooperationIdea,
-        promptTemplates: customTemplates,
-        selectedPromptTemplates: selectedTemplates,
-      });
-    } else {
-      updateSettings({
-        aiDraftPrompt: prompts.draft,
-        aiEmailPrompt: prompts.draft,
-        aiOutreachPrompt: prompts.outreach,
-        aiOutreachFollowUp1Prompt: prompts.outreachFollowUp1,
-        aiOutreachFollowUp2Prompt: prompts.outreachFollowUp2,
-        aiLogisticsNoticePrompt: prompts.logisticsNotice,
-        aiDiscountNoticePrompt: prompts.discountNotice,
-        promptTemplates: customTemplates,
-        selectedPromptTemplates: selectedTemplates,
-      });
-    }
-    setSaved(true);
-    window.setTimeout(() => setSaved(false), 2000);
-  };
-
-  const saveTemplate = (type: PromptType) => {
-    const name = templateNames[type].trim();
-    if (!name) {
-      toast.error('请先填写模板名称');
-      return;
-    }
-
-    const duplicate = customTemplates.find(
-      (template) => template.type === type && template.name.toLowerCase() === name.toLowerCase(),
-    );
-    const nextTemplates = duplicate
-      ? customTemplates.map((template) =>
-          template.id === duplicate.id ? { ...template, content: prompts[type] } : template)
-      : [
-          ...customTemplates,
-          { id: `prompt-${generateId()}`, name, type, content: prompts[type] },
-        ];
-
-    persistTemplates(nextTemplates);
-    setSelectedTemplates((current) => ({
-      ...current,
-      [type]: duplicate?.id || nextTemplates[nextTemplates.length - 1].id,
-    }));
-    setTemplateNames((current) => ({ ...current, [type]: '' }));
-    toast.success(duplicate ? '模板已更新' : '模板已保存');
-  };
+  const sectionHasChanges = (type: PromptType) => hasPromptSectionChanges({
+    prompt: prompts[type],
+    selectedTemplateId: selectedTemplates[type],
+    savedPrompt: savedPrompts[type],
+    savedTemplateId: savedSelectedTemplates[type],
+  });
 
   const applyTemplate = (type: PromptType, templateId: string) => {
     setSelectedTemplates((current) => ({ ...current, [type]: templateId }));
     const template = allTemplates.find((item) => item.id === templateId);
     if (template) setPrompts((current) => ({ ...current, [type]: template.content }));
+    setSaveErrors((current) => ({ ...current, [type]: '' }));
   };
 
-  const deleteTemplate = (type: PromptType) => {
-    const templateId = selectedTemplates[type];
-    const template = customTemplates.find((item) => item.id === templateId);
-    if (!template) {
-      toast.error('内置模板不能删除');
+  const requestTemplateChange = (type: PromptType, templateId: string) => {
+    if (sectionHasChanges(type)) {
+      setPendingTemplateChange({ type, templateId });
       return;
     }
-    const nextTemplates = customTemplates.filter((item) => item.id !== templateId);
-    const fallback = BUILT_IN_PROMPT_TEMPLATES.find((item) => item.type === type);
-    if (fallback) {
-      const nextSelections = { ...selectedTemplates, [type]: fallback.id };
-      setCustomTemplates(nextTemplates);
-      setSelectedTemplates(nextSelections);
-      setPrompts((current) => ({ ...current, [type]: fallback.content }));
-      updateSettings({
+    applyTemplate(type, templateId);
+  };
+
+  const persistSection = async ({
+    type,
+    content,
+    templateId,
+    nextTemplates = customTemplates,
+    successMessage,
+  }: {
+    type: PromptType;
+    content: string;
+    templateId: string;
+    nextTemplates?: PromptTemplate[];
+    successMessage: string;
+  }) => {
+    const nextSelections = { ...savedSelectedTemplates, [type]: templateId };
+    setSavingType(type);
+    setSaveErrors((current) => ({ ...current, [type]: '' }));
+    try {
+      await saveSettings({
+        ...getPromptSettingsPatch(type, content),
         promptTemplates: nextTemplates,
         selectedPromptTemplates: nextSelections,
       });
+      setCustomTemplates(nextTemplates);
+      setPrompts((current) => ({ ...current, [type]: content }));
+      setSavedPrompts((current) => ({ ...current, [type]: content }));
+      setSelectedTemplates((current) => ({ ...current, [type]: templateId }));
+      setSavedSelectedTemplates(nextSelections);
+      toast.success(successMessage);
+      return true;
+    } catch (saveError) {
+      const message = saveError instanceof Error ? saveError.message : '提示词保存失败，请重试。';
+      setSaveErrors((current) => ({ ...current, [type]: message }));
+      toast.error(message);
+      return false;
+    } finally {
+      setSavingType(null);
     }
-    toast.success('模板已删除');
   };
+
+  const openSaveAs = (type: PromptType) => {
+    const selected = allTemplates.find((template) => template.id === selectedTemplates[type]);
+    setSaveAsType(type);
+    setSaveAsName(selected
+      ? `${selected.name}${selected.builtIn ? '（个人版）' : '（副本）'}`
+      : '我的提示词模板');
+    setSaveAsError('');
+  };
+
+  const saveAsNewTemplate = async () => {
+    if (!saveAsType) return;
+    const name = saveAsName.trim();
+    if (!name) {
+      setSaveAsError('请填写模板名称。');
+      return;
+    }
+    if (!prompts[saveAsType].trim()) {
+      setSaveAsError('提示词内容不能为空。');
+      return;
+    }
+    if (findPromptTemplateNameConflict(allTemplates, saveAsType, name)) {
+      setSaveAsError('该类型下已经存在同名模板，请换一个名称。');
+      return;
+    }
+    const template: PromptTemplate = {
+      id: `prompt-${generateId()}`,
+      name,
+      type: saveAsType,
+      content: prompts[saveAsType],
+    };
+    const saved = await persistSection({
+      type: saveAsType,
+      content: template.content,
+      templateId: template.id,
+      nextTemplates: [...customTemplates, template],
+      successMessage: '新模板已保存并应用。',
+    });
+    if (saved) {
+      setSaveAsType(null);
+      setSaveAsName('');
+      setSaveAsError('');
+    }
+  };
+
+  const saveAndApply = async (type: PromptType) => {
+    const content = prompts[type];
+    if (!content.trim()) {
+      setSaveErrors((current) => ({ ...current, [type]: '提示词内容不能为空。' }));
+      return;
+    }
+    const selected = allTemplates.find((template) => template.id === selectedTemplates[type]);
+    const intent = getPromptSaveIntent(selected, content);
+    if (intent === 'save_as') {
+      openSaveAs(type);
+      return;
+    }
+    const nextTemplates = intent === 'update' && selected
+      ? updatePromptTemplateContent(customTemplates, selected.id, content)
+      : customTemplates;
+    await persistSection({
+      type,
+      content,
+      templateId: selected?.id || DEFAULT_SELECTED_PROMPT_TEMPLATES[type],
+      nextTemplates,
+      successMessage: intent === 'update' ? '个人模板已更新并应用。' : '提示词已保存并生效。',
+    });
+  };
+
+  const deleteTemplate = async (type: PromptType) => {
+    const templateId = selectedTemplates[type];
+    const template = customTemplates.find((item) => item.id === templateId);
+    if (!template) return;
+    const nextTemplates = customTemplates.filter((item) => item.id !== templateId);
+    const fallback = BUILT_IN_PROMPT_TEMPLATES.find((item) => item.type === type);
+    if (!fallback) return;
+    const saved = await persistSection({
+      type,
+      content: fallback.content,
+      templateId: fallback.id,
+      nextTemplates,
+      successMessage: '个人模板已删除，系统默认提示词已生效。',
+    });
+    if (saved) setDeleteType(null);
+  };
+
+  const unsavedCount = pageConfig.sectionTypes.filter((type) => {
+    const selected = allTemplates.find((template) => template.id === selectedTemplates[type]);
+    return sectionHasChanges(type) || getPromptSaveIntent(selected, prompts[type]) !== 'apply';
+  }).length;
 
   return (
     <div className="flex h-full flex-col overflow-hidden">
@@ -393,10 +488,14 @@ export default function PromptManager({ mode = 'general' }: { mode?: PromptManag
             {pageConfig.description}
           </p>
         </div>
-        <Button onClick={handleSaveAll} size="sm" className="h-9 gap-1.5 rounded-lg shadow-apple">
-          {saved ? <CheckCircle2 className="h-4 w-4" /> : <Save className="h-4 w-4" />}
-          {saved ? '已保存' : '保存全部'}
-        </Button>
+        <div className="flex items-center gap-2">
+          {unsavedCount > 0 ? (
+            <Badge variant="secondary">{unsavedCount} 项待处理</Badge>
+          ) : (
+            <Badge variant="outline"><CheckCircle2 />全部已保存</Badge>
+          )}
+          <p className="hidden text-xs text-muted-foreground lg:block">请在每一项内保存并生效</p>
+        </div>
       </div>
 
       <Separator className="mb-4 shrink-0 bg-white/60" />
@@ -406,10 +505,20 @@ export default function PromptManager({ mode = 'general' }: { mode?: PromptManag
           const Icon = section.icon;
           const expanded = expandedSection === section.type;
           const templates = allTemplates.filter((template) => template.type === section.type);
+          const builtInTemplates = templates.filter((template) => template.builtIn);
+          const personalTemplates = templates.filter((template) => !template.builtIn);
           const selected = allTemplates.find(
             (template) => template.id === selectedTemplates[section.type],
           );
-          const modified = prompts[section.type] !== section.defaultValue;
+          const hasChanges = sectionHasChanges(section.type);
+          const saveIntent = getPromptSaveIntent(selected, prompts[section.type]);
+          const needsAction = hasChanges || saveIntent !== 'apply';
+          const saving = savingType === section.type;
+          const primaryLabel = saveIntent === 'update'
+            ? '更新模板并应用'
+            : saveIntent === 'save_as'
+              ? '另存并应用'
+              : needsAction ? '保存并应用' : '已保存并生效';
 
           return (
             <Card key={section.type} className="overflow-hidden rounded-xl border-border/55 bg-white/84 shadow-[var(--glass-shadow-soft)] backdrop-blur-xl">
@@ -417,6 +526,7 @@ export default function PromptManager({ mode = 'general' }: { mode?: PromptManag
                 type="button"
                 className="w-full text-left"
                 onClick={() => setExpandedSection(expanded ? null : section.type)}
+                aria-expanded={expanded}
               >
                 <CardHeader className="pb-3">
                   <div className="flex items-center justify-between">
@@ -432,7 +542,7 @@ export default function PromptManager({ mode = 'general' }: { mode?: PromptManag
                       </div>
                     </div>
                     <div className="flex items-center gap-2">
-                      {modified && <Badge variant="secondary" className="rounded-md bg-white/75">已修改</Badge>}
+                      {needsAction && <Badge variant="secondary">有未保存修改</Badge>}
                       {expanded
                         ? <ChevronUp className="h-4 w-4 text-muted-foreground" />
                         : <ChevronDown className="h-4 w-4 text-muted-foreground" />}
@@ -442,7 +552,7 @@ export default function PromptManager({ mode = 'general' }: { mode?: PromptManag
               </button>
 
               {expanded && (
-                <CardContent className="space-y-4 pt-0">
+                <CardContent className="flex flex-col gap-4 pt-0">
                   <div className="rounded-lg border border-border/55 bg-white/64 p-3">
                     <div className="mb-2 flex items-center justify-between">
                       <label className="text-sm font-medium">提示词模板</label>
@@ -459,56 +569,54 @@ export default function PromptManager({ mode = 'general' }: { mode?: PromptManag
                             ...current,
                             [section.type]: DEFAULT_SELECTED_PROMPT_TEMPLATES[section.type],
                           }));
+                          setSaveErrors((current) => ({ ...current, [section.type]: '' }));
                         }}
                       >
-                        <RotateCcw className="h-3.5 w-3.5" />
-                        恢复默认
+                        <RotateCcw data-icon="inline-start" />
+                        加载系统默认
                       </Button>
                     </div>
                     <div className="flex gap-2">
-                      <select
+                      <Select
                         value={selectedTemplates[section.type]}
-                        className="h-9 min-w-0 flex-1 rounded-lg border border-white/65 bg-white/75 px-3 text-sm outline-none"
-                        onChange={(event) => applyTemplate(section.type, event.target.value)}
+                        onValueChange={(value) => requestTemplateChange(section.type, value)}
                       >
-                        {templates.map((template) => (
-                          <option key={template.id} value={template.id}>
-                            {template.builtIn ? `内置 · ${template.name}` : template.name}
-                          </option>
-                        ))}
-                      </select>
+                        <SelectTrigger className="min-w-0 flex-1" aria-label={`${section.title}模板`}>
+                          <SelectValue placeholder="选择提示词模板" />
+                        </SelectTrigger>
+                        <SelectContent>
+                          <SelectGroup>
+                            <SelectLabel>内置模板</SelectLabel>
+                            {builtInTemplates.map((template) => (
+                              <SelectItem key={template.id} value={template.id}>{template.name}</SelectItem>
+                            ))}
+                          </SelectGroup>
+                          {personalTemplates.length > 0 && (
+                            <SelectGroup>
+                              <SelectLabel>我的模板</SelectLabel>
+                              {personalTemplates.map((template) => (
+                                <SelectItem key={template.id} value={template.id}>{template.name}</SelectItem>
+                              ))}
+                            </SelectGroup>
+                          )}
+                        </SelectContent>
+                      </Select>
                       <Button
                         variant="outline"
                         size="icon"
-                        className="h-9 w-9 rounded-lg border-white/70 bg-white/65"
+                        className="rounded-lg border-white/70 bg-white/65"
                         title="删除当前自定义模板"
+                        aria-label="删除当前自定义模板"
                         disabled={!selected || selected.builtIn}
-                        onClick={() => deleteTemplate(section.type)}
+                        onClick={() => setDeleteType(section.type)}
                       >
-                        <Trash2 className="h-4 w-4" />
-                      </Button>
-                    </div>
-                    <div className="mt-2 flex gap-2">
-                      <Input
-                        value={templateNames[section.type]}
-                        placeholder="输入新模板名称"
-                        className="rounded-lg border-white/65 bg-white/75"
-                        onChange={(event) => setTemplateNames((current) => ({
-                          ...current,
-                          [section.type]: event.target.value,
-                        }))}
-                      />
-                      <Button
-                        variant="outline"
-                        className="h-9 shrink-0 gap-1.5 rounded-lg border-white/70 bg-white/65"
-                        onClick={() => saveTemplate(section.type)}
-                      >
-                        <Plus className="h-4 w-4" />
-                        保存为模板
+                        <Trash2 />
                       </Button>
                     </div>
                     <p className="mt-2 text-xs text-muted-foreground">
-                      使用同名模板保存时会更新原模板；内置模板始终保留。
+                      {selected?.builtIn
+                        ? '内置模板不会被覆盖；修改后会另存为当前账号的个人模板。'
+                        : '修改个人模板后，点击“更新模板并应用”即可一次完成。'}
                     </p>
                   </div>
 
@@ -521,13 +629,182 @@ export default function PromptManager({ mode = 'general' }: { mode?: PromptManag
                       [section.type]: event.target.value,
                     }))}
                     placeholder={`输入${section.title}...`}
+                    aria-invalid={Boolean(saveErrors[section.type]) || undefined}
                   />
+
+                  <div className="flex flex-col gap-3 rounded-lg border bg-muted/35 p-3 lg:flex-row lg:items-center lg:justify-between">
+                    <div className="min-w-0 text-xs">
+                      {saveErrors[section.type] ? (
+                        <p role="alert" className="text-destructive">{saveErrors[section.type]}</p>
+                      ) : saving ? (
+                        <p className="text-muted-foreground">正在保存到当前账号…</p>
+                      ) : needsAction ? (
+                        <p className="text-amber-700">修改尚未保存，当前 AI 仍使用上一次保存的内容。</p>
+                      ) : (
+                        <p className="text-emerald-700">当前内容已保存到当前账号并生效。</p>
+                      )}
+                    </div>
+                    <div className="flex flex-wrap justify-end gap-2">
+                      {needsAction && (
+                        <Button
+                          variant="ghost"
+                          size="sm"
+                          disabled={saving}
+                          onClick={() => {
+                            setPrompts((current) => ({ ...current, [section.type]: savedPrompts[section.type] }));
+                            setSelectedTemplates((current) => ({
+                              ...current,
+                              [section.type]: savedSelectedTemplates[section.type],
+                            }));
+                            setSaveErrors((current) => ({ ...current, [section.type]: '' }));
+                          }}
+                        >
+                          <Undo2 data-icon="inline-start" />
+                          放弃修改
+                        </Button>
+                      )}
+                      <Button
+                        variant="outline"
+                        size="sm"
+                        disabled={saving || !prompts[section.type].trim()}
+                        onClick={() => openSaveAs(section.type)}
+                      >
+                        <Plus data-icon="inline-start" />
+                        另存为新模板
+                      </Button>
+                      <Button
+                        size="sm"
+                        disabled={saving || !needsAction || !prompts[section.type].trim()}
+                        onClick={() => { void saveAndApply(section.type); }}
+                      >
+                        {saving ? <Spinner /> : <Save data-icon="inline-start" />}
+                        {saving ? '正在保存' : primaryLabel}
+                      </Button>
+                    </div>
+                  </div>
                 </CardContent>
               )}
             </Card>
           );
         })}
       </div>
+
+      <Dialog
+        open={Boolean(saveAsType)}
+        onOpenChange={(open) => {
+          if (!open && !savingType) {
+            setSaveAsType(null);
+            setSaveAsName('');
+            setSaveAsError('');
+          }
+        }}
+      >
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>另存为个人模板</DialogTitle>
+            <DialogDescription>
+              当前编辑内容会保存为新模板，并立即成为该功能正在使用的提示词。
+            </DialogDescription>
+          </DialogHeader>
+          <FieldGroup>
+            <Field data-invalid={Boolean(saveAsError) || undefined}>
+              <FieldLabel htmlFor="prompt-template-name">模板名称</FieldLabel>
+              <Input
+                id="prompt-template-name"
+                value={saveAsName}
+                maxLength={100}
+                autoFocus
+                aria-invalid={Boolean(saveAsError) || undefined}
+                onChange={(event) => {
+                  setSaveAsName(event.target.value);
+                  setSaveAsError('');
+                }}
+                onKeyDown={(event) => {
+                  if (event.key === 'Enter' && !savingType) void saveAsNewTemplate();
+                }}
+              />
+              <FieldDescription>名称只用于当前账号识别模板，不会出现在邮件中。</FieldDescription>
+              <FieldError>{saveAsError}</FieldError>
+            </Field>
+          </FieldGroup>
+          <DialogFooter>
+            <Button
+              variant="outline"
+              disabled={Boolean(savingType)}
+              onClick={() => {
+                setSaveAsType(null);
+                setSaveAsName('');
+                setSaveAsError('');
+              }}
+            >
+              取消
+            </Button>
+            <Button
+              disabled={Boolean(savingType) || !saveAsName.trim()}
+              onClick={() => { void saveAsNewTemplate(); }}
+            >
+              {savingType ? <Spinner /> : <Save data-icon="inline-start" />}
+              {savingType ? '正在保存' : '保存并应用'}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      <AlertDialog
+        open={Boolean(pendingTemplateChange)}
+        onOpenChange={(open) => !open && setPendingTemplateChange(null)}
+      >
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>放弃当前未保存修改？</AlertDialogTitle>
+            <AlertDialogDescription>
+              切换模板会替换编辑框中的内容。尚未保存的修改将无法恢复。
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel>继续编辑</AlertDialogCancel>
+            <AlertDialogAction
+              onClick={() => {
+                if (!pendingTemplateChange) return;
+                applyTemplate(pendingTemplateChange.type, pendingTemplateChange.templateId);
+                setPendingTemplateChange(null);
+              }}
+            >
+              放弃并切换
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
+
+      <AlertDialog
+        open={Boolean(deleteType)}
+        onOpenChange={(open) => {
+          if (!open && !savingType) setDeleteType(null);
+        }}
+      >
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>删除这个个人模板？</AlertDialogTitle>
+            <AlertDialogDescription>
+              删除后将自动恢复并应用该功能的系统默认提示词。此操作不能撤销。
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel disabled={Boolean(savingType)}>取消</AlertDialogCancel>
+            <AlertDialogAction
+              className="bg-destructive text-white hover:bg-destructive/90"
+              disabled={Boolean(savingType)}
+              onClick={(event) => {
+                event.preventDefault();
+                if (deleteType) void deleteTemplate(deleteType);
+              }}
+            >
+              {savingType ? <Spinner /> : <Trash2 data-icon="inline-start" />}
+              {savingType ? '正在删除' : '确认删除'}
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
     </div>
   );
 }

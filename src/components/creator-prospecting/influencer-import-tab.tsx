@@ -34,6 +34,14 @@ import {
 import { HoverCard, HoverCardContent, HoverCardTrigger } from '@/components/ui/hover-card';
 import { Input } from '@/components/ui/input';
 import {
+  Select,
+  SelectContent,
+  SelectGroup,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from '@/components/ui/select';
+import {
   Table,
   TableBody,
   TableCell,
@@ -53,6 +61,13 @@ import {
   WORKFLOW_META,
 } from '@/lib/creator-prospecting';
 import { outreachLanguageLabel } from '@/lib/outreach-languages';
+import {
+  hasProspectEmailAlternatives,
+  normalizeProspectEmailCandidates,
+  prospectEmailCandidateLabel,
+  prospectEmailSelectionMessage,
+  prospectEmailSourceLabel,
+} from '@/lib/prospect-email-selection';
 
 type Props = {
   prospects: Prospect[];
@@ -74,7 +89,8 @@ type Props = {
   onCreateRecords: (items: Prospect[]) => void;
   onQuickOnboard: (items: Prospect[]) => void;
   onConfirmInvitation: (items: Prospect[]) => void;
-  onPatch: (id: string, patch: Partial<Prospect>) => void;
+  onEmailChange: (id: string, value: string) => void;
+  onEmailSelect: (id: string, email: string) => void;
   onToggleSelected: (id: string, checked: boolean) => void;
   onToggleAll: (ids: string[], checked: boolean) => void;
   onConfirmSuspected: (id: string) => void;
@@ -211,6 +227,50 @@ function ResourceStatusText({
   );
 }
 
+function DevelopmentStatusText({
+  prospect,
+  className,
+  label,
+}: {
+  prospect: Prospect;
+  className: string;
+  label: string;
+}) {
+  if (prospect.developmentStatus !== 'suspected') {
+    return <p className={`mt-0.5 text-xs ${className}`}>{label}</p>;
+  }
+
+  const preview = prospect.developmentMatchPreview;
+  return (
+    <HoverCard openDelay={120} closeDelay={120}>
+      <HoverCardTrigger asChild>
+        <button
+          type="button"
+          className={`mt-0.5 cursor-help text-left text-xs underline decoration-dotted underline-offset-2 ${className}`}
+        >
+          {label}
+        </button>
+      </HoverCardTrigger>
+      <HoverCardContent align="start" side="top" className="w-80">
+        <p className="font-medium text-amber-900">疑似历史开发记录</p>
+        <p className="mt-1 text-xs text-amber-800">
+          {preview?.matchReason || '暂无历史记录预览，请重新飞书查重'}
+        </p>
+        {preview?.email ? (
+          <div className="mt-3 rounded-md border bg-white/80 p-3">
+            <FieldLine label="表格邮箱" value={preview.email} />
+          </div>
+        ) : (
+          <p className="mt-3 text-xs text-muted-foreground">该记录没有可读取的邮箱</p>
+        )}
+        <p className="mt-3 text-xs text-muted-foreground">
+          确认为历史记录后，邮箱才会加入候选列表。
+        </p>
+      </HoverCardContent>
+    </HoverCard>
+  );
+}
+
 export function InfluencerImportTab({
   prospects,
   selectedIds,
@@ -231,7 +291,8 @@ export function InfluencerImportTab({
   onCreateRecords,
   onQuickOnboard,
   onConfirmInvitation,
-  onPatch,
+  onEmailChange,
+  onEmailSelect,
   onToggleSelected,
   onToggleAll,
   onConfirmSuspected,
@@ -263,12 +324,19 @@ export function InfluencerImportTab({
     && prospects.every((item) => selectedIds.includes(item.id));
   const canCheck = selected.some((item) => item.workflowStatus === 'resolved');
   const canCreate = selected.some(canCreateFeishuRecord);
-  const canAddResource = selected.some((item) => item.resourceStatus === 'missing' && !item.resourceRecordId);
+  const canAddResource = selected.some((item) => (
+    !item.emailSelectionRequired
+    && item.resourceStatus === 'missing'
+    && !item.resourceRecordId
+  ));
   const canConfirm = selected.some(canConfirmInvitation);
   const canQuickOnboard = selected.some((item) => (
-    item.workflowStatus === 'resolved'
-    || item.resourceStatus === 'missing'
-    || canCreateFeishuRecord(item)
+    !item.emailSelectionRequired
+    && (
+      item.workflowStatus === 'resolved'
+      || item.resourceStatus === 'missing'
+      || canCreateFeishuRecord(item)
+    )
   ));
 
   return (
@@ -424,6 +492,14 @@ export function InfluencerImportTab({
               const developmentStatus = DEVELOPMENT_STATUS_META[prospect.developmentStatus];
               const channelUrl = prospect.url || prospect.sourceUrl || prospect.inputUrl;
               const clickableChannelUrl = normalizeExternalUrl(channelUrl);
+              const emailCandidates = normalizeProspectEmailCandidates(prospect.emailCandidates);
+              const emailSourceLabel = prospectEmailSourceLabel(prospect);
+              const emailSelectionMessage = prospectEmailSelectionMessage(prospect);
+              const selectedCandidate = emailCandidates.find((candidate) => (
+                candidate.email.toLowerCase() === prospect.publicEmail?.trim().toLowerCase()
+              ));
+              const showEmailSelector = prospect.emailSelectionRequired
+                || hasProspectEmailAlternatives(prospect);
               return (
                 <TableRow key={prospect.id} className="align-middle">
                   <TableCell>
@@ -484,31 +560,54 @@ export function InfluencerImportTab({
                   </TableCell>
                   <TableCell className="text-right tabular-nums">{formatNaturalNumber(prospect.subscriberCount)}</TableCell>
                   <TableCell className="text-right tabular-nums">{formatCompactNumber(prospect.recentAverageViews)}</TableCell>
-                  <TableCell className="min-w-52">
+                  <TableCell className="min-w-72">
                     <Input
                       type="email"
                       value={prospect.publicEmail || ''}
-                      onChange={(event) => onPatch(prospect.id, {
-                        publicEmail: event.target.value,
-                        emailStatus: event.target.value.trim()
-                          ? (prospect.emailStatus === 'available' ? 'available' : 'manual')
-                          : 'missing',
-                      })}
+                      onChange={(event) => onEmailChange(prospect.id, event.target.value)}
                       placeholder="填写邮箱"
                       className="h-8 bg-white"
+                      aria-invalid={prospect.emailSelectionRequired || undefined}
                     />
-                    <p className={`mt-1 flex items-center gap-1 text-xs ${
-                      prospect.publicEmail ? 'text-emerald-700' : 'text-amber-700'
-                    }`}
-                    >
-                      {prospect.publicEmail ? (
-                        '会写入资源库和开发记录表'
-                      ) : (
-                        <>
-                          <AlertTriangle className="h-3.5 w-3.5" />
-                          未填邮箱时双表邮箱为空
-                        </>
-                      )}
+                    {emailSelectionMessage ? (
+                      <p className="mt-1 flex items-center gap-1 text-xs text-amber-700">
+                        <AlertTriangle className="size-3.5" />
+                        {emailSelectionMessage}
+                      </p>
+                    ) : emailSourceLabel ? (
+                      <p className="mt-1 text-xs text-emerald-700">{emailSourceLabel}</p>
+                    ) : (
+                      <p className="mt-1 flex items-center gap-1 text-xs text-amber-700">
+                        <AlertTriangle className="size-3.5" />
+                        未填邮箱时双表邮箱为空
+                      </p>
+                    )}
+                    {showEmailSelector && (
+                      <Select
+                        value={selectedCandidate?.email}
+                        onValueChange={(value) => onEmailSelect(prospect.id, value)}
+                      >
+                        <SelectTrigger className="mt-2 h-8 w-full" aria-label="选择候选邮箱">
+                          <SelectValue placeholder="选择邮箱" />
+                        </SelectTrigger>
+                        <SelectContent>
+                          <SelectGroup>
+                            {emailCandidates.map((candidate) => (
+                              <SelectItem key={candidate.email.toLowerCase()} value={candidate.email}>
+                                <span className="flex min-w-0 items-center gap-2">
+                                  <span className="truncate">{candidate.email}</span>
+                                  <span className="shrink-0 text-xs text-muted-foreground">
+                                    {prospectEmailCandidateLabel(candidate)}
+                                  </span>
+                                </span>
+                              </SelectItem>
+                            ))}
+                          </SelectGroup>
+                        </SelectContent>
+                      </Select>
+                    )}
+                    <p className="mt-1 text-xs text-muted-foreground">
+                      {prospect.emailSelectionRequired ? '选择后会写入资源库和开发记录表' : '会写入资源库和开发记录表'}
                     </p>
                   </TableCell>
                   <TableCell>
@@ -517,7 +616,11 @@ export function InfluencerImportTab({
                       className={resourceStatus.className}
                       label={resourceStatus.label}
                     />
-                    <p className={`mt-0.5 text-xs ${developmentStatus.className}`}>{developmentStatus.label}</p>
+                    <DevelopmentStatusText
+                      prospect={prospect}
+                      className={developmentStatus.className}
+                      label={developmentStatus.label}
+                    />
                     {prospect.duplicateReason && (
                       <p className="mt-0.5 max-w-40 truncate text-xs text-muted-foreground" title={prospect.duplicateReason}>
                         {prospect.duplicateReason}

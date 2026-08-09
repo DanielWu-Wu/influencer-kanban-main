@@ -70,6 +70,7 @@ type Props = {
   inferringOutreachLanguageIds: string[];
   checkingHistoryId: string | null;
   onPatch: (id: string, patch: Partial<Prospect>) => void;
+  onEmailChange: (id: string, value: string) => void;
   onSave: (prospect: Prospect) => void;
   onConfirmOutreach: (prospect: Prospect) => void;
   onBack: (prospect: Prospect) => void;
@@ -363,6 +364,7 @@ export function InvitationConfirmTab({
   inferringOutreachLanguageIds,
   checkingHistoryId,
   onPatch,
+  onEmailChange,
   onSave,
   onConfirmOutreach,
   onBack,
@@ -983,10 +985,7 @@ export function InvitationConfirmTab({
                     id={`email-${selected.id}`}
                     type="email"
                     value={selected.publicEmail || ''}
-                    onChange={(event) => onPatch(selected.id, {
-                      publicEmail: event.target.value,
-                      emailStatus: event.target.value.trim() ? 'manual' : 'missing',
-                    })}
+                    onChange={(event) => onEmailChange(selected.id, event.target.value)}
                     placeholder="未获取到邮箱，请人工补充"
                     className="bg-white pl-9"
                   />

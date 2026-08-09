@@ -15,3 +15,5 @@ import './email-signature-scope.test';
 import './account-isolation.test';
 import './account-load-state.test';
 import './ai-reply-templates.test';
+import './prospect-email-selection.test';
+import './prompt-template-settings.test';

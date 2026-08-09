@@ -65,7 +65,6 @@ import {
 import {
   appendFeishuEmailValue,
   buildFeishuRecordIndex,
-  extractFeishuEmails,
   findFeishuRecordMatch,
   flattenFeishuValue,
   normalizeFeishuEmailValue,
@@ -79,6 +78,14 @@ import {
 } from '@/lib/feishu-write-guard';
 import { getSupabaseBrowserClient } from '@/lib/supabase/client';
 import { scopedLocalStorageKey } from '@/lib/account-cache-scope';
+import {
+  applyManualProspectEmail,
+  buildProspectEmailCandidates,
+  selectProspectEmailCandidate,
+  updateProspectEmailCandidates,
+  type ProspectEmailCandidateSource,
+  type ProspectEmailSelectionState,
+} from '@/lib/prospect-email-selection';
 import {
   calculateRecentAverageViews,
   canCreateFeishuRecord,
@@ -511,8 +518,30 @@ function formatPreviewValue(value: unknown): string {
   return String(value);
 }
 
-function firstValidEmail(value: string | undefined) {
-  return extractFeishuEmails(value || '')[0] || '';
+function prospectEmailSelectionState(prospect: Prospect): ProspectEmailSelectionState {
+  return {
+    publicEmail: prospect.publicEmail,
+    emailStatus: prospect.emailStatus,
+    emailSource: prospect.emailSource,
+    emailCandidates: prospect.emailCandidates,
+    emailManuallyLocked: prospect.emailManuallyLocked,
+    emailSelectionRequired: prospect.emailSelectionRequired,
+  };
+}
+
+function recordEmailCandidates(
+  record: FeishuRecord | undefined,
+  mapping: FeishuFieldMapping,
+  source: ProspectEmailCandidateSource,
+) {
+  return buildProspectEmailCandidates(
+    record && mapping.email ? record.fields[mapping.email] : undefined,
+    source,
+  );
+}
+
+function hasPendingEmailSelection(items: Prospect[]) {
+  return items.some((item) => item.emailSelectionRequired);
 }
 
 function buildPendingResourceEmailSyncPreview(
@@ -978,6 +1007,30 @@ export function CreatorProspectingPage() {
     )));
   };
 
+  const updateProspectEmail = (id: string, value: string) => {
+    setProspects((current) => current.map((item) => (
+      item.id === id
+        ? {
+            ...item,
+            ...applyManualProspectEmail(prospectEmailSelectionState(item), value),
+            updatedAt: new Date().toISOString(),
+          }
+        : item
+    )));
+  };
+
+  const selectProspectEmail = (id: string, email: string) => {
+    setProspects((current) => current.map((item) => (
+      item.id === id
+        ? {
+            ...item,
+            ...selectProspectEmailCandidate(prospectEmailSelectionState(item), email),
+            updatedAt: new Date().toISOString(),
+          }
+        : item
+    )));
+  };
+
   const handleTranslateChannelDescription = useCallback(
     async (prospect: Prospect) => {
       const description = prospect.description?.trim();
@@ -1024,6 +1077,11 @@ export function CreatorProspectingPage() {
 
       const recentVideos = channel.recentVideos || [];
       const inferredLanguage = inferLanguage({ ...channel, recentVideos });
+      const emailPatch = updateProspectEmailCandidates(
+        prospectEmailSelectionState(prospect),
+        buildProspectEmailCandidates(channel.publicEmail, 'youtube'),
+        { replaceSources: ['youtube'] },
+      );
       updateProspect(prospect.id, {
         sourceUrl: channel.sourceUrl || prospect.sourceUrl,
         channelId: channel.channelId || prospect.channelId,
@@ -1036,7 +1094,7 @@ export function CreatorProspectingPage() {
         viewCount: channel.viewCount,
         videoCount: channel.videoCount,
         url: channel.url || prospect.url,
-        publicEmail: channel.publicEmail || prospect.publicEmail,
+        ...emailPatch,
         recentVideos,
         recentAverageViews: calculateRecentAverageViews(recentVideos),
         language: prospect.languageSource === 'manual'
@@ -1528,17 +1586,23 @@ export function CreatorProspectingPage() {
         if (!channel) return [];
         const recentVideos = channel.recentVideos || [];
         const language = inferLanguage({ ...channel, recentVideos });
+        const emailPatch = updateProspectEmailCandidates(
+          prospectEmailSelectionState(item),
+          buildProspectEmailCandidates(channel.publicEmail, 'youtube'),
+          { replaceSources: ['youtube'] },
+        );
         return [{
           ...item,
           ...channel,
+          ...emailPatch,
           recentVideos,
           language,
           languageSource: language ? 'inferred' as const : undefined,
           recentAverageViews: calculateRecentAverageViews(recentVideos),
           workflowStatus: 'resolved' as const,
-          emailStatus: channel.publicEmail ? 'available' as const : 'missing' as const,
+          emailStatus: emailPatch.emailStatus || (emailPatch.publicEmail ? 'available' as const : 'missing' as const),
           dedupeStatus: 'unchecked' as const,
-          error: channel.publicEmail ? undefined : '未在公开简介中发现邮箱，可继续确认邀约，但保存 Gmail 草稿前必须补充。',
+          error: emailPatch.publicEmail ? undefined : '未在公开简介中发现邮箱，可继续确认邀约，但保存 Gmail 草稿前必须补充。',
           updatedAt: new Date().toISOString(),
         }];
       });
@@ -1682,6 +1746,18 @@ export function CreatorProspectingPage() {
         const previousDevelopmentRecordId = developmentMatch.kind === 'exact'
           ? developmentMatch.record.record_id
           : undefined;
+        const emailPatch = updateProspectEmailCandidates(
+          prospectEmailSelectionState(prospect),
+          [
+            ...(resourceMatch.kind === 'exact'
+              ? recordEmailCandidates(resourceRecord, resourceMapping, 'resource')
+              : []),
+            ...(developmentMatch.kind === 'exact'
+              ? recordEmailCandidates(developmentRecord, developmentMapping, 'development')
+              : []),
+          ],
+          { replaceSources: ['resource', 'development'] },
+        );
         const reason = developmentMatch.kind === 'conflict'
           ? `开发记录匹配冲突：${developmentMatch.reason}，请先清理重复记录`
           : resourceMatch.kind === 'conflict'
@@ -1696,6 +1772,7 @@ export function CreatorProspectingPage() {
                     ? `资源库已收录：${resourceMatch.reason}`
                     : '资源库未收录，可人工确认加入；不影响创建开发记录';
         patches.set(prospect.id, {
+          ...emailPatch,
           workflowStatus: 'resolved',
           dedupeStatus: hasConflict
             ? 'conflict'
@@ -1719,6 +1796,15 @@ export function CreatorProspectingPage() {
               : undefined,
           resourceMatchPreview: resourceMatch.kind === 'suspected'
             ? buildResourceMatchPreview(resourceMatch.record, resourceMapping, resourceMatch.reason)
+            : undefined,
+          developmentMatchPreview: developmentMatch.kind === 'suspected'
+            ? {
+                recordId: developmentMatch.record.record_id,
+                matchReason: developmentMatch.reason,
+                email: developmentMapping.email
+                  ? flattenFeishuValue(developmentMatch.record.fields[developmentMapping.email]).trim()
+                  : '',
+              }
             : undefined,
           duplicateReason: reason,
           duplicateConfirmedUnique: false,
@@ -1764,6 +1850,10 @@ export function CreatorProspectingPage() {
   };
 
   const openDevelopmentPreview = async (items: Prospect[]) => {
+    if (hasPendingEmailSelection(items)) {
+      toast.error('请先为提示“多个邮箱”的红人选择一个邮箱，再新建开发记录。');
+      return;
+    }
     setPreparingDevelopmentPreview(true);
     const targets = items.filter(canCreateFeishuRecord);
     if (!targets.length) {
@@ -1915,6 +2005,10 @@ export function CreatorProspectingPage() {
   };
 
   const openResourcePreview = async (items: Prospect[]) => {
+    if (hasPendingEmailSelection(items)) {
+      toast.error('请先为提示“多个邮箱”的红人选择一个邮箱，再加入资源库。');
+      return;
+    }
     setPreparingResourcePreview(true);
     const targets = items.filter((item) => (
       item.resourceStatus === 'missing'
@@ -2050,6 +2144,9 @@ export function CreatorProspectingPage() {
         ...prospect,
         ...(patches.get(prospect.id) || {}),
       }));
+      if (hasPendingEmailSelection(refreshedTargets)) {
+        throw new Error('发现多个候选邮箱，请先在邮箱框完成选择，再快速建档。');
+      }
       const resourceMapping = settings.feishuFieldMapping || {};
       const developmentMapping = settings.feishuProspectingFieldMapping || {};
       const resourceSnapshot = resourceSnapshotRef.current;
@@ -2737,6 +2834,10 @@ export function CreatorProspectingPage() {
   };
 
   const handleConfirmInvitation = async (items: Prospect[]) => {
+    if (hasPendingEmailSelection(items)) {
+      toast.error('请先完成邮箱选择，再进入邀约确认。');
+      return;
+    }
     const targets = items.filter((item) => item.workflowStatus === 'dedupe_completed' && item.feishuRecordId);
     if (!targets.length) {
       toast.error('请选择已在飞书新建记录的线索。');
@@ -3410,7 +3511,8 @@ export function CreatorProspectingPage() {
             onCreateRecords={openDevelopmentPreview}
             onQuickOnboard={openQuickOnboardingPreview}
             onConfirmInvitation={handleConfirmInvitation}
-            onPatch={updateProspect}
+            onEmailChange={updateProspectEmail}
+            onEmailSelect={selectProspectEmail}
             onToggleSelected={(id, checked) => setSelectedIds((current) => (
               checked ? Array.from(new Set([...current, id])) : current.filter((item) => item !== id)
             ))}
@@ -3428,40 +3530,69 @@ export function CreatorProspectingPage() {
               duplicateRecordId: undefined,
               duplicateReason: '疑似重复已由人工确认，不关联现有记录',
               resourceMatchPreview: undefined,
+              developmentMatchPreview: undefined,
             })}
             onUseExistingResource={(id) => {
               const prospect = prospects.find((item) => item.id === id);
               if (!prospect?.resourceRecordId) return;
-              const resourceEmail = firstValidEmail(prospect.resourceMatchPreview?.email);
-              const shouldFillEmail = !prospect.publicEmail?.trim() && Boolean(resourceEmail);
+              const resourceEmailCandidates = buildProspectEmailCandidates(
+                prospect.resourceMatchPreview?.email,
+                'resource',
+              );
+              const emailPatch = updateProspectEmailCandidates(
+                prospectEmailSelectionState(prospect),
+                resourceEmailCandidates,
+                { replaceSources: ['resource'] },
+              );
+              const shouldFillEmail = !prospect.publicEmail?.trim() && Boolean(emailPatch.publicEmail);
               updateProspect(id, {
+                ...emailPatch,
                 resourceStatus: 'exists',
                 duplicateReason: '已由用户确认关联红人资源库中的现有记录',
                 resourceMatchPreview: undefined,
                 ...(shouldFillEmail
                   ? {
-                      publicEmail: resourceEmail,
-                      emailStatus: 'available' as const,
                       error: prospect.error?.includes('邮箱') ? undefined : prospect.error,
                     }
                   : {}),
               });
               toast.success(shouldFillEmail
                 ? '已关联资源库记录，并已自动填入资源库邮箱。'
+                : emailPatch.emailSelectionRequired
+                  ? '已关联资源库记录；发现多个邮箱，请在邮箱框中选择。'
+                  : prospect.emailManuallyLocked && resourceEmailCandidates.length
+                    ? '已关联资源库记录；当前手动邮箱保持不变。'
                 : '已关联资源库现有记录，不会重复建档。');
             }}
             onUseExisting={(id) => {
               const prospect = prospects.find((item) => item.id === id);
               if (!prospect?.duplicateRecordId) return;
+              const developmentEmailCandidates = buildProspectEmailCandidates(
+                prospect.developmentMatchPreview?.email,
+                'development',
+              );
+              const emailPatch = updateProspectEmailCandidates(
+                prospectEmailSelectionState(prospect),
+                developmentEmailCandidates,
+                { replaceSources: ['development'] },
+              );
               updateProspect(id, {
+                ...emailPatch,
                 workflowStatus: 'resolved',
                 developmentStatus: 'history_exists',
                 previousDevelopmentRecordId: prospect.duplicateRecordId,
                 feishuRecordId: undefined,
                 repeatOutreach: true,
                 duplicateReason: '已确认为历史开发记录；本轮将新建独立开发记录',
+                developmentMatchPreview: undefined,
               });
-              toast.success('已关联为历史开发记录，可以新建本轮开发记录。');
+              toast.success(emailPatch.emailSelectionRequired
+                ? '已关联历史开发记录；发现多个邮箱，请在邮箱框中选择。'
+                : !prospect.publicEmail?.trim() && emailPatch.publicEmail
+                  ? '已关联历史开发记录，并已自动填入历史邮箱。'
+                  : prospect.emailManuallyLocked && developmentEmailCandidates.length
+                    ? '已关联历史开发记录；当前手动邮箱保持不变。'
+                    : '已关联为历史开发记录，可以新建本轮开发记录。');
             }}
             onRemove={(id) => {
               rememberDeletedProspect(id);
@@ -3500,6 +3631,7 @@ export function CreatorProspectingPage() {
             inferringOutreachLanguageIds={inferringOutreachLanguageIds}
             checkingHistoryId={checkingHistoryId}
             onPatch={updateProspect}
+            onEmailChange={updateProspectEmail}
             onSave={handleSaveInvitation}
             onConfirmOutreach={handleConfirmOutreach}
             onBack={handleBackToImport}
@@ -3525,6 +3657,7 @@ export function CreatorProspectingPage() {
             regeneratingPart={regeneratingDraftPart}
             savingDraftId={savingDraftId}
             onPatch={updateProspect}
+            onEmailChange={updateProspectEmail}
             onGenerate={handleGenerateOutreach}
             onRegeneratePart={handleRegenerateOutreachPart}
             onTranslateChinese={handleTranslateEditedOutreach}

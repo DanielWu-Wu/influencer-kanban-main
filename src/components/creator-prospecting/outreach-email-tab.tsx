@@ -62,6 +62,7 @@ type Props = {
   regeneratingPart: { id: string; part: 'subject' | 'body' } | null;
   savingDraftId: string | null;
   onPatch: (id: string, patch: Partial<Prospect>) => void;
+  onEmailChange: (id: string, value: string) => void;
   onGenerate: (prospect: Prospect) => void;
   onRegeneratePart: (prospect: Prospect, part: 'subject' | 'body') => void;
   onTranslateChinese: (prospectId: string, chineseBody: string) => Promise<boolean>;
@@ -298,6 +299,7 @@ export function OutreachEmailTab({
   regeneratingPart,
   savingDraftId,
   onPatch,
+  onEmailChange,
   onGenerate,
   onRegeneratePart,
   onTranslateChinese,
@@ -563,10 +565,7 @@ export function OutreachEmailTab({
                         <Input
                           type="email"
                           value={prospect.publicEmail || ''}
-                          onChange={(event) => onPatch(prospect.id, {
-                            publicEmail: event.target.value,
-                            emailStatus: event.target.value.trim() ? 'manual' : 'missing',
-                          })}
+                          onChange={(event) => onEmailChange(prospect.id, event.target.value)}
                           placeholder="补充邮箱后才能保存 Gmail 草稿"
                           className="mt-1.5 h-9 bg-white"
                         />

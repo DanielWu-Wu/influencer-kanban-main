@@ -1,6 +1,11 @@
+import type {
+  ProspectEmailCandidate,
+  ProspectEmailSource,
+} from './prospect-email-selection';
+
 export const CREATOR_PROSPECTS_STORAGE_KEY = 'influencer-board-creator-prospects';
 export const CREATOR_PROSPECTS_DELETED_STORAGE_KEY = 'influencer-board-creator-prospects-deleted';
-export const CREATOR_PROSPECTS_SCHEMA_VERSION = 6;
+export const CREATOR_PROSPECTS_SCHEMA_VERSION = 7;
 
 export type ProspectingTab = 'import' | 'invitation' | 'outreach' | 'follow_up';
 
@@ -102,6 +107,10 @@ export type Prospect = {
   recentAverageViews?: number | null;
   url?: string;
   publicEmail?: string;
+  emailSource?: ProspectEmailSource;
+  emailCandidates?: ProspectEmailCandidate[];
+  emailManuallyLocked?: boolean;
+  emailSelectionRequired?: boolean;
   recentVideos?: RecentVideo[];
   youtubeDataStatus?: 'complete' | 'partial' | 'error';
   youtubeDataWarnings?: string[];
@@ -126,6 +135,11 @@ export type Prospect = {
     region?: string;
     platform?: string;
     notes?: string;
+  };
+  developmentMatchPreview?: {
+    recordId: string;
+    matchReason: string;
+    email?: string;
   };
   resourceStatus: ProspectResourceStatus;
   developmentStatus: ProspectDevelopmentStatus;
@@ -448,6 +462,16 @@ export function migrateProspects(value: unknown): Prospect[] {
       inputUrl: item.inputUrl || item.url || item.sourceUrl || '',
       workflowStatus,
       emailStatus: item.emailStatus || (publicEmail ? 'available' : 'missing'),
+      emailSource: item.emailSource || (item.emailStatus === 'manual'
+        ? 'manual'
+        : publicEmail ? 'youtube' : undefined),
+      emailCandidates: item.emailCandidates || (
+        publicEmail && item.emailStatus !== 'manual'
+          ? [{ email: publicEmail, sources: ['youtube'] }]
+          : []
+      ),
+      emailManuallyLocked: item.emailManuallyLocked || item.emailStatus === 'manual',
+      emailSelectionRequired: Boolean(item.emailSelectionRequired),
       dedupeStatus: item.status === 'added_to_feishu' && !item.feishuRecordId
         ? 'unchecked'
         : item.dedupeStatus || (
@@ -506,6 +530,7 @@ export function migrateProspects(value: unknown): Prospect[] {
 
 export function canCreateFeishuRecord(prospect: Prospect) {
   return prospect.workflowStatus === 'resolved'
+    && !prospect.emailSelectionRequired
     && prospect.resourceStatus !== 'unchecked'
     && prospect.resourceStatus !== 'checking'
     && prospect.resourceStatus !== 'error'
@@ -516,12 +541,14 @@ export function canCreateFeishuRecord(prospect: Prospect) {
 
 export function canConfirmInvitation(prospect: Prospect) {
   return prospect.workflowStatus === 'dedupe_completed'
+    && !prospect.emailSelectionRequired
     && prospect.developmentStatus === 'exists'
     && Boolean(prospect.feishuRecordId);
 }
 
 export function canGenerateOutreach(prospect: Prospect) {
   return prospect.workflowStatus === 'outreach_pending'
+    && !prospect.emailSelectionRequired
     && Boolean(prospect.targetProduct?.trim())
     && Boolean(prospect.cooperationType?.trim())
     && Boolean(prospect.cooperationIdea?.trim())
