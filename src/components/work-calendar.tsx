@@ -10,12 +10,19 @@ import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Textarea } from '@/components/ui/textarea';
 import { Badge } from '@/components/ui/badge';
-import { Card, CardContent } from '@/components/ui/card';
-import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from '@/components/ui/dialog';
+import { Avatar, AvatarFallback, AvatarImage } from '@/components/ui/avatar';
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from '@/components/ui/dialog';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import {
   ChevronLeft, ChevronRight, Plus, Clock, Video,
-  Mail, CalendarDays, X, Trash2, Calendar, RefreshCw,
+  Mail, CalendarDays, Trash2, Calendar, RefreshCw,
   BriefcaseBusiness, AlertTriangle, LoaderCircle,
 } from 'lucide-react';
 import { formatLocalDateKey, parseLocalDateKey } from '@/lib/local-date';
@@ -56,6 +63,33 @@ function indexByDate<T>(items: T[], dateKey: (item: T) => string) {
   return index;
 }
 
+function channelInitials(channelName: string) {
+  return channelName.trim().slice(0, 2).toUpperCase() || '红人';
+}
+
+function ProjectAvatar({ event, compact = false }: {
+  event: CooperationCalendarEvent;
+  compact?: boolean;
+}) {
+  return (
+    <Avatar className={compact ? 'size-5 shrink-0 ring-1 ring-white/80' : 'size-10 shrink-0 ring-1 ring-blue-100'}>
+      {event.project.avatarUrl ? (
+        <AvatarImage
+          src={event.project.avatarUrl}
+          alt={`${event.project.channelName} 频道头像`}
+          className="object-cover"
+        />
+      ) : null}
+      <AvatarFallback className={compact
+        ? 'bg-blue-100 text-[7px] font-semibold text-blue-700'
+        : 'bg-blue-50 text-xs font-semibold text-blue-700'}
+      >
+        {channelInitials(event.project.channelName)}
+      </AvatarFallback>
+    </Avatar>
+  );
+}
+
 export function WorkCalendar({
   events,
   todos,
@@ -71,7 +105,9 @@ export function WorkCalendar({
 }: WorkCalendarProps) {
   const [currentDate, setCurrentDate] = useState(new Date());
   const [selectedDate, setSelectedDate] = useState<Date | null>(null);
+  const [showDayDetails, setShowDayDetails] = useState(false);
   const [showEventDialog, setShowEventDialog] = useState(false);
+  const [newEventDateKey, setNewEventDateKey] = useState(formatLocalDateKey(new Date()));
   const [newEvent, setNewEvent] = useState({
     title: '',
     type: 'reminder' as CalendarEvent['type'],
@@ -166,11 +202,11 @@ export function WorkCalendar({
   };
 
   const handleAddEvent = () => {
-    if (!newEvent.title.trim() || !selectedDate) return;
+    if (!newEvent.title.trim() || !newEventDateKey) return;
     
     onAddEvent({
       title: newEvent.title,
-      date: formatLocalDateKey(selectedDate),
+      date: newEventDateKey,
       type: newEvent.type,
       color: newEvent.color,
       description: newEvent.description || undefined,
@@ -183,8 +219,16 @@ export function WorkCalendar({
       color: '#3b82f6',
     });
     setShowEventDialog(false);
-    setSelectedDate(null);
   };
+
+  const openAddEventDialog = () => {
+    setNewEventDateKey(formatLocalDateKey(selectedDate || new Date()));
+    setShowEventDialog(true);
+  };
+
+  const selectedCooperationEvents = selectedDate ? getCooperationEventsForDate(selectedDate) : [];
+  const selectedEvents = selectedDate ? getEventsForDate(selectedDate) : [];
+  const selectedTodos = selectedDate ? getTodosForDate(selectedDate) : [];
 
   return (
     <div className="h-full flex flex-col">
@@ -204,6 +248,10 @@ export function WorkCalendar({
           </div>
         </div>
         <div className="flex items-center gap-1">
+          <Button variant="outline" size="sm" onClick={openAddEventDialog}>
+            <Plus className="h-4 w-4" />
+            新增日程
+          </Button>
           <Button
             variant="outline"
             size="sm"
@@ -287,10 +335,10 @@ export function WorkCalendar({
               <button
                 type="button"
                 className="absolute inset-0 rounded-lg"
-                aria-label={`${day.date.toLocaleDateString('zh-CN')}，添加日程`}
+                aria-label={`${day.date.toLocaleDateString('zh-CN')}，查看当天详情`}
                 onClick={() => {
                   setSelectedDate(day.date);
-                  setShowEventDialog(true);
+                  setShowDayDetails(true);
                 }}
               />
               <span className={`relative z-[1] block w-7 h-7 leading-7 mx-auto rounded-full text-sm font-medium pointer-events-none
@@ -307,10 +355,11 @@ export function WorkCalendar({
                       key={event.id}
                       type="button"
                       onClick={() => onOpenCooperationProject(event.projectId)}
-                      className={`pointer-events-auto block w-full truncate rounded px-1 py-0.5 text-left text-[9px] font-medium hover:ring-1 hover:ring-blue-300 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-500 ${event.colorClass}`}
+                      className={`pointer-events-auto flex w-full items-center gap-1 truncate rounded px-1 py-0.5 text-left text-[9px] font-medium hover:ring-1 hover:ring-blue-300 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-500 ${event.colorClass}`}
                       title={`${event.label} · ${event.project.channelName}`}
                     >
-                      {event.label} · {event.project.channelName}
+                      <ProjectAvatar event={event} compact />
+                      <span className="truncate">{event.label} · {event.project.channelName}</span>
                     </button>
                   ))}
                   {dateCooperationEvents.length > 2 ? (
@@ -344,117 +393,137 @@ export function WorkCalendar({
         })}
       </div>
 
-      {/* 选中日期详情 */}
-      {selectedDate && (
-        <Card className="mt-4 shadow-apple">
-          <CardContent className="p-4">
-            <div className="flex items-center justify-between mb-4">
-              <h3 className="font-medium flex items-center gap-2">
-                <CalendarDays className="w-4 h-4" />
-                {selectedDate.toLocaleDateString('zh-CN', { month: 'long', day: 'numeric', weekday: 'long' })}
-              </h3>
-              <Button 
-                variant="ghost" 
-                size="sm"
-                onClick={() => setSelectedDate(null)}
-              >
-                <X className="w-4 h-4" />
-              </Button>
-            </div>
-            
-            <div className="max-h-56 space-y-4 overflow-y-auto">
-              {getCooperationEventsForDate(selectedDate).length > 0 ? (
-                <section className="space-y-2">
-                  <h4 className="flex items-center gap-1.5 text-xs font-semibold text-slate-600">
-                    <BriefcaseBusiness className="h-3.5 w-3.5" />合作项目节点
-                  </h4>
-                  {getCooperationEventsForDate(selectedDate).map((event) => (
-                    <button
-                      key={event.id}
-                      type="button"
-                      onClick={() => onOpenCooperationProject(event.projectId)}
-                      className={`block w-full rounded-lg p-2 text-left hover:ring-1 hover:ring-blue-300 ${event.colorClass}`}
-                    >
-                      <div className="flex items-center justify-between gap-3">
-                        <span className="truncate text-sm font-medium">{event.label} · {event.project.channelName}</span>
-                        {event.overdue ? <Badge variant="destructive" className="shrink-0 text-[10px]">逾期</Badge> : null}
-                      </div>
-                      <p className="mt-1 truncate text-[11px] opacity-80">
-                        {event.project.product} · {COOPERATION_STAGE_META[event.project.stage].label}
-                        {event.project.risks[0] ? ` · ${event.project.risks[0].label}` : ''}
-                      </p>
-                    </button>
-                  ))}
-                </section>
-              ) : null}
+      {/* 选中日期详情：只读查看，不会创建日程 */}
+      <Dialog open={showDayDetails} onOpenChange={setShowDayDetails}>
+        <DialogContent className="flex max-h-[85vh] max-w-2xl flex-col overflow-hidden">
+          <DialogHeader>
+            <DialogTitle className="flex items-center gap-2">
+              <CalendarDays className="h-4 w-4" />
+              {selectedDate
+                ? selectedDate.toLocaleDateString('zh-CN', { month: 'long', day: 'numeric', weekday: 'long' })
+                : '当天详情'}
+            </DialogTitle>
+            <DialogDescription>
+              {selectedCooperationEvents.length} 个合作节点 · {selectedEvents.length} 个手动日程 · {selectedTodos.length} 个待办。点击合作节点可查看完整项目。
+            </DialogDescription>
+          </DialogHeader>
 
-              {getEventsForDate(selectedDate).length > 0 ? (
-                <section className="space-y-2">
-                  <h4 className="flex items-center gap-1.5 text-xs font-semibold text-slate-600">
-                    <CalendarDays className="h-3.5 w-3.5" />手动日程
-                  </h4>
-                  {getEventsForDate(selectedDate).map(event => (
-                <div
-                  key={event.id}
-                  className={`flex items-center gap-3 p-2 rounded-lg ${EVENT_TYPE_CONFIG[event.type]?.bgColor}`}
-                >
-                  <span className={`${EVENT_TYPE_CONFIG[event.type]?.color}`}>
-                    {EVENT_TYPE_CONFIG[event.type]?.icon}
-                  </span>
-                  <span className="flex-1 text-sm">{event.title}</span>
+          <div className="min-h-0 flex-1 space-y-5 overflow-y-auto pr-1">
+            {selectedCooperationEvents.length > 0 ? (
+              <section className="space-y-2">
+                <h4 className="flex items-center gap-1.5 text-xs font-semibold text-slate-600">
+                  <BriefcaseBusiness className="h-3.5 w-3.5" />合作项目进度节点
+                </h4>
+                {selectedCooperationEvents.map((event) => (
                   <button
-                    onClick={() => onDeleteEvent(event.id)}
-                    className="text-muted-foreground hover:text-red-500"
+                    key={event.id}
+                    type="button"
+                    onClick={() => onOpenCooperationProject(event.projectId)}
+                    className={`block w-full rounded-xl border border-current/10 p-3 text-left transition-shadow hover:shadow-sm hover:ring-1 hover:ring-blue-300 ${event.colorClass}`}
                   >
-                    <Trash2 className="w-3 h-3" />
+                    <span className="flex items-start gap-3">
+                      <ProjectAvatar event={event} />
+                      <span className="min-w-0 flex-1">
+                        <span className="flex flex-wrap items-center gap-2">
+                          <span className="truncate text-sm font-semibold">{event.project.channelName}</span>
+                          <Badge variant="outline" className="bg-white/70 text-[10px]">{event.label}</Badge>
+                          {event.overdue ? <Badge variant="destructive" className="text-[10px]">逾期</Badge> : null}
+                        </span>
+                        <span className="mt-1 block text-xs opacity-80">
+                          {event.project.product} · {COOPERATION_STAGE_META[event.project.stage].label}
+                        </span>
+                      </span>
+                    </span>
+                    <span className="mt-3 grid gap-2 text-xs sm:grid-cols-2">
+                      <span><span className="block opacity-60">下一步</span><span className="mt-0.5 block font-medium">{event.project.nextAction}</span></span>
+                      <span><span className="block opacity-60">合作信息</span><span className="mt-0.5 block font-medium">{event.project.site} · {event.project.cooperationType}</span></span>
+                      <span><span className="block opacity-60">推广负责人</span><span className="mt-0.5 block font-medium">{event.project.owner}</span></span>
+                      <span><span className="block opacity-60">风险提示</span><span className="mt-0.5 block font-medium">{event.project.risks[0]?.label || '暂无风险'}</span></span>
+                    </span>
                   </button>
-                </div>
-                  ))}
-                </section>
-              ) : null}
-              
-              {getTodosForDate(selectedDate).length > 0 ? (
-                <section className="space-y-2">
-                  <h4 className="flex items-center gap-1.5 text-xs font-semibold text-slate-600">
-                    <Clock className="h-3.5 w-3.5" />待办任务
-                  </h4>
-                  {getTodosForDate(selectedDate).map(todo => (
-                <div
-                  key={todo.id}
-                  className="flex items-center gap-3 p-2 rounded-lg bg-blue-50"
-                >
-                  <span className="text-blue-600">
-                    <Clock className="w-3 h-3" />
-                  </span>
-                  <span className="flex-1 text-sm truncate">{todo.title}</span>
-                  <Badge variant="secondary" className="text-[10px]">待办</Badge>
-                </div>
-                  ))}
-                </section>
-              ) : null}
+                ))}
+              </section>
+            ) : null}
 
-              {getCooperationEventsForDate(selectedDate).length === 0 && getEventsForDate(selectedDate).length === 0 && getTodosForDate(selectedDate).length === 0 && (
-                <p className="text-sm text-muted-foreground text-center py-4">暂无日程</p>
-              )}
-            </div>
-          </CardContent>
-        </Card>
-      )}
+            {selectedEvents.length > 0 ? (
+              <section className="space-y-2">
+                <h4 className="flex items-center gap-1.5 text-xs font-semibold text-slate-600">
+                  <CalendarDays className="h-3.5 w-3.5" />手动日程
+                </h4>
+                {selectedEvents.map((event) => (
+                  <div key={event.id} className={`flex items-start gap-3 rounded-lg p-3 ${EVENT_TYPE_CONFIG[event.type]?.bgColor}`}>
+                    <span className={`mt-0.5 ${EVENT_TYPE_CONFIG[event.type]?.color}`}>
+                      {EVENT_TYPE_CONFIG[event.type]?.icon}
+                    </span>
+                    <div className="min-w-0 flex-1">
+                      <p className="text-sm font-medium">{event.title}</p>
+                      {event.description ? <p className="mt-1 whitespace-pre-wrap text-xs text-muted-foreground">{event.description}</p> : null}
+                    </div>
+                    <Button
+                      type="button"
+                      variant="ghost"
+                      size="icon"
+                      className="size-7 shrink-0 text-muted-foreground hover:text-red-500"
+                      aria-label={`删除日程：${event.title}`}
+                      onClick={() => onDeleteEvent(event.id)}
+                    >
+                      <Trash2 className="h-3.5 w-3.5" />
+                    </Button>
+                  </div>
+                ))}
+              </section>
+            ) : null}
+
+            {selectedTodos.length > 0 ? (
+              <section className="space-y-2">
+                <h4 className="flex items-center gap-1.5 text-xs font-semibold text-slate-600">
+                  <Clock className="h-3.5 w-3.5" />待办任务
+                </h4>
+                {selectedTodos.map((todo) => (
+                  <div key={todo.id} className="flex items-start gap-3 rounded-lg bg-blue-50 p-3">
+                    <Clock className="mt-0.5 h-3.5 w-3.5 text-blue-600" />
+                    <div className="min-w-0 flex-1">
+                      <p className="text-sm font-medium">{todo.title}</p>
+                      {todo.description ? <p className="mt-1 whitespace-pre-wrap text-xs text-muted-foreground">{todo.description}</p> : null}
+                    </div>
+                    <Badge variant="secondary" className="shrink-0 text-[10px]">待办</Badge>
+                  </div>
+                ))}
+              </section>
+            ) : null}
+
+            {selectedCooperationEvents.length === 0 && selectedEvents.length === 0 && selectedTodos.length === 0 ? (
+              <div className="py-10 text-center">
+                <CalendarDays className="mx-auto h-8 w-8 text-muted-foreground/50" />
+                <p className="mt-3 text-sm font-medium">当天没有安排</p>
+                <p className="mt-1 text-xs text-muted-foreground">如需添加提醒，请使用月历顶部的“新增日程”按钮。</p>
+              </div>
+            ) : null}
+          </div>
+        </DialogContent>
+      </Dialog>
 
       {/* 添加事件弹窗 */}
       <Dialog open={showEventDialog} onOpenChange={setShowEventDialog}>
         <DialogContent className="sm:max-w-md">
           <DialogHeader>
-            <DialogTitle>
-              {selectedDate && (
-                <>添加日程 - {selectedDate.toLocaleDateString('zh-CN')}</>
-              )}
-            </DialogTitle>
+            <DialogTitle>新增日程提醒</DialogTitle>
+            <DialogDescription>只有点击下方“添加”后才会创建日程；点击月历日期只用于查看当天详情。</DialogDescription>
           </DialogHeader>
           <div className="space-y-4 py-2">
             <div className="space-y-2">
-              <label className="text-sm font-medium">事件标题</label>
+              <label htmlFor="calendar-event-date" className="text-sm font-medium">日程日期</label>
               <Input
+                id="calendar-event-date"
+                type="date"
+                value={newEventDateKey}
+                onChange={(event) => setNewEventDateKey(event.target.value)}
+              />
+            </div>
+            <div className="space-y-2">
+              <label htmlFor="calendar-event-title" className="text-sm font-medium">事件标题</label>
+              <Input
+                id="calendar-event-title"
                 value={newEvent.title}
                 onChange={(e) => setNewEvent({ ...newEvent, title: e.target.value })}
                 placeholder="输入事件标题..."
@@ -491,13 +560,10 @@ export function WorkCalendar({
             </div>
           </div>
           <DialogFooter>
-            <Button variant="outline" onClick={() => {
-              setShowEventDialog(false);
-              setSelectedDate(null);
-            }}>
+            <Button variant="outline" onClick={() => setShowEventDialog(false)}>
               取消
             </Button>
-            <Button onClick={handleAddEvent} disabled={!selectedDate || !newEvent.title.trim()}>
+            <Button onClick={handleAddEvent} disabled={!newEventDateKey || !newEvent.title.trim()}>
               <Plus className="w-4 h-4 mr-1" />
               添加
             </Button>

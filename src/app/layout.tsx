@@ -1,6 +1,7 @@
 import type { Metadata } from 'next';
 import './globals.css';
 import { DelayedEmailProvider } from '@/components/delayed-email-provider';
+import { FollowUpDraftProvider } from '@/components/follow-up-draft-provider';
 import { AuthProvider } from '@/components/auth-provider';
 import { RecordAssistantProvider } from '@/components/record-assistant-provider';
 import { UserDataProvider } from '@/components/user-data-provider';
@@ -47,7 +48,9 @@ export default function RootLayout({
         <AuthProvider>
           <UserDataProvider>
             <DelayedEmailProvider>
-              <RecordAssistantProvider>{children}</RecordAssistantProvider>
+              <FollowUpDraftProvider>
+                <RecordAssistantProvider>{children}</RecordAssistantProvider>
+              </FollowUpDraftProvider>
             </DelayedEmailProvider>
           </UserDataProvider>
           <Toaster richColors position="top-center" />

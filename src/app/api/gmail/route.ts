@@ -4,6 +4,7 @@ import { classifyFollowUpConversation } from '@/lib/outreach-follow-up';
 import { containsIgnoredGmailContactEmail } from '@/lib/gmail-thread-contact';
 import { refreshStoredGmailAuth } from '@/lib/gmail-cloud-auth';
 import { getRequestUser } from '@/lib/supabase/server';
+import { resolveLatestGmailAnswerAt } from '@/lib/daily-gmail-todos';
 
 type GmailHeader = { name: string; value: string };
 type InlineImagePayload = {
@@ -196,7 +197,7 @@ export async function GET(request: NextRequest) {
 
     if (action === 'daily-inbox') {
       const maxResults = Math.min(Math.max(Number(searchParams.get('maxResults') || 50), 1), 50);
-      const q = 'in:inbox newer_than:3d -category:promotions -category:social';
+      const q = '{in:inbox in:sent} newer_than:3d -category:promotions -category:social';
       const listResponse = await fetch(
         `https://gmail.googleapis.com/gmail/v1/users/me/threads?maxResults=${maxResults}&q=${encodeURIComponent(q)}`,
         { headers },
@@ -211,7 +212,7 @@ export async function GET(request: NextRequest) {
 
       const listData = await listResponse.json() as { threads?: Array<{ id: string }> };
       const references = listData.threads || [];
-      const incomingMessages: ReturnType<typeof parseHistoryMessage>[] = [];
+      const incomingMessages: Array<ReturnType<typeof parseHistoryMessage> & { answeredAt?: string }> = [];
 
       for (let index = 0; index < references.length; index += 12) {
         const batch = references.slice(index, index + 12);
@@ -225,8 +226,8 @@ export async function GET(request: NextRequest) {
 
         for (const thread of threadResults) {
           if (!thread) continue;
-          const messages = ((thread.messages || []) as Record<string, unknown>[])
-            .map(parseHistoryMessage)
+          const messages = ((thread.messages || []) as Record<string, unknown>[]).map(parseHistoryMessage);
+          const externalMessages = messages
             .filter((message) => (
               !message.labelIds.includes('SENT')
               && !message.automated
@@ -234,7 +235,13 @@ export async function GET(request: NextRequest) {
               && !containsIgnoredGmailContactEmail(message.from)
             ))
             .sort((left, right) => Date.parse(right.date) - Date.parse(left.date));
-          if (messages[0]) incomingMessages.push(messages[0]);
+          const latestIncoming = externalMessages[0];
+          if (!latestIncoming) continue;
+
+          incomingMessages.push({
+            ...latestIncoming,
+            answeredAt: resolveLatestGmailAnswerAt(messages, latestIncoming.date),
+          });
         }
       }
 
@@ -249,6 +256,7 @@ export async function GET(request: NextRequest) {
           snippet: message.snippet,
           body: message.body,
           date: message.date,
+          answeredAt: message.answeredAt,
         })),
       });
     }

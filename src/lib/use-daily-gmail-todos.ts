@@ -27,6 +27,7 @@ type DailyGmailMessage = {
   snippet: string;
   body: string;
   date: string;
+  answeredAt?: string;
 };
 
 export type DailyGmailTodo = DailyGmailMessage & {
@@ -108,7 +109,7 @@ function initialAvatar(profile: CreatorResourceProfile): ChannelAvatarState {
   return { status: 'failed', title: profile.channelName, error: '飞书记录缺少有效的 YouTube 频道链接。' };
 }
 
-export function useDailyGmailTodos(settings: AppSettings) {
+export function useDailyGmailTodos(settings: AppSettings, active = true) {
   const { auth, connect } = useGmailAuth();
   const { data: accountData, save: saveAccountData } = useUserDataStore();
   const [items, setItems] = useState<DailyGmailTodo[]>([]);
@@ -195,7 +196,10 @@ export function useDailyGmailTodos(settings: AppSettings) {
         }];
       });
 
-      const nextTaskCache = { ...taskCacheRef.current };
+      const nextTaskCache = Object.fromEntries(
+        Object.entries(taskCacheRef.current)
+          .filter(([, task]) => isWithinDailyGmailWindow(task.date, now)),
+      ) as Record<string, StoredDailyGmailTask>;
       const pendingSummaryIds = new Set<string>();
       matched.forEach((item) => {
         const taskKey = getDailyGmailTaskKey(item.threadId, item.messageId);
@@ -216,6 +220,7 @@ export function useDailyGmailTodos(settings: AppSettings) {
           channelUrl: item.channelUrl,
           summary: item.summary,
           avatar: item.avatar,
+          answeredAt: item.answeredAt,
           completedAt,
         };
         if (item.summaryPending) pendingSummaryIds.add(item.messageId);
@@ -305,8 +310,12 @@ export function useDailyGmailTodos(settings: AppSettings) {
   }, [getAccessToken, saveAccountData, settings]);
 
   useEffect(() => {
+    if (!active) {
+      runIdRef.current += 1;
+      setRefreshing(false);
+      return;
+    }
     const cachedTasks = taskCacheRef.current;
-    taskCacheRef.current = cachedTasks;
     setItems(taskCacheToItems(cachedTasks));
     void load();
     const timer = window.setInterval(() => {
@@ -316,7 +325,7 @@ export function useDailyGmailTodos(settings: AppSettings) {
       runIdRef.current += 1;
       window.clearInterval(timer);
     };
-  }, [load]);
+  }, [active, load]);
 
   const toggleCompleted = useCallback((taskId: string) => {
     const task = taskCacheRef.current[taskId];

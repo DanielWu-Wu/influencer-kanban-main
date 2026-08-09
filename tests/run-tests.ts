@@ -17,3 +17,4 @@ import './account-load-state.test';
 import './ai-reply-templates.test';
 import './prospect-email-selection.test';
 import './prompt-template-settings.test';
+import './follow-up-draft-workflow.test';

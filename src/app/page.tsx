@@ -108,6 +108,7 @@ const NAV_ITEMS: Array<{
 ];
 
 const SIDEBAR_COLLAPSED_STORAGE_KEY = 'influencer-board-sidebar-collapsed';
+const EMPTY_FEISHU_MAPPING = {};
 
 export default function DashboardPage() {
   const router = useRouter();
@@ -191,12 +192,14 @@ export default function DashboardPage() {
   const { events, addEvent, deleteEvent } = useCalendarEvents();
   const { settings, loading: settingsLoading } = useSettings();
   const { unreadCount } = useGmailThreads();
-  const dailyGmail = useDailyGmailTodos(settings);
+  const dailyGmail = useDailyGmailTodos(settings, currentView === 'todo');
   const cooperationCalendar = useCooperationCalendarEvents({
     active: currentView === 'calendar',
     ready: !settingsLoading,
     url: settings.feishuCooperationUrl || '',
-    mapping: settings.feishuCooperationFieldMapping || {},
+    mapping: settings.feishuCooperationFieldMapping || EMPTY_FEISHU_MAPPING,
+    regionCode: settings.youtubeDefaultRegion || '',
+    relevanceLanguage: settings.youtubeDefaultLanguage || '',
   });
   const handleOpenCooperationProject = useCallback((projectId: string) => {
     setOpenCooperationProjectId(projectId);

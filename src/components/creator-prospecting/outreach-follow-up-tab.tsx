@@ -3,11 +3,15 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   AlertTriangle,
+  ArrowLeft,
+  ArrowRight,
   CalendarDays,
   CheckCheck,
   CheckCircle2,
+  Languages,
   Loader2,
   MailCheck,
+  PencilLine,
   RefreshCw,
   Send,
   Sparkles,
@@ -23,37 +27,43 @@ import {
   AlertDialogHeader,
   AlertDialogTitle,
 } from '@/components/ui/alert-dialog';
+import { Alert, AlertDescription, AlertTitle } from '@/components/ui/alert';
 import { Avatar, AvatarFallback, AvatarImage } from '@/components/ui/avatar';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
+import { Field, FieldDescription, FieldError, FieldLabel } from '@/components/ui/field';
 import { Input } from '@/components/ui/input';
 import {
   Dialog,
   DialogContent,
   DialogDescription,
-  DialogFooter,
   DialogHeader,
   DialogTitle,
 } from '@/components/ui/dialog';
+import { ScrollArea } from '@/components/ui/scroll-area';
+import { Separator } from '@/components/ui/separator';
+import { Spinner } from '@/components/ui/spinner';
+import { Textarea } from '@/components/ui/textarea';
 import {
-  HoverCard,
-  HoverCardContent,
-  HoverCardTrigger,
-} from '@/components/ui/hover-card';
-import {
-  appendEmailSignature,
-  applyPlainTextEmailSignature,
-  getEmailSignatureForContext,
-  stripConfiguredEmailSignature,
-  textToEmailHtml,
-} from '@/lib/email-content';
+  useFollowUpDrafts,
+  type FollowUpDraftTask,
+} from '@/components/follow-up-draft-provider';
 import type { AppSettings } from '@/lib/data';
-import { useAuth } from '@/components/auth-provider';
 import { chunkFeishuItems, type FeishuBatchResult } from '@/lib/feishu-batch';
 import { extractMappedFeishuChannelUrl } from '@/lib/feishu-field-value';
 import type { FeishuFieldKey, FeishuFieldMapping } from '@/lib/feishu-mapping';
 import { fetchFeishuRecordsCached } from '@/lib/feishu-record-cache';
 import { buildFollowUpWriteChanges } from '@/lib/outreach-follow-up-sync';
+import {
+  canSaveFollowUpDraft,
+  evaluateFollowUpEligibility,
+  followUpTaskKey,
+  isFollowUpSent,
+  mappedFollowUpSentCount,
+  type FollowUpCheck,
+  type FollowUpSourceRecord,
+  type FollowUpStage,
+} from '@/lib/follow-up-draft-workflow';
 import type { GmailAuth } from '@/lib/types';
 import {
   buildChannelAvatarLookup,
@@ -68,57 +78,16 @@ type ResourceAvatarProfile = {
   channelUrl: string;
   channelId: string;
 };
-type GmailMessage = {
-  id: string;
-  threadId: string;
-  labelIds?: string[];
-  rfcMessageId: string;
-  references: string;
-  subject: string;
-  from: string;
-  to: string;
-  date: string;
-  body: string;
-};
-type FollowUpCheck = {
-  outbound: GmailMessage[];
-  reply: GmailMessage | null;
-  automatedReply: GmailMessage | null;
-  deliveryFailure: GmailMessage | null;
-};
-type FollowUpStage = 2 | 3;
-type FollowUpRecord = {
-  recordId: string;
+type FollowUpRecord = FollowUpSourceRecord & {
   channelName: string;
   avatarUrl: string;
-  email: string;
   channelUrl: string;
   channelId: string;
-  developmentDate: number;
-  firstOutreach: string;
-  secondOutreachDate: number;
-  secondOutreach: string;
-  thirdOutreachDate: number;
-  thirdOutreach: string;
   hasReply: string;
-  language: string;
-  targetProduct: string;
-  cooperationType: string;
-  cooperationIdea: string;
   check?: FollowUpCheck;
   checkedAt?: number;
   checkError?: string;
   synced?: boolean;
-};
-type FollowUpDraft = {
-  stage: FollowUpStage;
-  status: 'checking' | 'generating' | 'saving' | 'saved' | 'error';
-  body: string;
-  translatedBody: string;
-  language: string;
-  gmailDraftId?: string;
-  generatedAt?: number;
-  error?: string;
 };
 type WritePreview = {
   record: FollowUpRecord;
@@ -138,12 +107,6 @@ type Props = {
 
 const RANGE_OPTIONS = [7, 10, 14, 30] as const;
 const DAY_MS = 24 * 60 * 60 * 1000;
-const FOLLOW_UP_DRAFT_CACHE_KEY = 'influencer_follow_up_drafts_v1';
-const FOLLOW_UP_DRAFT_CACHE_MAX_AGE = 30 * DAY_MS;
-
-function followUpDraftKey(recordId: string, stage: FollowUpStage) {
-  return `${recordId}:${stage}`;
-}
 
 function dateInputTimestamp(value: string, endOfDay = false) {
   if (!value) return 0;
@@ -153,23 +116,6 @@ function dateInputTimestamp(value: string, endOfDay = false) {
   return date.getTime();
 }
 
-function loadFollowUpDraftCache(storageKey: string) {
-  if (typeof window === 'undefined') return {};
-  try {
-    const parsed = JSON.parse(localStorage.getItem(storageKey) || '{}') as Record<string, FollowUpDraft>;
-    const expiresBefore = Date.now() - FOLLOW_UP_DRAFT_CACHE_MAX_AGE;
-    return Object.fromEntries(
-      Object.entries(parsed).filter(([, draft]) => (
-        draft?.status === 'saved'
-        && (draft.stage === 2 || draft.stage === 3)
-        && Boolean(draft.body?.trim())
-        && Number(draft.generatedAt || 0) >= expiresBefore
-      )),
-    );
-  } catch {
-    return {};
-  }
-}
 
 function flattenFeishuValue(value: unknown): string {
   if (value === null || value === undefined) return '';
@@ -268,7 +214,7 @@ function startOfToday() {
 }
 
 function isSent(value: string) {
-  return /已发|发送|sent/i.test(value);
+  return isFollowUpSent(value);
 }
 
 function isGmailAuthError(error: unknown) {
@@ -278,13 +224,11 @@ function isGmailAuthError(error: unknown) {
 }
 
 function mappedSentCount(record: FollowUpRecord) {
-  if (record.thirdOutreachDate || isSent(record.thirdOutreach)) return 3;
-  if (record.secondOutreachDate || isSent(record.secondOutreach)) return 2;
-  return 1;
+  return mappedFollowUpSentCount(record);
 }
 
 function effectiveSentCount(record: FollowUpRecord) {
-  return record.check ? record.check.outbound.length : mappedSentCount(record);
+  return Math.max(mappedSentCount(record), record.check?.outbound.length || 0);
 }
 
 function unsyncedGmailStage(record: FollowUpRecord): FollowUpStage | null {
@@ -302,13 +246,18 @@ function stageLabel(stage: FollowUpStage) {
 function canGenerateStage(
   record: FollowUpRecord,
   stage: FollowUpStage,
-  drafts: Record<string, FollowUpDraft>,
+  tasks: Record<string, FollowUpDraftTask>,
 ) {
-  if (!record.email || record.check?.reply) return false;
-  const sentCount = effectiveSentCount(record);
-  if (sentCount !== stage - 1) return false;
-  const draft = drafts[followUpDraftKey(record.recordId, stage)];
-  return !draft || draft.status === 'error';
+  const task = tasks[followUpTaskKey(record.recordId, stage)];
+  if (task && task.status !== 'error') return false;
+  const previousTask = tasks[followUpTaskKey(record.recordId, 2)];
+  return evaluateFollowUpEligibility({
+    record,
+    stage,
+    check: record.check,
+    previousBody: previousTask?.body,
+    previousStageSaved: previousTask?.status === 'saved' || previousTask?.status === 'feishu_error',
+  }).allowed;
 }
 
 function buildWritePreview(
@@ -392,25 +341,108 @@ function StageCell({ label, sentAt, sent }: { label: string; sentAt?: number | s
   );
 }
 
-function FollowUpDraftPreview({ draft, compact = false }: { draft: FollowUpDraft; compact?: boolean }) {
+function FollowUpReviewEditor({
+  task,
+  onChineseChange,
+  onTranslate,
+  onSave,
+  onRegenerate,
+}: {
+  task: FollowUpDraftTask;
+  onChineseChange: (value: string) => void;
+  onTranslate: () => void;
+  onSave: () => void;
+  onRegenerate: () => void;
+}) {
+  const translating = task.status === 'translating';
+  const saving = task.status === 'saving';
+  const saved = task.status === 'saved';
+  const feishuError = task.status === 'feishu_error';
+  const canSave = canSaveFollowUpDraft({
+    status: task.status,
+    body: task.body,
+    chineseBody: task.chineseBody,
+    chineseDirty: task.chineseDirty,
+    gmailDraftId: task.gmailDraftId,
+  });
+
   return (
-    <div className={compact ? 'space-y-3' : 'space-y-4'}>
-      <div>
-        <p className="text-xs font-medium text-foreground">源语言邮件</p>
-        <p className={`${compact ? 'mt-1 max-h-28 overflow-auto text-xs leading-5' : 'mt-2 max-h-52 overflow-auto text-sm leading-6'} whitespace-pre-wrap text-muted-foreground`}>
-          {draft.body}
+    <div className="flex min-h-0 flex-col gap-4">
+      <Field>
+        <FieldLabel>目标语言邮件正文</FieldLabel>
+        <FieldDescription>这是最终准备写入 Gmail 草稿的正文；修改中文并确认翻译后会自动更新。</FieldDescription>
+        <ScrollArea className="h-52 rounded-lg border bg-muted/30 p-4">
+          <p className="whitespace-pre-wrap text-sm leading-6">{task.body || '尚未生成外文正文。'}</p>
+        </ScrollArea>
+      </Field>
+
+      <Separator />
+
+      <Field data-invalid={Boolean(task.error) || undefined}>
+        <div className="flex flex-wrap items-start justify-between gap-3">
+          <div>
+            <FieldLabel htmlFor={`follow-up-chinese-${task.key}`}>中文审核稿</FieldLabel>
+            <FieldDescription>直接修改中文；完成后点击“根据中文更新外文”。</FieldDescription>
+          </div>
+          <Button
+            type="button"
+            variant="outline"
+            size="sm"
+            disabled={!task.chineseDirty || translating || saving || saved || feishuError || !task.chineseBody.trim()}
+            onClick={onTranslate}
+          >
+            {translating ? <Spinner /> : <Languages data-icon="inline-start" />}
+            {translating ? '正在翻译' : '根据中文更新外文'}
+          </Button>
+        </div>
+        <Textarea
+          id={`follow-up-chinese-${task.key}`}
+          value={task.chineseBody}
+          readOnly={saving || saved || feishuError}
+          aria-invalid={Boolean(task.error) || undefined}
+          className="min-h-48 resize-y bg-background leading-6"
+          onChange={(event) => onChineseChange(event.target.value)}
+        />
+        {task.chineseDirty ? (
+          <FieldDescription className="text-amber-700">中文已修改；更新外文成功前不能保存 Gmail 草稿。</FieldDescription>
+        ) : null}
+        <FieldError>{task.error}</FieldError>
+      </Field>
+
+      {task.warning ? (
+        <Alert>
+          <AlertTriangle />
+          <AlertTitle>检查提醒</AlertTitle>
+          <AlertDescription>{task.warning}</AlertDescription>
+        </Alert>
+      ) : null}
+
+      <div className="flex flex-wrap items-center justify-between gap-3 rounded-lg border bg-muted/30 p-3">
+        <p className="max-w-xl text-xs leading-5 text-muted-foreground">
+          保存成功后会自动把飞书中的对应 Follow Up 标记为“已发”并写入今天日期；Gmail 邮件仍不会自动发送。
         </p>
+        <div className="flex flex-wrap justify-end gap-2">
+          {!saved && !feishuError ? (
+            <Button type="button" variant="outline" disabled={translating || saving} onClick={onRegenerate}>
+              <RefreshCw data-icon="inline-start" />重新生成
+            </Button>
+          ) : null}
+          <Button
+            type="button"
+            disabled={feishuError ? saving : !canSave || translating || saving}
+            onClick={onSave}
+          >
+            {saving ? <Spinner /> : feishuError ? <RefreshCw data-icon="inline-start" /> : <Send data-icon="inline-start" />}
+            {saving
+              ? '正在保存'
+              : feishuError
+                ? '重试写回飞书'
+                : saved
+                  ? '已保存并写回飞书'
+                  : '保存到 Gmail 草稿'}
+          </Button>
+        </div>
       </div>
-      <div className="border-t border-border/70 pt-3">
-        <p className="text-xs font-medium text-foreground">中文翻译</p>
-        <p className={`${compact ? 'mt-1 max-h-28 overflow-auto text-xs leading-5' : 'mt-2 max-h-52 overflow-auto text-sm leading-6'} whitespace-pre-wrap text-muted-foreground`}>
-          {draft.translatedBody || 'AI 未返回中文翻译。'}
-        </p>
-      </div>
-      <p className="inline-flex items-center gap-1 text-xs text-emerald-700">
-        <CheckCircle2 className="h-3.5 w-3.5" />
-        已保存至 Gmail 草稿 · 未发送
-      </p>
     </div>
   );
 }
@@ -419,72 +451,77 @@ function StageActionCell({
   label,
   sentAt,
   sent,
-  draft,
+  task,
   canGenerate,
   onGenerate,
-  onOpenDraft,
+  onOpenTask,
 }: {
   label: string;
   sentAt?: number | string;
   sent: boolean;
-  draft?: FollowUpDraft;
+  task?: FollowUpDraftTask;
   canGenerate: boolean;
   onGenerate: () => void;
-  onOpenDraft: () => void;
+  onOpenTask: () => void;
 }) {
   const isSentNow = Boolean(sentAt || sent);
-  const progressLabel = draft?.status === 'checking'
-    ? '读取邮件…'
-    : draft?.status === 'generating'
-      ? 'AI 起草…'
-      : draft?.status === 'saving'
-        ? '保存草稿…'
+  const retryBlockedByMailbox = task?.status === 'error' && [
+    'human_reply',
+    'delivery_failure',
+    'missing_initial_email',
+    'already_sent_in_gmail',
+    'stage_already_complete',
+  ].includes(task.errorCode || '');
+  const progressLabel = task?.status === 'checking'
+    ? '正在检查…'
+    : task?.status === 'generating'
+      ? 'AI 正在生成…'
+      : task?.status === 'translating'
+        ? '正在翻译…'
+        : task?.status === 'saving'
+        ? '正在保存草稿…'
         : '';
 
   return (
-    <div className="min-w-[142px] space-y-1.5">
+    <div className="flex min-w-[152px] flex-col gap-1.5">
       <StageCell label={label} sentAt={sentAt} sent={sent} />
-      {!isSentNow && draft?.status === 'saved' ? (
-        <HoverCard openDelay={200} closeDelay={120}>
-          <HoverCardTrigger asChild>
-            <Button
-              type="button"
-              variant="outline"
-              size="sm"
-              onClick={onOpenDraft}
-              className="h-7 border-emerald-200 bg-emerald-50 px-2 text-xs text-emerald-700 hover:bg-emerald-100 hover:text-emerald-800"
-            >
-              <CheckCircle2 className="h-3.5 w-3.5" />
-              已生成草稿
-            </Button>
-          </HoverCardTrigger>
-          <HoverCardContent align="start" side="top" className="w-[420px] p-4">
-            <p className="mb-3 text-sm font-semibold">{stageLabel(draft.stage)}邮件</p>
-            <FollowUpDraftPreview draft={draft} compact />
-          </HoverCardContent>
-        </HoverCard>
+      {task && (task.status === 'generated' || task.status === 'ready') ? (
+        <Button type="button" variant="outline" size="sm" className="h-7 px-2 text-xs" onClick={onOpenTask}>
+          <PencilLine data-icon="inline-start" />查看待确认
+        </Button>
+      ) : null}
+      {task?.status === 'saved' ? (
+        <Badge variant="secondary">草稿已保存 · 飞书已标记</Badge>
+      ) : null}
+      {task?.status === 'feishu_error' ? (
+        <Button type="button" variant="outline" size="sm" className="h-7 px-2 text-xs" onClick={onOpenTask}>
+          <AlertTriangle data-icon="inline-start" />飞书写回失败 · 重试
+        </Button>
       ) : null}
       {!isSentNow && progressLabel ? (
         <Button type="button" variant="outline" size="sm" className="h-7 px-2 text-xs" disabled>
-          <Loader2 className="h-3.5 w-3.5 animate-spin" />
+          <Loader2 data-icon="inline-start" className="animate-spin" />
           {progressLabel}
         </Button>
       ) : null}
-      {!isSentNow && draft?.status === 'error' && canGenerate ? (
+      {!isSentNow && task?.status === 'error' && canGenerate && !retryBlockedByMailbox ? (
         <Button
           type="button"
           variant="outline"
           size="sm"
           onClick={onGenerate}
-          className="h-7 border-red-200 px-2 text-xs text-red-700 hover:bg-red-50 hover:text-red-800"
+          className="h-7 px-2 text-xs"
         >
-          <RefreshCw className="h-3.5 w-3.5" />
+          <RefreshCw data-icon="inline-start" />
           生成失败 · 重试
         </Button>
       ) : null}
-      {!isSentNow && !draft && canGenerate ? (
+      {!isSentNow && task?.status === 'error' && (!canGenerate || retryBlockedByMailbox) ? (
+        <p className="max-w-44 text-xs text-destructive">{task.error}</p>
+      ) : null}
+      {!isSentNow && !task && canGenerate ? (
         <Button type="button" variant="outline" size="sm" className="h-7 px-2 text-xs" onClick={onGenerate}>
-          <Sparkles className="h-3.5 w-3.5" />
+          <Sparkles data-icon="inline-start" />
           起草邮件
         </Button>
       ) : null}
@@ -517,7 +554,16 @@ function StatusCell({ record }: { record: FollowUpRecord }) {
 }
 
 export function OutreachFollowUpTab({ settings, auth, onAuthRefresh }: Props) {
-  const { user: appUser } = useAuth();
+  const {
+    tasks,
+    batchProgress: draftBatchProgress,
+    generateTask,
+    generateMany,
+    updateChinese,
+    translateTask,
+    saveTask,
+    clearTask,
+  } = useFollowUpDrafts();
   const mapping = useMemo(
     () => settings.feishuProspectingFieldMapping || {},
     [settings.feishuProspectingFieldMapping],
@@ -530,14 +576,10 @@ export function OutreachFollowUpTab({ settings, auth, onAuthRefresh }: Props) {
   const [loadError, setLoadError] = useState('');
   const [checkingIds, setCheckingIds] = useState<string[]>([]);
   const [batchProgress, setBatchProgress] = useState<{ completed: number; total: number } | null>(null);
-  const [drafts, setDrafts] = useState<Record<string, FollowUpDraft>>({});
-  const [draftCacheReady, setDraftCacheReady] = useState(false);
-  const [draftBatchProgress, setDraftBatchProgress] = useState<{
-    stage: FollowUpStage;
-    completed: number;
-    total: number;
-  } | null>(null);
   const [resultDraftKey, setResultDraftKey] = useState<string | null>(null);
+  const [batchReviewStage, setBatchReviewStage] = useState<FollowUpStage | null>(null);
+  const [batchReviewKey, setBatchReviewKey] = useState<string | null>(null);
+  const [regenerateKey, setRegenerateKey] = useState<string | null>(null);
   const [writePreview, setWritePreview] = useState<WritePreview | null>(null);
   const [writeAllConfirmOpen, setWriteAllConfirmOpen] = useState(false);
   const [writeAllProgress, setWriteAllProgress] = useState<{
@@ -549,15 +591,10 @@ export function OutreachFollowUpTab({ settings, auth, onAuthRefresh }: Props) {
   const [markSentPreview, setMarkSentPreview] = useState<MarkSentPreview | null>(null);
   const [writingId, setWritingId] = useState<string | null>(null);
   const avatarLookupIdsRef = useRef(new Set<string>());
-  const skipDraftCacheSaveRef = useRef(false);
   const writeAllOperationIdRef = useRef('');
   const resourceMapping = useMemo(
     () => settings.feishuFieldMapping || {},
     [settings.feishuFieldMapping],
-  );
-  const draftStorageKey = useMemo(
-    () => `${FOLLOW_UP_DRAFT_CACHE_KEY}:${appUser?.id || 'signed-out'}`,
-    [appUser?.id],
   );
   const canLoad = Boolean(settings.feishuProspectingUrl && mapping.developmentDate);
   const customStartAt = dateInputTimestamp(customStartDate);
@@ -595,29 +632,6 @@ export function OutreachFollowUpTab({ settings, auth, onAuthRefresh }: Props) {
     }),
     [mapping, records],
   );
-
-  useEffect(() => {
-    skipDraftCacheSaveRef.current = true;
-    setDraftCacheReady(false);
-    setDrafts(loadFollowUpDraftCache(draftStorageKey));
-    setDraftCacheReady(true);
-  }, [draftStorageKey]);
-
-  useEffect(() => {
-    if (!draftCacheReady) return;
-    if (skipDraftCacheSaveRef.current) {
-      skipDraftCacheSaveRef.current = false;
-      return;
-    }
-    const savedDrafts = Object.fromEntries(
-      Object.entries(drafts).filter(([, draft]) => draft.status === 'saved'),
-    );
-    try {
-      localStorage.setItem(draftStorageKey, JSON.stringify(savedDrafts));
-    } catch {
-      // 浏览器空间不足时不影响本次已经保存到 Gmail 的草稿。
-    }
-  }, [draftCacheReady, draftStorageKey, drafts]);
 
   const loadRecords = useCallback(async () => {
     if (!settings.feishuProspectingUrl || !mapping.developmentDate) {
@@ -684,6 +698,23 @@ export function OutreachFollowUpTab({ settings, auth, onAuthRefresh }: Props) {
   useEffect(() => {
     void loadRecords();
   }, [loadRecords]);
+
+  useEffect(() => {
+    const handleFollowUpWrite = (event: Event) => {
+      const detail = (event as CustomEvent<{ recordId: string; stage: FollowUpStage; sentAt: number }>).detail;
+      if (!detail?.recordId) return;
+      setRecords((current) => current.map((record) => record.recordId === detail.recordId
+        ? {
+            ...record,
+            ...(detail.stage === 2
+              ? { secondOutreach: '已发', secondOutreachDate: detail.sentAt }
+              : { thirdOutreach: '已发', thirdOutreachDate: detail.sentAt }),
+          }
+        : record));
+    };
+    window.addEventListener('follow-up-feishu-updated', handleFollowUpWrite);
+    return () => window.removeEventListener('follow-up-feishu-updated', handleFollowUpWrite);
+  }, []);
 
   useEffect(() => {
     const targets = records.filter((record) => (
@@ -883,239 +914,30 @@ export function OutreachFollowUpTab({ settings, auth, onAuthRefresh }: Props) {
     toast.success(`检查完成：已回复 ${replied} 位，待处理 ${targets.length - replied - failed} 位，失败 ${failed} 位。`);
   };
 
-  const updateDraft = useCallback((
-    recordId: string,
-    stage: FollowUpStage,
-    patch: Partial<FollowUpDraft>,
-  ) => {
-    const key = followUpDraftKey(recordId, stage);
-    setDrafts((current) => ({
-      ...current,
-      [key]: { ...current[key], stage, ...patch } as FollowUpDraft,
-    }));
-  }, []);
-
-  const clearDraft = useCallback((recordId: string, stage: FollowUpStage) => {
-    const key = followUpDraftKey(recordId, stage);
-    setDrafts((current) => ({
-      ...Object.fromEntries(Object.entries(current).filter(([itemKey]) => itemKey !== key)),
-    }));
-  }, []);
-
-  const createGmailDraft = async (
-    record: FollowUpRecord,
-    draft: FollowUpDraft,
-    check: FollowUpCheck,
-    accessToken: string,
-  ) => {
-    const initialEmail = check.outbound[0];
-    const latestOutbound = check.outbound.at(-1);
-    if (!draft?.body.trim() || !initialEmail || !latestOutbound?.threadId) {
-      throw new Error('跟进草稿或原 Gmail 邮件线程不完整，请重新检查回复。');
-    }
-    const references = [latestOutbound.references, latestOutbound.rfcMessageId]
-      .filter(Boolean)
-      .join(' ');
-    const subject = /^re:/i.test(initialEmail.subject) ? initialEmail.subject : `Re: ${initialEmail.subject}`;
-    const cleanBody = stripConfiguredEmailSignature(draft.body, settings.emailSignature);
-    const emailSignature = getEmailSignatureForContext(
-      settings.emailSignature,
-      settings.emailSignatureScope,
-      'outreach',
-    );
-    const bodyHtml = appendEmailSignature(textToEmailHtml(cleanBody), emailSignature);
-    const response = await fetch('/api/gmail', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        action: 'draft',
-        accessToken,
-        to: record.email,
-        subject,
-        body: applyPlainTextEmailSignature(cleanBody, emailSignature),
-        bodyHtml,
-        threadId: latestOutbound.threadId,
-        inReplyTo: latestOutbound.rfcMessageId,
-        references,
-      }),
-    });
-    const result = await response.json();
-    if (!response.ok || !result.success) {
-      const error = new Error([result.error, result.details].filter(Boolean).join(' ') || '保存 Gmail 草稿失败。');
-      throw error;
-    }
-    return result;
-  };
-
-  const generateAndSaveFollowUp = async (
-    record: FollowUpRecord,
-    stage: FollowUpStage,
-    options: { showResult?: boolean; showFeedback?: boolean } = {},
-  ): Promise<'success' | 'skipped' | 'failed'> => {
-    const { showResult = true, showFeedback = true } = options;
-    const key = followUpDraftKey(record.recordId, stage);
-    if (!auth?.accessToken) {
-      const message = '请先在“设置 > Gmail 邮件”连接 Gmail。';
-      updateDraft(record.recordId, stage, {
-        status: 'error',
-        body: '',
-        translatedBody: '',
-        language: record.language,
-        error: message,
-      });
-      if (showFeedback) toast.error(message);
-      return 'failed';
-    }
-
-    setDrafts((current) => ({
-      ...current,
-      [key]: {
-        stage,
-        status: 'checking',
-        body: '',
-        translatedBody: '',
-        language: record.language,
-      },
-    }));
-
-    try {
-      const check = await checkRecord(record, false);
-      if (check.reply) {
-        clearDraft(record.recordId, stage);
-        if (showFeedback) toast.info(`${record.channelName} 已有人工回复，已停止 Follow Up。`);
-        return 'skipped';
-      }
-      if (!check.outbound[0]) {
-        throw new Error('Gmail 中没有找到初次开发信，无法起草 Follow Up。');
-      }
-      if (check.outbound.length >= stage) {
-        clearDraft(record.recordId, stage);
-        if (showFeedback) toast.info(`${stageLabel(stage)}已实际发送，无需重复起草。`);
-        return 'skipped';
-      }
-      if (check.outbound.length < stage - 1) {
-        clearDraft(record.recordId, stage);
-        if (showFeedback) {
-          toast.warning(stage === 3
-            ? '只有 Gmail 确认一次 Follow Up 已发送后，才能起草二次 Follow Up。'
-            : 'Gmail 中没有找到初次开发信。');
-        }
-        return 'skipped';
-      }
-
-      updateDraft(record.recordId, stage, { status: 'generating', error: undefined });
-      const aiResponse = await fetch('/api/ai', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          action: 'followUpOutreach',
-          stage,
-          channelName: record.channelName,
-          preferredLanguage: record.language,
-          targetProduct: record.targetProduct,
-          cooperationType: record.cooperationType,
-          cooperationIdea: record.cooperationIdea,
-          initialEmail: check.outbound[0],
-          previousFollowUp: stage === 3 ? check.outbound[1] : undefined,
-          followUpPrompt: stage === 2
-            ? settings.aiOutreachFollowUp1Prompt
-            : settings.aiOutreachFollowUp2Prompt,
-          modelProvider: settings.modelProvider,
-          customApiUrl: settings.customApiUrl,
-          customApiKey: settings.customApiKey,
-          customModelName: settings.customModelName,
-        }),
-      });
-      const aiResult = await aiResponse.json();
-      if (!aiResponse.ok || !aiResult.success) {
-        throw new Error(String(aiResult.error || '生成跟进邮件失败。'));
-      }
-      const generatedDraft: FollowUpDraft = {
-        stage,
-        status: 'saving',
-        body: stripConfiguredEmailSignature(
-          String(aiResult.data?.body || '').trim(),
-          settings.emailSignature,
-        ),
-        translatedBody: String(aiResult.data?.translatedBody || '').trim(),
-        language: String(aiResult.data?.language || record.language || '').trim(),
-      };
-      if (!generatedDraft.body) throw new Error('AI 没有返回可用的跟进邮件正文。');
-      setDrafts((current) => ({ ...current, [key]: generatedDraft }));
-
-      let gmailResult;
-      try {
-        gmailResult = await createGmailDraft(record, generatedDraft, check, auth.accessToken);
-      } catch (error) {
-        if (!isGmailAuthError(error)) throw error;
-        gmailResult = await createGmailDraft(
-          record,
-          generatedDraft,
-          check,
-          await refreshGmailAuth(),
-        );
-      }
-      const savedDraft: FollowUpDraft = {
-        ...generatedDraft,
-        status: 'saved',
-        gmailDraftId: String(gmailResult.data?.id || gmailResult.data?.message?.id || ''),
-        generatedAt: Date.now(),
-      };
-      setDrafts((current) => ({ ...current, [key]: savedDraft }));
-      if (showResult) setResultDraftKey(key);
-      if (showFeedback) {
-        toast.success(`${stageLabel(stage)}已生成并保存到 Gmail 草稿，邮件尚未发送。`);
-      }
-      return 'success';
-    } catch (error) {
-      const message = error instanceof Error ? error.message : '生成或保存 Gmail 草稿失败。';
-      updateDraft(record.recordId, stage, {
-        status: 'error',
-        error: message,
-      });
-      if (showFeedback) toast.error(message);
-      return 'failed';
-    }
-  };
-
-  const handleGenerateAll = async (stage: FollowUpStage) => {
-    if (draftBatchProgress) return;
+  const handleGenerate = async (record: FollowUpRecord, stage: FollowUpStage) => {
     if (!auth?.accessToken) {
       toast.error('请先在“设置 > Gmail 邮件”连接 Gmail。');
       return;
     }
-    const targets = records.filter((record) => canGenerateStage(record, stage, drafts));
-    if (!targets.length) {
-      toast.info(`当前筛选范围内没有可生成的${stageLabel(stage)}。`);
+    await generateTask(record, stage);
+  };
+
+  const handleGenerateAll = async (stage: FollowUpStage) => {
+    if (!auth?.accessToken) {
+      toast.error('请先在“设置 > Gmail 邮件”连接 Gmail。');
       return;
     }
+    await generateMany(records.filter((record) => canGenerateStage(record, stage, tasks)), stage);
+  };
 
-    setDraftBatchProgress({ stage, completed: 0, total: targets.length });
-    let nextIndex = 0;
-    let successCount = 0;
-    let skippedCount = 0;
-    let failedCount = 0;
-    const worker = async () => {
-      while (nextIndex < targets.length) {
-        const record = targets[nextIndex];
-        nextIndex += 1;
-        const outcome = await generateAndSaveFollowUp(record, stage, {
-          showResult: false,
-          showFeedback: false,
-        });
-        if (outcome === 'success') successCount += 1;
-        else if (outcome === 'skipped') skippedCount += 1;
-        else failedCount += 1;
-        setDraftBatchProgress((current) => current
-          ? { ...current, completed: current.completed + 1 }
-          : null);
-      }
-    };
-    await Promise.all(Array.from({ length: Math.min(2, targets.length) }, worker));
-    setDraftBatchProgress(null);
-    const summary = `成功 ${successCount}，跳过 ${skippedCount}，失败 ${failedCount}`;
-    if (failedCount) toast.warning(`${stageLabel(stage)}批量起草完成：${summary}。`);
-    else toast.success(`${stageLabel(stage)}批量起草完成：${summary}。`);
+  const confirmRegenerate = async () => {
+    if (!regenerateKey) return;
+    const task = tasks[regenerateKey];
+    if (!task) return;
+    setRegenerateKey(null);
+    setResultDraftKey(null);
+    clearTask(regenerateKey);
+    await generateTask(task.source, task.stage);
   };
 
   const openWritePreview = (record: FollowUpRecord) => {
@@ -1291,12 +1113,29 @@ export function OutreachFollowUpTab({ settings, auth, onAuthRefresh }: Props) {
   };
 
   const firstFollowUpEligibleCount = records.filter(
-    (record) => canGenerateStage(record, 2, drafts),
+    (record) => canGenerateStage(record, 2, tasks),
   ).length;
   const secondFollowUpEligibleCount = records.filter(
-    (record) => canGenerateStage(record, 3, drafts),
+    (record) => canGenerateStage(record, 3, tasks),
   ).length;
-  const resultDraft = resultDraftKey ? drafts[resultDraftKey] : undefined;
+  const visibleRecordIds = new Set(records.map((record) => record.recordId));
+  const reviewTasksByStage = (stage: FollowUpStage) => Object.values(tasks).filter((task) => (
+    task.stage === stage
+    && visibleRecordIds.has(task.source.recordId)
+    && (task.status === 'generated' || task.status === 'ready' || task.status === 'feishu_error')
+  ));
+  const firstReviewTasks = reviewTasksByStage(2);
+  const secondReviewTasks = reviewTasksByStage(3);
+  const firstDraftBatchProgress = draftBatchProgress[2];
+  const secondDraftBatchProgress = draftBatchProgress[3];
+  const anyDraftBatchProgress = Boolean(firstDraftBatchProgress || secondDraftBatchProgress);
+  const resultDraft = resultDraftKey ? tasks[resultDraftKey] : undefined;
+  const batchReviewTasks = batchReviewStage ? reviewTasksByStage(batchReviewStage) : [];
+  const selectedBatchTask = batchReviewTasks.find((task) => task.key === batchReviewKey)
+    || batchReviewTasks[0];
+  const selectedBatchIndex = selectedBatchTask
+    ? batchReviewTasks.findIndex((task) => task.key === selectedBatchTask.key)
+    : -1;
 
   return (
     <div className="flex min-h-0 flex-1 flex-col gap-4 overflow-hidden">
@@ -1375,11 +1214,11 @@ export function OutreachFollowUpTab({ settings, auth, onAuthRefresh }: Props) {
             ))}
           </div>
           <div className="ml-auto flex shrink-0 items-center gap-2">
-            <Button variant="outline" size="sm" onClick={() => void loadRecords()} disabled={loading || Boolean(draftBatchProgress)}>
+            <Button variant="outline" size="sm" onClick={() => void loadRecords()} disabled={loading || anyDraftBatchProgress}>
               {loading ? <Loader2 className="h-4 w-4 animate-spin" /> : <RefreshCw className="h-4 w-4" />}
               刷新列表
             </Button>
-            <Button size="sm" onClick={() => void handleCheckAll()} disabled={loading || Boolean(batchProgress) || Boolean(draftBatchProgress) || !records.length}>
+            <Button size="sm" onClick={() => void handleCheckAll()} disabled={loading || Boolean(batchProgress) || anyDraftBatchProgress || !records.length}>
               {batchProgress ? <Loader2 className="h-4 w-4 animate-spin" /> : <CheckCheck className="h-4 w-4" />}
               {batchProgress ? `正在检查 ${batchProgress.completed} / ${batchProgress.total}` : '检查全部'}
             </Button>
@@ -1390,7 +1229,7 @@ export function OutreachFollowUpTab({ settings, auth, onAuthRefresh }: Props) {
               disabled={
                 loading
                 || Boolean(batchProgress)
-                || Boolean(draftBatchProgress)
+                || anyDraftBatchProgress
                 || Boolean(writeAllProgress)
                 || writeAllTargets.length === 0
               }
@@ -1435,22 +1274,33 @@ export function OutreachFollowUpTab({ settings, auth, onAuthRefresh }: Props) {
                       variant="outline"
                       size="sm"
                       className="h-7 px-2 text-xs font-medium"
-                      onClick={() => void handleGenerateAll(2)}
+                      onClick={() => {
+                        if (firstReviewTasks.length) {
+                          setBatchReviewStage(2);
+                          setBatchReviewKey(firstReviewTasks[0]?.key || null);
+                        } else {
+                          void handleGenerateAll(2);
+                        }
+                      }}
                       disabled={
                         loading
                         || Boolean(batchProgress)
-                        || Boolean(draftBatchProgress)
-                        || firstFollowUpEligibleCount === 0
+                        || anyDraftBatchProgress
+                        || (firstReviewTasks.length === 0 && firstFollowUpEligibleCount === 0)
                       }
                     >
-                      {draftBatchProgress?.stage === 2 ? (
-                        <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                      {firstDraftBatchProgress ? (
+                        <Loader2 data-icon="inline-start" className="animate-spin" />
+                      ) : firstReviewTasks.length ? (
+                        <PencilLine data-icon="inline-start" />
                       ) : (
-                        <Sparkles className="h-3.5 w-3.5" />
+                        <Sparkles data-icon="inline-start" />
                       )}
-                      {draftBatchProgress?.stage === 2
-                        ? `${draftBatchProgress.completed}/${draftBatchProgress.total}`
-                        : `一键生成 (${firstFollowUpEligibleCount})`}
+                      {firstDraftBatchProgress
+                        ? `${firstDraftBatchProgress.completed}/${firstDraftBatchProgress.total}`
+                        : firstReviewTasks.length
+                          ? `查看全部 (${firstReviewTasks.length})`
+                          : `一键生成 (${firstFollowUpEligibleCount})`}
                     </Button>
                   </div>
                 </th>
@@ -1462,22 +1312,33 @@ export function OutreachFollowUpTab({ settings, auth, onAuthRefresh }: Props) {
                       variant="outline"
                       size="sm"
                       className="h-7 px-2 text-xs font-medium"
-                      onClick={() => void handleGenerateAll(3)}
+                      onClick={() => {
+                        if (secondReviewTasks.length) {
+                          setBatchReviewStage(3);
+                          setBatchReviewKey(secondReviewTasks[0]?.key || null);
+                        } else {
+                          void handleGenerateAll(3);
+                        }
+                      }}
                       disabled={
                         loading
                         || Boolean(batchProgress)
-                        || Boolean(draftBatchProgress)
-                        || secondFollowUpEligibleCount === 0
+                        || anyDraftBatchProgress
+                        || (secondReviewTasks.length === 0 && secondFollowUpEligibleCount === 0)
                       }
                     >
-                      {draftBatchProgress?.stage === 3 ? (
-                        <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                      {secondDraftBatchProgress ? (
+                        <Loader2 data-icon="inline-start" className="animate-spin" />
+                      ) : secondReviewTasks.length ? (
+                        <PencilLine data-icon="inline-start" />
                       ) : (
-                        <Sparkles className="h-3.5 w-3.5" />
+                        <Sparkles data-icon="inline-start" />
                       )}
-                      {draftBatchProgress?.stage === 3
-                        ? `${draftBatchProgress.completed}/${draftBatchProgress.total}`
-                        : `一键生成 (${secondFollowUpEligibleCount})`}
+                      {secondDraftBatchProgress
+                        ? `${secondDraftBatchProgress.completed}/${secondDraftBatchProgress.total}`
+                        : secondReviewTasks.length
+                          ? `查看全部 (${secondReviewTasks.length})`
+                          : `一键生成 (${secondFollowUpEligibleCount})`}
                     </Button>
                   </div>
                 </th>
@@ -1495,21 +1356,12 @@ export function OutreachFollowUpTab({ settings, auth, onAuthRefresh }: Props) {
               {!loading ? records.map((record) => {
                 const checking = checkingIds.includes(record.recordId);
                 const unsyncedStage = unsyncedGmailStage(record);
-                const sentCount = effectiveSentCount(record);
-                const firstDraftKey = followUpDraftKey(record.recordId, 2);
-                const secondDraftKey = followUpDraftKey(record.recordId, 3);
-                const firstDraft = !record.check?.reply && sentCount === 1
-                  ? drafts[firstDraftKey]
-                  : undefined;
-                const secondDraft = !record.check?.reply && sentCount === 2
-                  ? drafts[secondDraftKey]
-                  : undefined;
-                const firstSentAt = record.check
-                  ? record.check.outbound[1]?.date
-                  : record.secondOutreachDate;
-                const secondSentAt = record.check
-                  ? record.check.outbound[2]?.date
-                  : record.thirdOutreachDate;
+                const firstDraftKey = followUpTaskKey(record.recordId, 2);
+                const secondDraftKey = followUpTaskKey(record.recordId, 3);
+                const firstTask = tasks[firstDraftKey];
+                const secondTask = tasks[secondDraftKey];
+                const firstSentAt = record.check?.outbound[1]?.date || record.secondOutreachDate;
+                const secondSentAt = record.check?.outbound[2]?.date || record.thirdOutreachDate;
                 return (
                   <tr key={record.recordId} className="align-top hover:bg-slate-50/60">
                     <td className="px-4 py-4">
@@ -1540,22 +1392,22 @@ export function OutreachFollowUpTab({ settings, auth, onAuthRefresh }: Props) {
                       <StageActionCell
                         label="第 3 天"
                         sentAt={firstSentAt}
-                        sent={record.check ? Boolean(record.check.outbound[1]) : isSent(record.secondOutreach)}
-                        draft={firstDraft}
-                        canGenerate={canGenerateStage(record, 2, drafts)}
-                        onGenerate={() => void generateAndSaveFollowUp(record, 2)}
-                        onOpenDraft={() => setResultDraftKey(firstDraftKey)}
+                        sent={Boolean(record.check?.outbound[1]) || isSent(record.secondOutreach)}
+                        task={firstTask}
+                        canGenerate={canGenerateStage(record, 2, tasks)}
+                        onGenerate={() => void handleGenerate(record, 2)}
+                        onOpenTask={() => setResultDraftKey(firstDraftKey)}
                       />
                     </td>
                     <td className="px-4 py-4">
                       <StageActionCell
                         label="第 7 天"
                         sentAt={secondSentAt}
-                        sent={record.check ? Boolean(record.check.outbound[2]) : isSent(record.thirdOutreach)}
-                        draft={secondDraft}
-                        canGenerate={canGenerateStage(record, 3, drafts)}
-                        onGenerate={() => void generateAndSaveFollowUp(record, 3)}
-                        onOpenDraft={() => setResultDraftKey(secondDraftKey)}
+                        sent={Boolean(record.check?.outbound[2]) || isSent(record.thirdOutreach)}
+                        task={secondTask}
+                        canGenerate={canGenerateStage(record, 3, tasks)}
+                        onGenerate={() => void handleGenerate(record, 3)}
+                        onOpenTask={() => setResultDraftKey(secondDraftKey)}
                       />
                     </td>
                     <td className="px-4 py-4"><StatusCell record={record} /></td>
@@ -1596,34 +1448,150 @@ export function OutreachFollowUpTab({ settings, auth, onAuthRefresh }: Props) {
       </section>
 
       <Dialog
-        open={Boolean(resultDraftKey && resultDraft?.status === 'saved')}
+        open={Boolean(resultDraftKey && resultDraft)}
         onOpenChange={(open) => !open && setResultDraftKey(null)}
       >
-        <DialogContent className="flex max-h-[82vh] max-w-2xl flex-col overflow-hidden">
+        <DialogContent className="flex max-h-[90vh] max-w-3xl flex-col overflow-hidden">
           <DialogHeader>
             <div className="flex flex-wrap items-center gap-2 pr-8">
-              <DialogTitle>{resultDraft ? `${stageLabel(resultDraft.stage)}已生成` : 'Follow Up 已生成'}</DialogTitle>
-              <Badge variant="outline" className="border-emerald-200 bg-emerald-50 text-emerald-700">
-                已保存至 Gmail 草稿
+              <DialogTitle>{resultDraft ? `${resultDraft.source.channelName} · ${stageLabel(resultDraft.stage)}` : '审核 Follow Up 邮件'}</DialogTitle>
+              <Badge variant="outline">
+                {resultDraft?.status === 'feishu_error'
+                  ? 'Gmail 草稿已保存 · 飞书待重试'
+                  : resultDraft?.status === 'saved'
+                    ? '草稿已保存 · 飞书已标记'
+                    : '待确认 · 未写入 Gmail'}
               </Badge>
             </div>
             <DialogDescription>
-              邮件已保存到原开发信线程，尚未发送。
+              {resultDraft ? `${resultDraft.source.email} · 原线程主题：${resultDraft.subject || '未读取'}` : '审核后再保存 Gmail 草稿。'}
             </DialogDescription>
           </DialogHeader>
           {resultDraft ? (
-            <div className="min-h-0 flex-1 overflow-y-auto rounded-lg border border-border/70 bg-slate-50/60 p-4">
-              <FollowUpDraftPreview draft={resultDraft} />
+            <div className="min-h-0 flex-1 overflow-y-auto pr-1">
+              <FollowUpReviewEditor
+                task={resultDraft}
+                onChineseChange={(value) => updateChinese(resultDraft.key, value)}
+                onTranslate={() => { void translateTask(resultDraft.key); }}
+                onSave={() => {
+                  void saveTask(resultDraft.key).then((saved) => {
+                    if (saved) setResultDraftKey(null);
+                  });
+                }}
+                onRegenerate={() => setRegenerateKey(resultDraft.key)}
+              />
             </div>
           ) : null}
-          <DialogFooter className="items-center sm:justify-between">
-            <p className="text-left text-xs text-muted-foreground">
-              关闭后，将鼠标移到该行的“已生成草稿”上即可再次查看。
-            </p>
-            <Button type="button" onClick={() => setResultDraftKey(null)}>完成</Button>
-          </DialogFooter>
         </DialogContent>
       </Dialog>
+
+      <Dialog
+        open={Boolean(batchReviewStage)}
+        onOpenChange={(open) => {
+          if (!open) {
+            setBatchReviewStage(null);
+            setBatchReviewKey(null);
+          }
+        }}
+      >
+        <DialogContent className="flex h-[88vh] max-w-6xl flex-col overflow-hidden p-0">
+          <DialogHeader className="px-6 pt-6">
+            <div className="flex flex-wrap items-center gap-2 pr-8">
+              <DialogTitle>{batchReviewStage ? `${stageLabel(batchReviewStage)}批量审核` : '批量审核'}</DialogTitle>
+              <Badge variant="secondary">待处理 {batchReviewTasks.length} 封</Badge>
+            </div>
+            <DialogDescription>
+              每封邮件需要单独确认并保存；飞书写回失败的项目只会重试飞书，不会重复创建 Gmail 草稿。
+            </DialogDescription>
+          </DialogHeader>
+          {selectedBatchTask ? (
+            <div className="grid min-h-0 flex-1 grid-cols-[260px_minmax(0,1fr)] border-t">
+              <ScrollArea className="border-r bg-muted/20">
+                <div className="flex flex-col gap-2 p-3">
+                  {batchReviewTasks.map((task, index) => (
+                    <Button
+                      key={task.key}
+                      type="button"
+                      variant={task.key === selectedBatchTask.key ? 'secondary' : 'ghost'}
+                      className="h-auto justify-start whitespace-normal px-3 py-2 text-left"
+                      onClick={() => setBatchReviewKey(task.key)}
+                    >
+                      <span className="min-w-0">
+                        <span className="block truncate text-sm font-medium">{index + 1}. {task.source.channelName}</span>
+                        <span className="block truncate text-xs text-muted-foreground">
+                          {task.status === 'feishu_error' ? 'Gmail 已保存 · 飞书待重试' : task.source.email}
+                        </span>
+                      </span>
+                    </Button>
+                  ))}
+                </div>
+              </ScrollArea>
+              <div className="flex min-h-0 flex-col">
+                <div className="flex items-center justify-between gap-3 border-b px-5 py-3">
+                  <div className="min-w-0">
+                    <p className="truncate text-sm font-semibold">{selectedBatchTask.source.channelName}</p>
+                    <p className="truncate text-xs text-muted-foreground">{selectedBatchTask.source.email} · {selectedBatchTask.subject}</p>
+                  </div>
+                  <div className="flex shrink-0 items-center gap-2">
+                    <Button
+                      type="button"
+                      variant="outline"
+                      size="icon"
+                      aria-label="上一封"
+                      disabled={selectedBatchIndex <= 0}
+                      onClick={() => setBatchReviewKey(batchReviewTasks[selectedBatchIndex - 1]?.key || null)}
+                    >
+                      <ArrowLeft />
+                    </Button>
+                    <span className="text-xs text-muted-foreground">{selectedBatchIndex + 1} / {batchReviewTasks.length}</span>
+                    <Button
+                      type="button"
+                      variant="outline"
+                      size="icon"
+                      aria-label="下一封"
+                      disabled={selectedBatchIndex < 0 || selectedBatchIndex >= batchReviewTasks.length - 1}
+                      onClick={() => setBatchReviewKey(batchReviewTasks[selectedBatchIndex + 1]?.key || null)}
+                    >
+                      <ArrowRight />
+                    </Button>
+                  </div>
+                </div>
+                <div className="min-h-0 flex-1 overflow-y-auto p-5">
+                  <FollowUpReviewEditor
+                    task={selectedBatchTask}
+                    onChineseChange={(value) => updateChinese(selectedBatchTask.key, value)}
+                    onTranslate={() => { void translateTask(selectedBatchTask.key); }}
+                    onSave={() => { void saveTask(selectedBatchTask.key); }}
+                    onRegenerate={() => setRegenerateKey(selectedBatchTask.key)}
+                  />
+                </div>
+              </div>
+            </div>
+          ) : (
+            <div className="flex min-h-0 flex-1 flex-col items-center justify-center gap-3 border-t p-8 text-center">
+              <CheckCircle2 className="size-8 text-emerald-600" />
+              <p className="font-medium">当前批次已全部处理</p>
+              <p className="text-sm text-muted-foreground">已保存的 Gmail 草稿不会在待审核列表中重复出现。</p>
+              <Button type="button" onClick={() => setBatchReviewStage(null)}>完成</Button>
+            </div>
+          )}
+        </DialogContent>
+      </Dialog>
+
+      <AlertDialog open={Boolean(regenerateKey)} onOpenChange={(open) => !open && setRegenerateKey(null)}>
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>重新生成这封 Follow Up？</AlertDialogTitle>
+            <AlertDialogDescription>当前外文和中文修改都会被新的 AI 结果替换，此操作不会创建 Gmail 草稿或写入飞书。</AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel>继续审核</AlertDialogCancel>
+            <AlertDialogAction onClick={(event) => { event.preventDefault(); void confirmRegenerate(); }}>
+              <RefreshCw data-icon="inline-start" />确认重新生成
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
 
       <AlertDialog
         open={writeAllConfirmOpen}

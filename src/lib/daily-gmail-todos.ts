@@ -17,16 +17,42 @@ export function getDailyGmailTaskKey(threadId: string, messageId: string) {
   return threadId.trim() || messageId.trim();
 }
 
+export function resolveLatestGmailAnswerAt(
+  messages: Array<{ date: string; labelIds: string[] }>,
+  latestIncomingDate: string,
+) {
+  const latestIncomingAt = Date.parse(latestIncomingDate);
+  if (Number.isNaN(latestIncomingAt)) return undefined;
+
+  return messages
+    .filter((message) => (
+      message.labelIds.includes('SENT')
+      && !message.labelIds.includes('DRAFT')
+      && Date.parse(message.date) > latestIncomingAt
+    ))
+    .sort((left, right) => Date.parse(right.date) - Date.parse(left.date))[0]?.date;
+}
+
 export function resolveIncomingGmailCompletedAt(
-  existing: { messageId: string; completedAt?: string } | undefined,
-  incoming: { messageId: string; date: string },
+  existing: { messageId: string; completedAt?: string; answeredAt?: string } | undefined,
+  incoming: { messageId: string; date: string; answeredAt?: string },
   legacyCompletedAt?: string,
 ) {
+  const incomingTimestamp = Date.parse(incoming.date);
+  const answeredTimestamp = Date.parse(incoming.answeredAt || '');
+  if (
+    !Number.isNaN(incomingTimestamp)
+    && !Number.isNaN(answeredTimestamp)
+    && answeredTimestamp > incomingTimestamp
+  ) {
+    return incoming.answeredAt;
+  }
+
   if (!existing) return legacyCompletedAt;
+  if (existing.answeredAt && existing.completedAt === existing.answeredAt) return undefined;
   if (!existing.completedAt) return undefined;
   if (existing.messageId === incoming.messageId) return existing.completedAt;
 
-  const incomingTimestamp = Date.parse(incoming.date);
   const completedTimestamp = Date.parse(existing.completedAt);
   if (!Number.isNaN(incomingTimestamp) && !Number.isNaN(completedTimestamp) && incomingTimestamp > completedTimestamp) {
     return undefined;
