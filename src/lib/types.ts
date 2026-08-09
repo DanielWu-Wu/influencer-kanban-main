@@ -133,6 +133,9 @@ export type EmailType =
   | 'follow_up_3'
   | 'inquiry'
   | 'shipping'
+  | 'discount'
+  | 'cooperation'
+  | 'affiliate'
   | 'care'
   | 'thank'
   | 'custom';
@@ -145,6 +148,11 @@ export interface EmailTemplate {
   content: string;
   variables: string[];
   isDefault: boolean;
+  description?: string;
+  requiredInfo?: string[];
+  rules?: string[];
+  defaultTone?: 'friendly' | 'formal' | 'casual';
+  aiEnabled?: boolean;
 }
 
 export interface FollowUpReminder {

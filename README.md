@@ -2,9 +2,9 @@
 
 这是一个面向跨境电商海外红人推广专员的日常运营工作台。项目目标是把 YouTube 红人发现、飞书多维表格建档、Gmail 开发信、AI 辅助翻译/回复、产品资料、合作状态跟进集中到一个清晰可控的桌面 Web 应用里。
 
-当前主要工作面包括 **红人开发台、Gmail 邮件、合作项目、每日待办与工作日历**：
+当前主要工作面包括 **红人开发台、Gmail 邮件、合作项目、每日待办与工作日历、账号管理**：
 从 YouTube 频道录入红人，查重并写入飞书双表，生成开发信和 Follow Up 草稿；
-同时跟踪合作履约、物流/折扣告知、当天 Gmail 来信及手动任务。
+同时跟踪合作履约、物流/折扣告知、当天 Gmail 来信及手动任务，并为团队成员提供账号隔离。
 
 当前唯一现役交接入口是 [`docs/HANDOFF.md`](docs/HANDOFF.md)。根目录
 `HANDOFF.md`、`PROJECT_HANDOFF.md`、`TODO.md` 和 `docs/AI_HANDOFF.md`
@@ -17,7 +17,7 @@
 - Styling/UI: Tailwind CSS 4, shadcn/ui, Radix UI, lucide-react
 - Drag/drop: `@dnd-kit`
 - Backend/API: Next.js Route Handlers under `src/app/api/**`
-- Auth/storage: Supabase Auth, Supabase tables/RPC for cloud settings and user secrets
+- Auth/storage: Supabase Auth，按账号隔离的资料、业务数据、云端设置和私密配置
 - External integrations: Gmail API, Feishu Open Platform/Base API, YouTube Data API, OpenAI-compatible AI API
 - Package manager: pnpm 9+
 
@@ -64,6 +64,17 @@ GOOGLE_REDIRECT_URI=https://你的-vercel-域名/api/auth/callback
 ```
 
 飞书、YouTube、Gmail、AI 模型等连接信息主要通过设置页保存；飞书写入必须依赖用户保存的字段映射。
+
+团队账号管理还需要先执行 `supabase/migrations/20260806_account_management.sql` 和
+`supabase/migrations/20260807_account_admin_permissions.sql`，并在服务端配置：
+
+```bash
+SUPABASE_SECRET_KEY=
+APP_ADMIN_USER_ID=
+```
+
+`SUPABASE_SECRET_KEY` 只能保存在服务端环境变量中，不能写入 Git 或返回浏览器；
+`APP_ADMIN_USER_ID` 是 Supabase Authentication 中唯一主管理员的用户 ID。
 
 ## 目录结构
 
@@ -126,9 +137,12 @@ docs
   - AI 回复正文支持流式显示，随后补充中文对照；模型不支持流式时自动回退兼容模式。
   - 邮件签名可设置为“仅开发信”“仅正常邮件”或“两者都生效”。
 - **每日待办与工作日历**
-  - 手动任务支持截止日期/时间、编辑、删除、完成和撤销完成。
-  - 今日 Gmail 来信匹配红人头像并生成一句话中文摘要，与手动任务共用待完成/已完成列表。
+  - 手动任务支持截止日期/时间、编辑、删除、完成和撤销完成；列表使用紧凑行高，并分为待完成、今日已完成和可折叠的历史已完成。
+  - Gmail 任务只读取近 72 小时收件箱中每个线程最新的外部来信，排除推广/社交、本人发信、自动回复、退信及 Mailsuite/Mailtrack 通知，并且发件邮箱必须匹配飞书红人信息数据库。
+  - Gmail 任务会匹配红人头像并生成一句话中文摘要；未手动完成的任务会继续保留，新外部来信晚于完成时间时会重新进入待完成。
   - 日期使用本地日历语义，避免 UTC 时区转换造成日期偏移。
+  - 工作日历同时汇总手动日程、未完成待办和飞书合作项目的确认合作、发货、到货、拍摄完成、预计上线、实际上线六类节点。
+  - 合作节点为只读，支持按需加载、60 秒缓存和手动刷新；点击节点可前往对应合作项目详情，逾期且未发布的预计上线节点显示为红色。
 - **合作项目**
   - 提供列表、看板、日历、阶段多选、风险提示和项目详情。
   - 可后台写回物流/折扣告知状态以及发货、到货、拍摄完成、实际上线日期，并显示成功/失败提醒。
@@ -145,6 +159,12 @@ docs
 - **AI 助手**
   - 右下角圆形悬浮球，可拖动，靠近边缘自动半隐藏。
   - AI 用于辅助判断、翻译、生成邮件、提取信息；关键外部写入仍由用户确认或明确动作触发。
+- **账号管理与数据隔离**
+  - 使用固定主管理员账号创建成员账号，不发送注册或邀请邮件。
+  - 主管理员可填写或修改姓名备注、停用、恢复账号及设置临时密码，但不能查看成员密码、业务数据、Gmail、飞书授权或密钥。
+  - 新成员和被重置密码的成员首次登录必须修改临时密码，完成后才能进入工作台。
+  - 产品、设置、待办、日历、红人、Gmail、飞书、AI Key 及缓存按账号隔离；切换账号时不会复用其他账号的数据或授权。
+  - 临时网络或账号服务故障不会再被误判为账号停用；已确认的当前工作台会保留，并提供重试提示。
 
 ## 后续开发注意事项
 
@@ -153,6 +173,8 @@ docs
   系统仍不得自动发送，未来改为多人协作时再重新设计发送状态。
 - 不要硬编码飞书字段名。所有飞书写入必须使用设置里保存的字段映射。
 - 不要修改 Supabase 表结构或新增飞书字段，除非用户明确确认。
+- 不要把 `SUPABASE_SECRET_KEY` 暴露给浏览器；管理员接口必须同时验证登录状态和 `APP_ADMIN_USER_ID`。
+- 管理员只有账号元数据管理权，不能绕过成员业务数据的 RLS 隔离。
 - 不要把 YouTube API 当作邮箱来源。它只能读取公开频道资料，邮箱只能从公开简介文本中提取。
 - 不要把 DeepSeek 描述为项目内置服务；项目只适配 OpenAI-compatible API。
 - UI 要保持桌面运营工作台的信息密度，清爽、现代、可扫描，不做营销落地页风格。

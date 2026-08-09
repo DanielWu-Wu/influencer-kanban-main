@@ -1,6 +1,6 @@
 'use client';
 
-import { useState, useEffect, useCallback } from 'react';
+import { useState, useEffect, useCallback, useMemo } from 'react';
 import {
   Influencer,
   EmailTemplate,
@@ -23,6 +23,7 @@ import type { RecordAssistantSettings } from './record-assistant';
 import type { EmailSignatureScope } from './email-content';
 import { getSupabaseBrowserClient } from './supabase/client';
 import { formatLocalDateKey, parseLocalDateKey } from './local-date';
+import { BUILT_IN_AI_REPLY_TEMPLATES, mergeBuiltInAIReplyTemplates } from './ai-reply-templates';
 import { useUserDataStore } from '@/components/user-data-provider';
 import { USER_DATA_KEYS, type UserDataKey } from '@/lib/account-data-keys';
 
@@ -98,6 +99,7 @@ export const generateId = () =>
   `${Date.now()}-${Math.random().toString(36).slice(2, 11)}`;
 
 const DEFAULT_TEMPLATES: EmailTemplate[] = [
+  ...BUILT_IN_AI_REPLY_TEMPLATES,
   {
     id: 'template-cold-youtube',
     name: '\u4e2a\u6027\u5316 YouTube \u51b7\u5f00\u53d1\u4fe1',
@@ -517,7 +519,11 @@ export function useProducts() {
 }
 
 export function useEmailTemplates() {
-  const { value: templates, save: saveCloudTemplates, loading } = useCloudUserData<EmailTemplate[]>(USER_DATA_KEYS.TEMPLATES, DEFAULT_TEMPLATES);
+  const { value: storedTemplates, save: saveCloudTemplates, loading } = useCloudUserData<EmailTemplate[]>(USER_DATA_KEYS.TEMPLATES, DEFAULT_TEMPLATES);
+  const templates = useMemo(
+    () => mergeBuiltInAIReplyTemplates(storedTemplates),
+    [storedTemplates],
+  );
 
   const saveTemplates = useCallback((newData: EmailTemplate[]) => {
     saveCloudTemplates(newData);
@@ -526,24 +532,24 @@ export function useEmailTemplates() {
   const addTemplate = useCallback(
     (template: Omit<EmailTemplate, 'id'>) => {
       const newTemplate: EmailTemplate = { ...template, id: generateId() };
-      saveTemplates([...templates, newTemplate]);
+      saveTemplates([...storedTemplates, newTemplate]);
       return newTemplate;
     },
-    [templates, saveTemplates],
+    [storedTemplates, saveTemplates],
   );
 
   const updateTemplate = useCallback(
     (id: string, updates: Partial<EmailTemplate>) => {
-      saveTemplates(templates.map((template) => (template.id === id ? { ...template, ...updates } : template)));
+      saveTemplates(storedTemplates.map((template) => (template.id === id ? { ...template, ...updates } : template)));
     },
-    [templates, saveTemplates],
+    [storedTemplates, saveTemplates],
   );
 
   const deleteTemplate = useCallback(
     (id: string) => {
-      saveTemplates(templates.filter((template) => template.id !== id));
+      saveTemplates(storedTemplates.filter((template) => template.id !== id));
     },
-    [templates, saveTemplates],
+    [storedTemplates, saveTemplates],
   );
 
   return { templates, loading, addTemplate, updateTemplate, deleteTemplate };

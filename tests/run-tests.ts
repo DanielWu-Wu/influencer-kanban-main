@@ -14,3 +14,4 @@ import './feishu-write-guard.test';
 import './email-signature-scope.test';
 import './account-isolation.test';
 import './account-load-state.test';
+import './ai-reply-templates.test';

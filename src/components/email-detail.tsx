@@ -12,8 +12,10 @@ import {
   Paperclip, Download, Forward, Mail, MailOpen,
   Database, Save, CheckCircle2, XCircle,
   ExternalLink, Maximize2, X,
+  FileText,
 } from 'lucide-react';
 import { EmailComposer } from './email-composer';
+import { AITemplateReplyComposer } from './ai-template-reply-composer';
 import { NewEmailComposer } from './new-email-composer';
 import { YouTubeChannelAvatar } from './youtube-channel-avatar';
 import { textToEmailHtml } from '@/lib/email-content';
@@ -205,7 +207,7 @@ export function EmailDetail({
     return new Set(newestMessage ? [newestMessage.id] : []);
   });
   const [composerState, setComposerState] = useState<'closed' | 'expanded' | 'minimized'>('closed');
-  const [replyMode, setReplyMode] = useState<'compose' | 'ai'>('compose');
+  const [replyMode, setReplyMode] = useState<'compose' | 'template' | 'ai'>('compose');
   const [savedReplyDraft, setSavedReplyDraft] = useState('');
   const [changingReadStateId, setChangingReadStateId] = useState<string | null>(null);
   const [downloadingAttachmentIds, setDownloadingAttachmentIds] = useState<Set<string>>(new Set());
@@ -1435,7 +1437,7 @@ export function EmailDetail({
       {/* 底部回复区域 */}
       <div
         className={`shrink-0 ${
-          composerState === 'expanded' && replyMode === 'ai'
+          composerState === 'expanded' && (replyMode === 'ai' || replyMode === 'template')
             ? 'h-[68dvh] min-h-0 overflow-hidden border-t border-gray-300 bg-white shadow-[0_-8px_24px_rgba(15,23,42,0.08)] sm:h-[min(62dvh,640px)]'
             : composerState === 'expanded'
               ? 'material-toolbar max-h-[72%] overflow-y-auto border-t border-border/55 p-4'
@@ -1446,7 +1448,7 @@ export function EmailDetail({
       >
         {composerState === 'closed' ? (
           <div className="flex items-center justify-center gap-3">
-            <Button 
+            <Button
               variant="outline" 
               className="h-10 flex-1 rounded-lg bg-white/80"
               onClick={() => {
@@ -1457,7 +1459,18 @@ export function EmailDetail({
               <Reply className="w-4 h-4 mr-2" />
               回复
             </Button>
-            <Button 
+            <Button
+              variant="outline"
+              className="h-10 flex-1 rounded-lg border-primary/25 bg-primary/5 text-primary hover:bg-primary/10"
+              onClick={() => {
+                setReplyMode('template');
+                setComposerState('expanded');
+              }}
+            >
+              <FileText className="w-4 h-4 mr-2" />
+              AI 模板起草
+            </Button>
+            <Button
               className="h-10 flex-1 rounded-lg shadow-apple"
               onClick={() => {
                 setReplyMode('ai');
@@ -1470,14 +1483,18 @@ export function EmailDetail({
           </div>
         ) : (
           <>
-            {composerState === 'minimized' && replyMode === 'ai' && (
+            {composerState === 'minimized' && (replyMode === 'ai' || replyMode === 'template') && (
               <div className="flex h-12 items-center gap-3 px-4">
                 <span className="flex size-8 shrink-0 items-center justify-center rounded-md bg-primary/10 text-primary">
                   <Sparkles className="size-4" />
                 </span>
                 <div className="min-w-0 flex-1">
-                  <p className="truncate text-sm font-medium">AI 邮件助手</p>
-                  <p className="truncate text-xs text-muted-foreground">分析和回复内容已保留</p>
+                  <p className="truncate text-sm font-medium">
+                    {replyMode === 'template' ? 'AI 模板起草' : 'AI 邮件助手'}
+                  </p>
+                  <p className="truncate text-xs text-muted-foreground">
+                    {replyMode === 'template' ? '模板、输入和草稿内容已保留' : '分析和回复内容已保留'}
+                  </p>
                 </div>
                 <Button
                   variant="ghost"
@@ -1502,15 +1519,25 @@ export function EmailDetail({
               </div>
             )}
             <div className={composerState === 'minimized' ? 'hidden' : 'h-full min-h-0'}>
-              <EmailComposer
-                key={replyMode}
-                thread={thread}
-                mode={replyMode}
-                onMinimize={replyMode === 'ai' ? () => setComposerState('minimized') : undefined}
-                onClose={() => setComposerState('closed')}
-                initialMessage={replyMode === 'compose' ? savedReplyDraft : undefined}
-                onDraftSaved={setSavedReplyDraft}
-              />
+              {replyMode === 'template' ? (
+                <AITemplateReplyComposer
+                  key={`template-${thread.id}`}
+                  thread={thread}
+                  onMinimize={() => setComposerState('minimized')}
+                  onClose={() => setComposerState('closed')}
+                  onDraftSaved={setSavedReplyDraft}
+                />
+              ) : (
+                <EmailComposer
+                  key={replyMode}
+                  thread={thread}
+                  mode={replyMode}
+                  onMinimize={replyMode === 'ai' ? () => setComposerState('minimized') : undefined}
+                  onClose={() => setComposerState('closed')}
+                  initialMessage={replyMode === 'compose' ? savedReplyDraft : undefined}
+                  onDraftSaved={setSavedReplyDraft}
+                />
+              )}
             </div>
           </>
         )}

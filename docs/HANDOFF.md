@@ -2,10 +2,10 @@
 
 > **唯一现役交接版本**
 >
-> 更新时间：2026-08-05
+> 更新时间：2026-08-08
 >
-> 当前已提交基线：`main` / `47884c2`（优化多处细节），与 `origin/main` 一致。
-> 本次洁癖收尾开始前主工作区干净；收尾仅修改 `README.md` 和本文件，不提交代码。
+> 当前已提交基线：`main` / `dd26e59`（新增账户名字备注管理），与 `origin/main` 一致。
+> 本次洁癖收尾开始前业务代码工作区干净；收尾只同步 `.env.example`、`README.md` 和本文件，不提交代码。
 >
 > 根目录 `HANDOFF.md`、`PROJECT_HANDOFF.md`、`TODO.md` 与 `docs/AI_HANDOFF.md`
 > 仅为历史入口，不代表当前代码状态或优先级。
@@ -35,6 +35,18 @@
 - 合作项目：`src/components/cooperation-projects-page.tsx`、`src/lib/cooperation-projects.ts`
 - 飞书：`src/lib/feishu-record-index.ts`、`feishu-batch.ts`、`feishu-mapping.ts`
 - 设置：`src/components/settings-panel.tsx`、`gmail-signature-settings.tsx`
+- 账号与权限：`src/components/auth-provider.tsx`、`admin-accounts-panel.tsx`、`src/app/api/account/**`、`src/app/api/admin/accounts/route.ts`
+
+### 账号管理与完全隔离
+
+- 使用 Supabase Auth 登录，唯一主管理员由服务端 `APP_ADMIN_USER_ID` 指定；管理员不能在页面转让或新增管理员。
+- 管理员可手动创建账号、填写或修改姓名备注、停用、恢复和重置临时密码；不发送邀请邮件，也不提供永久删除。
+- 新账号及被重置密码的账号必须先修改临时密码；未完成改密或已停用账号不能访问业务数据。
+- `account_profiles` 保存账号元数据，`user_data` 以 `user_id + data_key` 保存账号业务数据；设置、产品、红人开发及用户密钥均由 RLS 限制为当前正常账号。
+- 管理员页面只读取账号元数据，不能读取成员密码、业务数据、Gmail 内容、飞书授权或密钥。
+- Gmail、飞书、AI/YouTube 密钥与缓存均绑定当前账号；同一浏览器切换账号不会复用其他账号的资料或授权。
+- 账号状态检查已区分明确停用/未开通/会话失效和临时网络或服务异常。临时异常保留同一账号已加载的工作台并允许重试，不再自动当作账号停用退出。
+- 账号管理依赖 `20260806_account_management.sql`、`20260807_account_admin_permissions.sql`、`SUPABASE_SECRET_KEY` 和 `APP_ADMIN_USER_ID`；Secret Key 仅允许服务端使用。
 
 ## 2. 当前已实现能力
 
@@ -73,10 +85,15 @@
 
 ### 每日待办与工作日历
 
-- 手动任务支持标题、放大描述、优先级、默认当日截止日期、截止时间、编辑、删除、完成和恢复。
-- 今日 Gmail 来信会匹配资源库红人、显示频道头像，并使用 AI 生成一句话中文摘要。
-- Gmail 来信与手动任务共用待完成/已完成生命周期；完成后移到下方，撤销后恢复。
-- Gmail 完成状态仅按当日消息保存在本地，不修改 Gmail 已读状态或飞书数据。
+- 手动任务支持标题、放大描述、优先级、默认当日截止日期、截止时间、编辑、删除、完成和恢复；高密度行布局可在一屏显示更多任务。
+- 待办分为“待完成、今日已完成、历史已完成”三组；历史组默认折叠，已完成任务可以恢复，未手动完成的任务持续保留。
+- Gmail 任务查询收件箱最近三天活跃线程，排除推广/社交、本人发信、自动回复、退信及 Mailsuite/Mailtrack 通知；每个线程只保留最新外部来信，再严格校验近 72 小时和飞书红人联系邮箱匹配。
+- Gmail 任务会匹配资源库红人、显示频道头像并使用 AI 生成一句话中文摘要；完成状态不修改 Gmail 已读状态或飞书数据，新外部来信晚于上次完成时间时会重新进入待完成。
+- Gmail 任务、摘要和完成记录通过当前账号的 `user_data` 保存，不与其他账号共享。
+- 工作日历同时展示手动日程、未完成待办和飞书合作项目六类只读节点：确认合作、发货、到货、拍摄完成、预计上线、实际上线。
+- 合作节点按需读取，普通进入复用 60 秒飞书缓存，支持手动刷新；失败只提示错误，不影响原有日程和待办。
+- 月历单格最多展示 2 条合作节点，超出显示“还有 N 项”；预计上线已过期且缺少实际上线日期时显示红色。
+- 点击合作节点可切换到合作项目并自动打开对应详情；工作日历不修改合作节点，也不改变原有飞书写回流程。
 - 日期构造使用本地日期工具，避免 UTC 转换导致工作日历偏移一天。
 
 ## 3. 外部写入与数据边界
@@ -92,14 +109,15 @@
 
 | 事实面 | 状态 | 当前证据 |
 | --- | --- | --- |
-| 代码基线 | verified-current | `main` / `47884c2`，与 `origin/main` 对齐 |
-| TypeScript | changed-and-verified | 2026-08-05：`tsc -p tsconfig.json --noEmit` 通过 |
-| ESLint | changed-and-verified | 2026-08-05：全仓库 0 error、7 个既有 warning；相关修改文件 0 warning |
-| 纯逻辑测试 | pending | 当前共 48 个 `node:test` 用例；本机沙箱运行 `tsx` 时被 `esbuild spawn EPERM` 阻止，不能写成当前整套已通过 |
+| 代码基线 | verified-current | `main` / `dd26e59`，与 `origin/main` 对齐 |
+| TypeScript | changed-and-verified | 2026-08-08：`tsc -p tsconfig.json --noEmit` 通过 |
+| ESLint | changed-and-verified | 2026-08-08：全仓库 0 error、7 个既有 warning；账号相关修改文件 0 warning |
+| 纯逻辑测试 | pending | 账号失败分类的直接纯函数断言通过；整套 `node:test` 仍被本机 `esbuild spawn EPERM` 阻止，不能写成当前整套已通过 |
 | 生产构建 | pending | 本轮未运行；此前本机曾在 Next.js worker 阶段遇到 `spawn EPERM`/内存限制 |
-| 浏览器交互 | pending | 本轮未启动本地服务器做登录后交互验收 |
+| Supabase 账号迁移 | verified-current | 2026-08-07：用户在生产 SQL Editor 执行迁移，校验查询显示账号表、用户数据表、RLS、策略和检查函数均存在 |
+| 浏览器交互 | partially-verified | 用户已在生产页面确认主管理员登录和账号列表可读取；`dd26e59` 的姓名备注及网络异常区分尚未做当前生产版本验收 |
 | Gmail/飞书真实写入 | pending | 本轮未发送邮件、未创建草稿、未写飞书，也未做真实账号端到端验收 |
-| 部署 | out-of-scope | 未部署、未核对生产版本 |
+| 部署 | pending | `dd26e59` 已在 `origin/main`，但本轮未核对 Vercel 当前生产部署是否已指向该提交 |
 
 现有 7 个 ESLint warning：
 
@@ -114,11 +132,14 @@
 4. Gmail 今日来信和手动任务验证完成、撤销、排序、编辑及刷新后状态。
 5. 合作项目验证阶段多选、日期写回、复选框写回、后台邮件生成及切换项目不中断。
 6. 真实账号验收必须由用户在页面明确点击；不得用自动化测试创建 Gmail 草稿或写飞书。
+7. 用管理员创建成员 A、成员 B，分别完成首次改密；在同一浏览器切换三个账号，核对产品、设置、待办、日历、红人、Gmail、飞书及 AI Key 不串号。
+8. 在账号管理中修改主管理员和成员的姓名备注，刷新页面确认持久化；再验证停用、恢复、重置密码和首次改密门禁。
+9. 在浏览器断网或 Supabase 短暂不可用时，确认页面提示服务异常并保留已加载工作台；真实停用账号仍必须退出并拒绝访问。
 
 ## 6. Git、工作区与清场预览
 
-- 主工作区：`main...origin/main`，基线 `47884c2`；本次收尾前干净。
-- 本次洁癖只修改 `README.md` 与 `docs/HANDOFF.md`，不会提交、推送或部署。
+- 主工作区：`main...origin/main`，基线 `dd26e59`；本次收尾前业务代码干净。
+- 本次洁癖只修改 `.env.example`、`README.md` 与 `docs/HANDOFF.md`，不会提交、推送或部署。
 - 另有 detached worktree：`C:/Users/Admin/.codex/worktrees/347c/influencer-kanban-main`，
   HEAD `de11118`，其中有 4 个未提交文件。该 worktree 含唯一修改，绝对不能自动删除。
 - 根目录两个 `.codex-dev-server.*.log` 当前均为 0 字节且已被 Git 忽略，可列为删除候选；
