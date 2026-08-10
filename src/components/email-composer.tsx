@@ -371,7 +371,9 @@ export function EmailComposer({
       const startedAt = performance.now();
       let firstDeltaAt = 0;
       let streamedBody = '';
+      let streamedTranslation = '';
       let pendingBody = '';
+      let pendingTranslation = '';
       let lastUiUpdateAt = 0;
       let streamUiTimeout: number | undefined;
       let finalResult: AISuggestion | null = null;
@@ -385,7 +387,7 @@ export function EmailComposer({
         setReplyContent(visibleBody);
         setSuggestion({
           suggestedReply: visibleBody,
-          translatedReply: '',
+          translatedReply: pendingTranslation,
           tone: replyTone,
           keyPoints: [],
         });
@@ -438,6 +440,21 @@ export function EmailComposer({
             if (!firstDeltaAt) firstDeltaAt = performance.now();
             streamedBody += text;
             pendingBody = streamedBody;
+            const elapsed = performance.now() - lastUiUpdateAt;
+            if (elapsed >= 80) {
+              if (streamUiTimeout) window.clearTimeout(streamUiTimeout);
+              flushStreamUi();
+            } else if (!streamUiTimeout) {
+              streamUiTimeout = window.setTimeout(flushStreamUi, 80 - elapsed);
+            }
+            return;
+          }
+          if (eventName === 'translation_delta') {
+            const text = String(event.text || '');
+            if (!text) return;
+            streamedTranslation += text;
+            pendingTranslation = streamedTranslation;
+            setTranslationExpanded(true);
             const elapsed = performance.now() - lastUiUpdateAt;
             if (elapsed >= 80) {
               if (streamUiTimeout) window.clearTimeout(streamUiTimeout);

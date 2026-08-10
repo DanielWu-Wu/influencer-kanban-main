@@ -13,6 +13,7 @@ import {
   buildCompactGmailAIConversation,
   type GmailAIHistoryMessage,
 } from '@/lib/gmail-ai-reply';
+import { validateChineseTranslation } from '@/lib/ai-chinese-translation';
 import { normalizeAIReplyTemplate } from '@/lib/ai-reply-templates';
 import { sanitizeOutreachEmailBody } from '@/lib/outreach-draft-sanitizer';
 import { getRequestUser } from '@/lib/supabase/server';
@@ -972,10 +973,11 @@ ${replyTemplate.rules.map((rule, index) => `${index + 1}. ${rule}`).join('\n')}
 目标语言：${targetLangName}
 目标语气：${replyToneName}
 签名规则：只生成邮件正文和自然结束语，不得包含发件人姓名、职位、品牌名、网站链接、签名块或签名占位符。签名由系统统一追加。
+中文对照强制规则：translatedReply 必须逐段完整翻译为简体中文，禁止直接复制或返回外文原文；除人名、品牌名、型号、邮箱和链接外，不得保留完整外文句子。
 只返回以下 JSON，不要添加其他文字：
 {
   "suggestedReply": "使用目标语言撰写的不含签名的完整邮件正文",
-  "translatedReply": "完整中文对照",
+  "translatedReply": "必须完整翻译为简体中文，禁止复制或返回外文原文",
   "tone": "friendly",
   "keyPoints": ["本次回复落实的要点"],
   "missingInfo": ["缺失但建议补充的信息"],
@@ -1002,10 +1004,18 @@ ${userIdeas}
         ],
         getModelOptions(body, 0.55),
       ));
+      const suggestedReply = String(result.suggestedReply || '').trim();
+      const translatedReply = String(result.translatedReply || '').trim();
+      const translationValidation = validateChineseTranslation(suggestedReply, translatedReply);
+      if (!translationValidation.valid) {
+        throw new Error(`AI 没有返回合格的简体中文对照：${translationValidation.reason}`);
+      }
       return NextResponse.json({
         success: true,
         data: {
           ...result,
+          suggestedReply,
+          translatedReply,
           keyPoints: safeArray(result.keyPoints).map(String).filter(Boolean),
           missingInfo: safeArray(result.missingInfo).map(String).filter(Boolean),
           riskNotes: safeArray(result.riskNotes).map(String).filter(Boolean),
@@ -1026,10 +1036,11 @@ ${userIdeas}
 目标语言：${targetLangName}
 目标语气：${replyToneName}
 签名规则：只生成邮件正文和自然结束语，不得包含发件人姓名、职位、品牌名、网站链接、签名块或签名占位符。签名由系统根据 Gmail 设置统一追加。
+中文对照强制规则：translatedReply 必须逐段完整翻译为简体中文，禁止直接复制或返回外文原文；除人名、品牌名、型号、邮箱和链接外，不得保留完整外文句子。
 只返回以下 JSON，不要添加其他文字：
 {
   "suggestedReply": "使用目标语言撰写的不含签名的完整邮件正文",
-  "translatedReply": "中文对照",
+  "translatedReply": "必须完整翻译为简体中文，禁止复制或返回外文原文",
   "tone": "friendly",
   "keyPoints": ["本次回复落实的要点"]
 }`,
@@ -1060,13 +1071,22 @@ ${userIdeas}
       ],
       getModelOptions(body, 0.55),
     ));
+    const suggestedReply = String(result.suggestedReply || '').trim();
+    const translatedReply = String(result.translatedReply || '').trim();
+    const translationValidation = validateChineseTranslation(suggestedReply, translatedReply);
+    if (!translationValidation.valid) {
+      throw new Error(`AI 没有返回合格的简体中文对照：${translationValidation.reason}`);
+    }
     console.info('[Gmail AI draft fallback timing]', {
       messages: conversation.messageCount,
       inputCharacters: conversation.inputCharacters,
       compactCharacters: conversation.outputCharacters,
       modelMs: Math.round(performance.now() - modelStartedAt),
     });
-    return NextResponse.json({ success: true, data: result });
+    return NextResponse.json({
+      success: true,
+      data: { ...result, suggestedReply, translatedReply },
+    });
   } catch (error) {
     console.error('AI 邮件处理失败:', error);
     const errorMessage = error instanceof Error

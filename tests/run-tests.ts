@@ -20,3 +20,4 @@ import './prospect-email-selection.test';
 import './prompt-template-settings.test';
 import './follow-up-draft-workflow.test';
 import './ai-provider-config.test';
+import './ai-chinese-translation.test';

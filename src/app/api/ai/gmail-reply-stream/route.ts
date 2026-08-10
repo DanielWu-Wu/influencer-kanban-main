@@ -2,6 +2,10 @@ import { NextRequest, NextResponse } from 'next/server';
 import { DEFAULT_DRAFT_PROMPT } from '@/lib/ai-prompts';
 import { normalizeAIReplyTemplate } from '@/lib/ai-reply-templates';
 import {
+  extractStreamingJsonString,
+  validateChineseTranslation,
+} from '@/lib/ai-chinese-translation';
+import {
   buildCompactGmailAIConversation,
   selectRelevantGmailAIDraftMessages,
   type GmailAIHistoryMessage,
@@ -74,29 +78,6 @@ function withCustomInstructions(basePrompt: string, customPrompt: unknown) {
 --- 用户专属提示词 ---
 ${custom}
 --- 用户专属提示词结束 ---`;
-}
-
-async function invokeOpenAICompatibleApi(
-  messages: ChatMessage[],
-  options: ChatOptions,
-) {
-  const { apiUrl, apiKey, modelName, temperature } = resolveChatOptions(options);
-  const response = await fetch(apiUrl, {
-    method: 'POST',
-    headers: {
-      'Content-Type': 'application/json',
-      Authorization: `Bearer ${apiKey}`,
-    },
-    body: JSON.stringify({ model: modelName, messages, temperature }),
-  });
-  if (!response.ok) {
-    const errorText = await response.text();
-    throw new Error(`模型调用失败 (${response.status}): ${errorText}`);
-  }
-  const data = await response.json();
-  const content = data?.choices?.[0]?.message?.content ?? data?.content;
-  if (typeof content !== 'string') throw new Error('无法解析模型返回的数据。');
-  return content;
 }
 
 async function streamOpenAICompatibleApi(
@@ -275,11 +256,19 @@ ${userIdeas}
 
         send('stage', { stage: 'finalizing', label: templateReply ? '正在检查缺失信息和风险' : '正在补充中文对照和回复要点' });
         const metadataStartedAt = performance.now();
-        const metadata = parseJson(await invokeOpenAICompatibleApi(
+        let streamedMetadata = '';
+        let visibleTranslation = '';
+        const metadataText = await streamOpenAICompatibleApi(
           [
             {
               role: 'system',
-              content: `你是严谨的商务邮件整理助手。请把外语邮件准确翻译为简体中文，并提炼已经落实的回复要点。${replyTemplate ? `
+              content: `你是严谨的商务邮件翻译与整理助手。请把外语邮件完整、准确地翻译为简体中文，并提炼已经落实的回复要点。
+
+translatedReply 的强制规则：
+1. 必须是外文邮件正文逐段对应的完整简体中文译文，不能遗漏正文内容。
+2. 禁止直接返回、复制或改写外文原文；除人名、品牌名、型号、邮箱和链接外，不得保留完整外文句子。
+3. translatedReply 必须作为 JSON 的第一个字段输出，字段值只能包含中文对照正文，不能包含解释、标签或 Markdown。
+4. keyPoints、missingInfo 和 riskNotes 也必须使用简体中文。${replyTemplate ? `
 同时根据以下模板核对原始输入中缺少的关键信息，以及草稿里仍需人工确认的事实风险。
 建议核对的信息：${replyTemplate.requiredInfo.join('；') || '无'}
 模板规则：${replyTemplate.rules.join('；')}
@@ -301,9 +290,28 @@ ${suggestedReply}`,
             },
           ],
           getModelOptions(body, 0.25),
-        ));
+          (delta) => {
+            streamedMetadata += delta;
+            const partial = extractStreamingJsonString(streamedMetadata, 'translatedReply');
+            if (!partial.found || !partial.value.startsWith(visibleTranslation)) return;
+            const validation = validateChineseTranslation(suggestedReply, partial.value);
+            if (!validation.valid) return;
+            const nextDelta = partial.value.slice(visibleTranslation.length);
+            if (!nextDelta) return;
+            visibleTranslation = partial.value;
+            send('translation_delta', { text: nextDelta });
+          },
+        );
+        const metadata = parseJson(metadataText);
         const translatedReply = String(metadata.translatedReply || '').trim();
-        if (!translatedReply) throw new Error('AI 没有返回可用的中文对照。');
+        const translationValidation = validateChineseTranslation(suggestedReply, translatedReply);
+        if (!translationValidation.valid) {
+          throw new Error(`AI 没有返回合格的简体中文对照：${translationValidation.reason}`);
+        }
+        if (translatedReply.startsWith(visibleTranslation)) {
+          const remainingTranslation = translatedReply.slice(visibleTranslation.length);
+          if (remainingTranslation) send('translation_delta', { text: remainingTranslation });
+        }
 
         const totalMs = performance.now() - startedAt;
         console.info('[Gmail AI reply stream timing]', {
