@@ -1,7 +1,7 @@
 'use client';
 
 import { useEffect, useMemo, useState } from 'react';
-import { Copy, FileText, Pencil, Plus, Trash2 } from 'lucide-react';
+import { FilePenLine, FileText, Pencil, Plus, Trash2 } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import {
   Dialog,
@@ -145,7 +145,7 @@ export function AIReplyTemplateManager({
         <DialogHeader>
           <DialogTitle>管理 AI 回复模板</DialogTitle>
           <DialogDescription>
-            内置模板不可直接修改。你可以复制后调整，个人模板仅保存在当前账号。
+            内置模板不可直接修改。点击编辑图标可创建个人版本后调整，个人模板仅保存在当前账号。
           </DialogDescription>
         </DialogHeader>
 
@@ -238,8 +238,14 @@ export function AIReplyTemplateManager({
                       <p className="mt-1 text-sm leading-5 text-muted-foreground">{template.description}</p>
                     </div>
                     <div className="flex shrink-0 items-center gap-1">
-                      <Button variant="ghost" size="icon" title="复制模板" onClick={() => startCreate(template)}>
-                        <Copy />
+                      <Button
+                        variant="ghost"
+                        size="icon"
+                        title={builtIn ? '基于此模板创建个人版本' : '基于此模板新建个人版本'}
+                        aria-label={builtIn ? `基于“${template.name}”创建个人版本` : `基于“${template.name}”新建个人版本`}
+                        onClick={() => startCreate(template)}
+                      >
+                        <FilePenLine />
                       </Button>
                       {!builtIn && (
                         <>

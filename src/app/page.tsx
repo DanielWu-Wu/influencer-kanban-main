@@ -45,7 +45,7 @@ import { ReminderPanel } from '@/components/reminder-panel';
 import { SettingsPanel } from '@/components/settings-panel';
 import { TodoBoard } from '@/components/todo-board';
 import { WorkCalendar } from '@/components/work-calendar';
-import { GmailPage } from '@/components/gmail-page';
+import { GmailPage, type GmailThreadOpenRequest } from '@/components/gmail-page';
 import { CreatorProspectingPage } from '@/components/creator-prospecting-page';
 import { useAuth } from '@/components/auth-provider';
 import { useDailyGmailTodos } from '@/lib/use-daily-gmail-todos';
@@ -123,6 +123,7 @@ export default function DashboardPage() {
   } = useAuth();
   const [currentView, setCurrentView] = useState<View>('todo');
   const [gmailHasMounted, setGmailHasMounted] = useState(false);
+  const [gmailThreadOpenRequest, setGmailThreadOpenRequest] = useState<GmailThreadOpenRequest>();
   const [cooperationHasMounted, setCooperationHasMounted] = useState(false);
   const [influencerListHasMounted, setInfluencerListHasMounted] = useState(false);
   const [openCooperationProjectId, setOpenCooperationProjectId] = useState<string>();
@@ -204,6 +205,13 @@ export default function DashboardPage() {
   const handleOpenCooperationProject = useCallback((projectId: string) => {
     setOpenCooperationProjectId(projectId);
     setCurrentView('kanban');
+  }, []);
+  const handleOpenGmailThread = useCallback((threadId: string) => {
+    setGmailThreadOpenRequest((current) => ({
+      threadId,
+      requestId: (current?.requestId || 0) + 1,
+    }));
+    setCurrentView('gmail');
   }, []);
   const handleOpenCooperationProjectHandled = useCallback(() => {
     setOpenCooperationProjectId(undefined);
@@ -629,7 +637,7 @@ export default function DashboardPage() {
                 gmailRefreshing={dailyGmail.refreshing}
                 gmailError={dailyGmail.error}
                 onRefreshGmail={dailyGmail.refresh}
-                onOpenGmail={() => setCurrentView('gmail')}
+                onOpenGmail={handleOpenGmailThread}
                 onToggleGmail={dailyGmail.toggleCompleted}
               />
             </div>
@@ -665,7 +673,10 @@ export default function DashboardPage() {
                 ? 'min-h-0 flex-1 overflow-hidden rounded-xl'
                 : 'hidden'}
             >
-              <GmailPage active={currentView === 'gmail'} />
+              <GmailPage
+                active={currentView === 'gmail'}
+                openThreadRequest={gmailThreadOpenRequest}
+              />
             </div>
           )}
         </main>

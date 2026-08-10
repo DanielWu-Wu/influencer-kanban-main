@@ -57,6 +57,7 @@ const GMAIL_AUTO_REFRESH_MS = 60_000;
 const GMAIL_CACHE_STALE_MS = 60_000;
 const GMAIL_THREAD_DETAIL_CACHE_MS = 5 * 60_000;
 const GMAIL_THREAD_PREFETCH_DELAY_MS = 180;
+const GMAIL_SEARCH_DEBOUNCE_MS = 400;
 const SUBJECT_TRANSLATION_BATCH_SIZE = 12;
 
 type GmailThreadLoadState = {
@@ -76,6 +77,7 @@ interface GmailInboxProps {
   category: GmailCategory;
   refreshKey?: number;
   compact?: boolean;
+  openThreadRequest?: { threadId: string; requestId: number };
 }
 
 type GmailThreadDetailCacheEntry = {
@@ -546,17 +548,18 @@ function cacheThreadDetail(thread: GmailThread, cacheKey = gmailThreadCacheKey(t
   });
 }
 
-async function fetchThreadDetail(thread: GmailThread, accessToken: string) {
-  const cacheKey = gmailThreadCacheKey(thread.id);
-  const cached = readCachedThreadDetail(thread);
-  if (cached) return cached;
+async function fetchThreadDetailById(threadId: string, accessToken: string) {
+  const cacheKey = gmailThreadCacheKey(threadId);
+  const cached = gmailThreadDetailCache.get(cacheKey);
+  if (cached && Date.now() - cached.fetchedAt < GMAIL_THREAD_DETAIL_CACHE_MS) return cached.thread;
+  if (cached) gmailThreadDetailCache.delete(cacheKey);
 
   const pending = gmailThreadDetailRequests.get(cacheKey);
   if (pending) return pending;
 
   const request = (async () => {
     const response = await fetchWithTimeout(
-      `https://gmail.googleapis.com/gmail/v1/users/me/threads/${thread.id}?format=full`,
+      `https://gmail.googleapis.com/gmail/v1/users/me/threads/${threadId}?format=full`,
       { headers: { Authorization: `Bearer ${accessToken}` } },
       20_000,
     );
@@ -583,6 +586,12 @@ async function fetchThreadDetail(thread: GmailThread, accessToken: string) {
   } finally {
     gmailThreadDetailRequests.delete(cacheKey);
   }
+}
+
+async function fetchThreadDetail(thread: GmailThread, accessToken: string) {
+  const cached = readCachedThreadDetail(thread);
+  if (cached) return cached;
+  return fetchThreadDetailById(thread.id, accessToken);
 }
 
 async function hydrateInlineAttachments(thread: GmailThread, accessToken: string) {
@@ -628,6 +637,7 @@ export function GmailInbox({
   category,
   refreshKey = 0,
   compact = true,
+  openThreadRequest,
 }: GmailInboxProps) {
   const { auth, connect, disconnect } = useGmailAuth();
   const { settings } = useSettings();
@@ -638,10 +648,13 @@ export function GmailInbox({
   const avatarPrefetchRunRef = useRef(0);
   const openingThreadRef = useRef<string | null>(null);
   const openingThreadRunRef = useRef(0);
+  const handledOpenThreadRequestRef = useRef(0);
+  const handleOpenThreadRef = useRef<(thread: GmailThread) => Promise<void>>(async () => undefined);
   const accountCacheScopeRef = useRef(getAccountCacheScope());
   const threadPrefetchTimerRef = useRef<number | null>(null);
   const manuallyPreservedUnreadThreadIdsRef = useRef<Set<string>>(new Set());
   const [threads, setThreads] = useState<GmailThread[]>([]);
+  const threadsRef = useRef(threads);
   const [loading, setLoading] = useState(false);
   const [translatingSubjects, setTranslatingSubjects] = useState(false);
   const [actionThreadId, setActionThreadId] = useState<string | null>(null);
@@ -649,18 +662,55 @@ export function GmailInbox({
   const [error, setError] = useState<string | null>(null);
   const [subjectTranslationError, setSubjectTranslationError] = useState<string | null>(null);
   const [searchQuery, setSearchQuery] = useState('');
+  const [debouncedSearchQuery, setDebouncedSearchQuery] = useState('');
   const [showUnreadOnly, setShowUnreadOnly] = useState(false);
   const [showTranslatedSubjects, setShowTranslatedSubjects] = useState(false);
   const [subjectTranslations, setSubjectTranslations] = useState<Record<string, string>>({});
   const [threadAvatars, setThreadAvatars] = useState<Record<string, ChannelAvatarState>>({});
   const [authProcessing, setAuthProcessing] = useState(false);
-  const paginationKey = `${mailbox}:${category}:${refreshKey}`;
+  const normalizedSearchQuery = debouncedSearchQuery.trim();
+  const isGlobalSearch = normalizedSearchQuery.length > 0;
+  const hasSearchInput = searchQuery.trim().length > 0;
+  const searchInputPending = searchQuery.trim() !== normalizedSearchQuery;
+  const gmailSearchQuery = isGlobalSearch && showUnreadOnly
+    ? `(${normalizedSearchQuery}) is:unread`
+    : normalizedSearchQuery;
+  const paginationKey = isGlobalSearch
+    ? `search:${gmailSearchQuery}:${refreshKey}`
+    : `${mailbox}:${category}:${refreshKey}`;
   const [activePaginationKey, setActivePaginationKey] = useState(paginationKey);
   const [pageTokens, setPageTokens] = useState<string[]>(['']);
   const [pageIndex, setPageIndex] = useState(0);
   const [nextPageToken, setNextPageToken] = useState<string | null>(null);
   const [lastSyncedAt, setLastSyncedAt] = useState<string | null>(null);
   const [normalUnreadCount, setNormalUnreadCount] = useState<number | null>(null);
+
+  useEffect(() => {
+    threadsRef.current = threads;
+  }, [threads]);
+
+  useEffect(() => {
+    const nextSearchQuery = searchQuery.trim();
+    if (!nextSearchQuery) {
+      setDebouncedSearchQuery('');
+      return undefined;
+    }
+
+    const timer = window.setTimeout(() => {
+      setDebouncedSearchQuery(nextSearchQuery);
+    }, GMAIL_SEARCH_DEBOUNCE_MS);
+    return () => window.clearTimeout(timer);
+  }, [searchQuery]);
+
+  const mailboxViewKey = `${mailbox}:${category}`;
+  const previousMailboxViewKeyRef = useRef(mailboxViewKey);
+  useEffect(() => {
+    if (previousMailboxViewKeyRef.current !== mailboxViewKey) {
+      setSearchQuery('');
+      setDebouncedSearchQuery('');
+    }
+    previousMailboxViewKeyRef.current = mailboxViewKey;
+  }, [mailboxViewKey]);
 
   useEffect(() => () => {
     if (threadPrefetchTimerRef.current !== null) {
@@ -669,6 +719,8 @@ export function GmailInbox({
   }, []);
 
   useEffect(() => {
+    latestFetchIdRef.current += 1;
+    activeFetchKeyRef.current = null;
     setActivePaginationKey(paginationKey);
     setPageTokens(['']);
     setPageIndex(0);
@@ -771,17 +823,21 @@ export function GmailInbox({
       let headers = { Authorization: `Bearer ${accessToken}` };
       const pageToken = pageTokens[pageIndex] || '';
       const params = new URLSearchParams({ maxResults: String(GMAIL_PAGE_SIZE) });
-      const requestLabelIds = [...MAILBOX_API_LABELS[mailbox]];
-      const categoryLabelId = mailbox === 'inbox' ? CATEGORY_LABEL_IDS[category] : undefined;
-      if (categoryLabelId) requestLabelIds.push(categoryLabelId);
-      requestLabelIds.forEach((label) => params.append('labelIds', label));
+      if (isGlobalSearch) {
+        params.set('q', gmailSearchQuery);
+      } else {
+        const requestLabelIds = [...MAILBOX_API_LABELS[mailbox]];
+        const categoryLabelId = mailbox === 'inbox' ? CATEGORY_LABEL_IDS[category] : undefined;
+        if (categoryLabelId) requestLabelIds.push(categoryLabelId);
+        requestLabelIds.forEach((label) => params.append('labelIds', label));
+      }
       if (pageToken) params.set('pageToken', pageToken);
 
       const unreadCountParams = new URLSearchParams({
         maxResults: '1',
         q: NORMAL_UNREAD_QUERY,
       });
-      const unreadCountRequest = mailbox === 'inbox' || mailbox === 'unread'
+      const unreadCountRequest = !isGlobalSearch && (mailbox === 'inbox' || mailbox === 'unread')
         ? fetchWithTimeout(
             `https://gmail.googleapis.com/gmail/v1/users/me/threads?${unreadCountParams.toString()}`,
             { headers },
@@ -813,7 +869,7 @@ export function GmailInbox({
               `https://gmail.googleapis.com/gmail/v1/users/me/threads?${params.toString()}`,
               { headers },
             ),
-            mailbox === 'inbox' || mailbox === 'unread'
+            !isGlobalSearch && (mailbox === 'inbox' || mailbox === 'unread')
               ? fetchWithTimeout(
                   `https://gmail.googleapis.com/gmail/v1/users/me/threads?${unreadCountParams.toString()}`,
                   { headers },
@@ -872,11 +928,15 @@ export function GmailInbox({
             .filter((thread): thread is Record<string, unknown> => Boolean(thread))
             .map((thread) => parseGmailThread(thread, accessToken, false)),
         );
-        const visibleBatch = parsedBatch.filter((thread) => shouldShowThreadInMailbox(thread, mailbox, category));
+        const visibleBatch = isGlobalSearch
+          ? parsedBatch
+          : parsedBatch.filter((thread) => shouldShowThreadInMailbox(thread, mailbox, category));
         if (fetchId !== latestFetchIdRef.current) return;
         nextThreads.push(...visibleBatch);
       }
-      setThreads(sortThreadsByLatest(nextThreads, mailbox));
+      setThreads(isGlobalSearch
+        ? [...nextThreads].sort((left, right) => getDateTimestamp(right.lastMessageDate) - getDateTimestamp(left.lastMessageDate))
+        : sortThreadsByLatest(nextThreads, mailbox));
       setLastSyncedAt(new Date().toISOString());
     } catch (caughtError) {
       if (fetchId === latestFetchIdRef.current) {
@@ -894,7 +954,9 @@ export function GmailInbox({
     activePaginationKey,
     auth?.accessToken,
     category,
+    gmailSearchQuery,
     getAccessToken,
+    isGlobalSearch,
     mailbox,
     pageIndex,
     pageTokens,
@@ -1316,6 +1378,38 @@ export function GmailInbox({
     }
   };
 
+  useEffect(() => {
+    handleOpenThreadRef.current = handleOpenThread;
+  });
+
+  useEffect(() => {
+    if (
+      !active
+      || !auth?.isConnected
+      || !openThreadRequest
+      || handledOpenThreadRequestRef.current === openThreadRequest.requestId
+    ) return;
+
+    const { threadId, requestId } = openThreadRequest;
+    handledOpenThreadRequestRef.current = requestId;
+    const listedThread = threadsRef.current.find((thread) => thread.id === threadId);
+    if (listedThread) {
+      void handleOpenThreadRef.current(listedThread);
+      return;
+    }
+
+    void getAccessToken()
+      .then((accessToken) => fetchThreadDetailById(threadId, accessToken))
+      .then((thread) => {
+        if (handledOpenThreadRequestRef.current !== requestId) return;
+        return handleOpenThreadRef.current(thread);
+      })
+      .catch((caughtError) => {
+        if (handledOpenThreadRequestRef.current !== requestId) return;
+        setError(caughtError instanceof Error ? caughtError.message : '打开邮件线程失败');
+      });
+  }, [active, auth?.isConnected, getAccessToken, openThreadRequest]);
+
   const translateThreadSubjects = useCallback(async (targetThreads: GmailThread[]) => {
     const missingThreads = targetThreads.filter((thread) => {
       const subject = repairTextEncoding(thread.subject || '').trim();
@@ -1394,17 +1488,12 @@ export function GmailInbox({
     subjectTranslations,
   ]);
 
-  const filteredThreads = sortThreadsByLatest(
-    threads.filter((thread) => {
-      const normalizedQuery = searchQuery.trim().toLowerCase();
-      const matchesSearch = !normalizedQuery
-        || thread.subject.toLowerCase().includes(normalizedQuery)
-        || thread.snippet.toLowerCase().includes(normalizedQuery)
-        || thread.messages.some((message) => message.from.toLowerCase().includes(normalizedQuery));
-      return matchesSearch && (!showUnreadOnly || thread.hasUnread);
-    }),
-    mailbox,
-  );
+  const visibleThreads = threads.filter((thread) => !showUnreadOnly || thread.hasUnread);
+  const filteredThreads = isGlobalSearch
+    ? [...visibleThreads].sort(
+        (left, right) => getDateTimestamp(right.lastMessageDate) - getDateTimestamp(left.lastMessageDate),
+      )
+    : sortThreadsByLatest(visibleThreads, mailbox);
 
   useEffect(() => {
     if (!showTranslatedSubjects || translatingSubjects) return;
@@ -1470,8 +1559,14 @@ export function GmailInbox({
       <div className="material-toolbar flex shrink-0 items-center justify-between border-b border-border/55 px-4 py-3">
         <div className="flex min-w-0 flex-col">
           <div className="flex min-w-0 items-center gap-2">
-            <h2 className="section-title truncate">{MAILBOX_LABELS[mailbox]}</h2>
-            {(mailbox === 'inbox' || mailbox === 'unread') && (
+            <h2 className="section-title truncate">
+              {hasSearchInput ? '全邮箱搜索' : MAILBOX_LABELS[mailbox]}
+            </h2>
+            {hasSearchInput ? (
+              <Badge variant="secondary" className="rounded-md bg-blue-50 text-blue-700">
+                全邮箱
+              </Badge>
+            ) : (mailbox === 'inbox' || mailbox === 'unread') && (
               <Badge variant="secondary" className="rounded-md bg-white/80">
                 {unreadBadgeCount} {'\u672a\u8bfb'}
               </Badge>
@@ -1509,7 +1604,7 @@ export function GmailInbox({
             className="h-9 w-9 rounded-lg hover:bg-white/70"
             title={'\u5237\u65b0'}
             onClick={fetchThreads}
-            disabled={loading}
+            disabled={loading || searchInputPending}
           >
             <RefreshCw className={`h-4 w-4 ${loading ? 'animate-spin' : ''}`} />
           </Button>
@@ -1520,12 +1615,17 @@ export function GmailInbox({
         <div className="relative">
           <Search className="absolute left-3 top-2.5 h-4 w-4 text-muted-foreground" />
           <Input
-            placeholder={'\u641c\u7d22\u90ae\u4ef6...'}
+            placeholder="搜索整个 Gmail（邮箱、主题或关键词）"
             value={searchQuery}
             onChange={(event) => setSearchQuery(event.target.value)}
             className="glass-control h-10 border-0 pl-9"
           />
         </div>
+        {hasSearchInput && (
+          <p className="mt-1.5 px-1 text-[10px] text-muted-foreground">
+            {searchInputPending ? '正在准备搜索…' : '正在搜索收件箱、已发送和归档邮件（不含垃圾邮件与垃圾箱）'}
+          </p>
+        )}
         {mailbox !== 'unread' && (
           <Button
             variant={showUnreadOnly ? 'secondary' : 'ghost'}
@@ -1538,7 +1638,7 @@ export function GmailInbox({
         )}
       </div>
 
-      {mailbox === 'inbox' && (
+      {mailbox === 'inbox' && !hasSearchInput && (
         <div className="material-toolbar grid shrink-0 grid-cols-3 border-b border-border/55">
           {CATEGORY_TABS.map(({ id, label, icon: Icon }) => (
             <button
@@ -1559,7 +1659,7 @@ export function GmailInbox({
       )}
 
       <ScrollArea className="min-h-0 flex-1">
-        {loading && threads.length === 0 ? (
+        {(loading && threads.length === 0) || searchInputPending ? (
           <div className="flex justify-center py-12">
             <Loader2 className="h-6 w-6 animate-spin text-muted-foreground" />
           </div>
@@ -1573,12 +1673,16 @@ export function GmailInbox({
           </div>
         ) : filteredThreads.length === 0 ? (
           <div className="p-8 text-center text-sm text-muted-foreground">
-            {searchQuery ? '\u6ca1\u6709\u627e\u5230\u5339\u914d\u7684\u90ae\u4ef6' : '\u8fd9\u91cc\u6682\u65f6\u6ca1\u6709\u90ae\u4ef6'}
+            {hasSearchInput
+              ? '整个 Gmail 中没有找到匹配邮件（不含垃圾邮件与垃圾箱）'
+              : '\u8fd9\u91cc\u6682\u65f6\u6ca1\u6709\u90ae\u4ef6'}
           </div>
         ) : (
           filteredThreads.map((thread) => {
             const latestMessage = thread.messages[thread.messages.length - 1];
-            const listMessage = getThreadListMessage(thread, mailbox);
+            const listMessage = isGlobalSearch
+              ? thread.messages[thread.messages.length - 1]
+              : getThreadListMessage(thread, mailbox);
             const contactMessage = getGmailThreadContact(thread, auth.email).message;
             const senderMessage = contactMessage || listMessage;
             const sender = senderMessage?.from?.split('<')[0]?.replaceAll('"', '').trim()
@@ -1744,7 +1848,8 @@ export function GmailInbox({
           上一页
         </Button>
         <div className="flex min-w-0 flex-col items-center text-center leading-tight">
-          <span>第 {pageIndex + 1} 页</span>
+          <span>{hasSearchInput ? '全邮箱搜索' : `第 ${pageIndex + 1} 页`}</span>
+          {hasSearchInput && <span className="text-[11px]">第 {pageIndex + 1} 页</span>}
           <span className="text-[11px]">每页最多 {GMAIL_PAGE_SIZE} 封</span>
         </div>
         <Button

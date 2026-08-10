@@ -198,7 +198,7 @@ export function useDailyGmailTodos(settings: AppSettings, active = true) {
 
       const nextTaskCache = Object.fromEntries(
         Object.entries(taskCacheRef.current)
-          .filter(([, task]) => isWithinDailyGmailWindow(task.date, now)),
+          .filter(([, task]) => Boolean(task.completedAt) || isWithinDailyGmailWindow(task.date, now)),
       ) as Record<string, StoredDailyGmailTask>;
       const pendingSummaryIds = new Set<string>();
       matched.forEach((item) => {

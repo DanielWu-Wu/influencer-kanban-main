@@ -23,7 +23,18 @@ const MAILBOXES: Array<{
 
 const DETAIL_TRANSITION_MS = 240;
 
-export function GmailPage({ active = true }: { active?: boolean }) {
+export type GmailThreadOpenRequest = {
+  threadId: string;
+  requestId: number;
+};
+
+export function GmailPage({
+  active = true,
+  openThreadRequest,
+}: {
+  active?: boolean;
+  openThreadRequest?: GmailThreadOpenRequest;
+}) {
   const [selectedThread, setSelectedThread] = useState<GmailThread | null>(null);
   const [mailbox, setMailbox] = useState<GmailMailbox>('inbox');
   const [category, setCategory] = useState<GmailCategory>('primary');
@@ -41,6 +52,14 @@ export function GmailPage({ active = true }: { active?: boolean }) {
   useEffect(() => {
     if (!active) setShowNewEmail(false);
   }, [active]);
+
+  useEffect(() => {
+    if (!active || !openThreadRequest) return;
+    setMailbox('inbox');
+    setCategory('primary');
+    setShowSettings(false);
+    setShowNewEmail(false);
+  }, [active, openThreadRequest]);
 
   useEffect(() => () => {
     if (closeDetailTimerRef.current !== null) {
@@ -196,6 +215,9 @@ export function GmailPage({ active = true }: { active?: boolean }) {
           compact={detailExpanded}
           onCategoryChange={setCategory}
           updatedThread={selectedThread}
+          openThreadRequest={mailbox === 'inbox' && category === 'primary' && !showSettings
+            ? openThreadRequest
+            : undefined}
           onThreadUpdated={(thread) => {
             if (selectedThread?.id === thread.id) setSelectedThread(thread);
           }}

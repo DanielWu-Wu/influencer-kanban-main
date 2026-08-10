@@ -28,7 +28,7 @@ interface TodoBoardProps {
   gmailRefreshing: boolean;
   gmailError: string;
   onRefreshGmail: () => void;
-  onOpenGmail: () => void;
+  onOpenGmail: (threadId: string) => void;
   onToggleGmail: (messageId: string) => void;
 }
 
@@ -234,12 +234,20 @@ export function TodoBoard({
           </button>
           <YouTubeChannelAvatar avatar={entry.item.avatar} fallback={entry.item.channelName} label={entry.item.channelName} size="sm" />
           <div className="min-w-0 flex-1">
-            <div className="flex items-center gap-2"><p className="truncate text-xs line-through">{entry.item.channelName}</p><Badge variant="outline" className="h-5 shrink-0 px-1.5 text-[9px]">Gmail</Badge><p className="min-w-0 flex-1 truncate text-[10px] line-through">{entry.item.subject || entry.item.summary}</p></div>
+            <div className="flex min-w-0 items-center gap-2">
+              <p className="truncate text-xs line-through">{entry.item.channelName}</p>
+              <Badge variant="outline" className="h-5 shrink-0 px-1.5 text-[9px]">Gmail</Badge>
+              <span className="min-w-0 flex-1 truncate text-[10px] line-through">{entry.item.subject || '无主题'}</span>
+            </div>
+            <p className="mt-1 truncate text-[11px] text-slate-500 line-through">
+              {entry.item.summary}
+              {entry.item.summaryPending && <span className="ml-2 text-[10px] text-blue-500">AI 正在优化摘要…</span>}
+            </p>
           </div>
           {showCompletedDate && entry.item.completedAt && (
             <span className="shrink-0 text-[10px]">{new Date(entry.item.completedAt).toLocaleDateString('zh-CN', { month: 'short', day: 'numeric' })}</span>
           )}
-          <button type="button" onClick={onOpenGmail} className="flex h-7 w-7 shrink-0 items-center justify-center rounded-md text-blue-600 hover:bg-blue-50" aria-label={`查看“${entry.item.channelName}”的邮件`} title="查看邮件"><ArrowRight className="h-3.5 w-3.5" /></button>
+          <button type="button" onClick={() => onOpenGmail(entry.item.threadId)} className="flex h-7 w-7 shrink-0 items-center justify-center rounded-md text-blue-600 hover:bg-blue-50" aria-label={`查看“${entry.item.channelName}”的邮件线程`} title="打开该邮件线程"><ArrowRight className="h-3.5 w-3.5" /></button>
         </div>
       ))}
     </div>
@@ -374,7 +382,7 @@ export function TodoBoard({
                   <p className="mt-1 truncate text-[11px] text-slate-600">{entry.item.summary}{entry.item.summaryPending && <span className="ml-2 text-[10px] text-blue-500">AI 正在优化摘要…</span>}</p>
                 </div>
                 <span className="w-12 shrink-0 text-right text-[10px] text-muted-foreground">{new Date(entry.item.date).toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit' })}</span>
-                <button type="button" onClick={onOpenGmail} className="flex h-7 w-7 shrink-0 items-center justify-center rounded-md text-blue-600 opacity-45 transition-[opacity,background-color] duration-150 ease-out hover:bg-blue-50 group-hover:opacity-100 group-focus-within:opacity-100 motion-reduce:transition-none" aria-label={`查看“${entry.item.channelName}”的邮件`} title="查看邮件">
+                <button type="button" onClick={() => onOpenGmail(entry.item.threadId)} className="flex h-7 w-7 shrink-0 items-center justify-center rounded-md text-blue-600 opacity-45 transition-[opacity,background-color] duration-150 ease-out hover:bg-blue-50 group-hover:opacity-100 group-focus-within:opacity-100 motion-reduce:transition-none" aria-label={`查看“${entry.item.channelName}”的邮件线程`} title="打开该邮件线程">
                   <ArrowRight className="h-3.5 w-3.5" />
                 </button>
               </article>

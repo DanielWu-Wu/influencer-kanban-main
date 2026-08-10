@@ -110,21 +110,59 @@ function normalizedSignatureLines(value: string) {
   return plainValue
     .replace(/\[([^\]\n]+)\]\(https?:\/\/[^\s)]+\)/g, '$1')
     .split(/\r?\n/)
-    .map((line) => line.trim().replace(/\s+/g, ' ').toLowerCase())
+    .map((line) => line
+      .trim()
+      .replace(/^[*_~`]+|[*_~`]+$/g, '')
+      .replace(/\s+/g, ' ')
+      .toLocaleLowerCase())
     .filter(Boolean);
+}
+
+const SIGN_OFF_LINE_PATTERN = /^(?:(?:best|kind|warm)?\s*(?:regards?|wishes)|sincerely|cheers|thanks|thank you|cordially|saludos?|un cordial saludo|atentamente|cordialmente|cordialement|bien cordialement|mit freundlichen grü(?:ß|ss)en|viele grü(?:ß|ss)e|met vriendelijke groet|vriendelijke groeten|pozdrawiam|z poważaniem|com os melhores cumprimentos|atenciosamente)[,，.!！\s]*$/iu;
+
+function looksLikeSignatureIdentityLine(line: string) {
+  if (!line || line.length > 80 || SIGN_OFF_LINE_PATTERN.test(line)) return false;
+  if (/@|https?:|www\.|\d|[|\\/]/iu.test(line)) return false;
+  const words = line.split(/\s+/).filter(Boolean);
+  return words.length > 0
+    && words.length <= 5
+    && words.every((word) => /^[\p{L}][\p{L}.'’\-]*$/u.test(word));
+}
+
+function signaturePrefixVariants(signatureLines: string[]) {
+  const variants: string[][] = [signatureLines];
+  const identityIndex = signatureLines.findIndex(looksLikeSignatureIdentityLine);
+  if (identityIndex < 0) return variants;
+
+  const identityAndFollowingLines = signatureLines.slice(identityIndex);
+  variants.push(identityAndFollowingLines);
+  const identityParts = identityAndFollowingLines[0].split(/\s+/).filter(Boolean);
+  for (let count = 1; count < identityParts.length; count += 1) {
+    variants.push([
+      identityParts.slice(0, count).join(' '),
+      ...identityAndFollowingLines.slice(1),
+    ]);
+  }
+  return variants;
 }
 
 function trailingSignatureMatchCount(content: string, signature: string) {
   const bodyLines = normalizedSignatureLines(content);
   const signatureLines = normalizedSignatureLines(signature);
-  const maxMatch = Math.min(bodyLines.length, signatureLines.length);
+  let bestMatch = 0;
 
-  for (let count = maxMatch; count >= 1; count -= 1) {
-    const bodyTail = bodyLines.slice(-count);
-    const signaturePrefix = signatureLines.slice(0, count);
-    if (bodyTail.every((line, index) => line === signaturePrefix[index])) return count;
-  }
-  return 0;
+  signaturePrefixVariants(signatureLines).forEach((signatureVariant) => {
+    const maxMatch = Math.min(bodyLines.length, signatureVariant.length);
+    for (let count = maxMatch; count > bestMatch; count -= 1) {
+      const bodyTail = bodyLines.slice(-count);
+      const signaturePrefix = signatureVariant.slice(0, count);
+      if (bodyTail.every((line, index) => line === signaturePrefix[index])) {
+        bestMatch = count;
+        break;
+      }
+    }
+  });
+  return bestMatch;
 }
 
 export function stripConfiguredEmailSignature(content: string, signature?: string) {

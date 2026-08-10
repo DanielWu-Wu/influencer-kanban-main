@@ -117,6 +117,11 @@ export function AITemplateReplyComposer({
   const [replyTone, setReplyTone] = useState<ReplyTone>('friendly');
   const [replyContent, setReplyContent] = useState('');
   const [suggestion, setSuggestion] = useState<TemplateSuggestion | null>(null);
+  const [editedChineseReply, setEditedChineseReply] = useState('');
+  const [chineseDirty, setChineseDirty] = useState(false);
+  const [translatingChinese, setTranslatingChinese] = useState(false);
+  const [translationUpdated, setTranslationUpdated] = useState(false);
+  const [syncedTargetLang, setSyncedTargetLang] = useState('');
   const [loading, setLoading] = useState(false);
   const [stage, setStage] = useState('');
   const [error, setError] = useState('');
@@ -125,6 +130,7 @@ export function AITemplateReplyComposer({
   const [translationOpen, setTranslationOpen] = useState(true);
   const [managerOpen, setManagerOpen] = useState(false);
   const generationRef = useRef<AbortController | null>(null);
+  const chineseTranslationRef = useRef<AbortController | null>(null);
 
   const threadMessages = useMemo(() => buildThreadMessages(thread), [thread]);
   const threadContact = useMemo(
@@ -136,6 +142,8 @@ export function AITemplateReplyComposer({
     .find((message) => !isIgnoredGmailThreadSender(message.from));
   const recipientEmail = threadContact.emails[0] || '';
   const languageName = LANGUAGE_OPTIONS.find(([code]) => code === targetLang)?.[1] || targetLang;
+  const targetLanguageChanged = Boolean(suggestion && syncedTargetLang && syncedTargetLang !== targetLang);
+  const translationOutOfSync = chineseDirty || targetLanguageChanged;
 
   useEffect(() => {
     const detected = detectEmailLanguage(externalMessage?.body || '');
@@ -147,7 +155,10 @@ export function AITemplateReplyComposer({
     if (selectedTemplate) setReplyTone(selectedTemplate.defaultTone);
   }, [selectedTemplate]);
 
-  useEffect(() => () => generationRef.current?.abort(), []);
+  useEffect(() => () => {
+    generationRef.current?.abort();
+    chineseTranslationRef.current?.abort();
+  }, []);
 
   const getAccessToken = async () => {
     if (!auth?.accessToken) throw new Error('请先连接 Gmail。');
@@ -211,11 +222,17 @@ export function AITemplateReplyComposer({
   const generate = async () => {
     if (!selectedTemplate || !userIdeas.trim() || settingsLoading) return;
     generationRef.current?.abort();
+    chineseTranslationRef.current?.abort();
     const controller = new AbortController();
     generationRef.current = controller;
     const previousContent = replyContent;
     const previousSuggestion = suggestion;
+    const previousChineseReply = editedChineseReply;
+    const previousChineseDirty = chineseDirty;
+    const previousTranslationUpdated = translationUpdated;
+    const previousSyncedTargetLang = syncedTargetLang;
     setLoading(true);
+    setTranslatingChinese(false);
     setDraftSaved(false);
     setError('');
     setStage('正在读取最近邮件上下文');
@@ -293,11 +310,19 @@ export function AITemplateReplyComposer({
         riskNotes: finalResult.riskNotes || [],
       });
       setReplyContent(cleanReply);
+      setEditedChineseReply(finalResult.translatedReply || '');
+      setChineseDirty(false);
+      setTranslationUpdated(false);
+      setSyncedTargetLang(targetLang);
       setTranslationOpen(true);
     } catch (generationError) {
       if (controller.signal.aborted) return;
       setReplyContent(previousContent);
       setSuggestion(previousSuggestion);
+      setEditedChineseReply(previousChineseReply);
+      setChineseDirty(previousChineseDirty);
+      setTranslationUpdated(previousTranslationUpdated);
+      setSyncedTargetLang(previousSyncedTargetLang);
       setError(generationError instanceof Error ? generationError.message : 'AI 生成失败，请稍后重试。');
     } finally {
       if (generationRef.current === controller) generationRef.current = null;
@@ -306,8 +331,80 @@ export function AITemplateReplyComposer({
     }
   };
 
+  const updateDraftFromChinese = async () => {
+    const confirmedChineseReply = editedChineseReply.trim();
+    if (!confirmedChineseReply || !suggestion || !translationOutOfSync) return;
+    chineseTranslationRef.current?.abort();
+    const controller = new AbortController();
+    chineseTranslationRef.current = controller;
+    setTranslatingChinese(true);
+    setTranslationUpdated(false);
+    setDraftSaved(false);
+    setError('');
+
+    try {
+      const response = await fetch('/api/ai', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        signal: controller.signal,
+        body: JSON.stringify({
+          action: 'translateEditedReply',
+          editedChineseReply: confirmedChineseReply,
+          targetLang,
+          targetLangName: languageName,
+          modelProvider: settings.modelProvider,
+          customApiUrl: settings.customApiUrl,
+          customApiKey: settings.customApiKey,
+          customModelName: settings.customModelName,
+        }),
+      });
+      const result = await response.json().catch(() => ({})) as {
+        success?: boolean;
+        data?: { suggestedReply?: string };
+        error?: string;
+      };
+      if (!response.ok || !result.success) {
+        throw new Error(result.error || '根据中文更新外文草稿失败。');
+      }
+      const translatedReply = stripConfiguredEmailSignature(
+        String(result.data?.suggestedReply || ''),
+        settings.emailSignature,
+      );
+      if (!translatedReply.trim()) throw new Error('AI 没有返回可用的外文正文。');
+      if (controller.signal.aborted || chineseTranslationRef.current !== controller) return;
+
+      setReplyContent(translatedReply);
+      setSuggestion((current) => current ? {
+        ...current,
+        suggestedReply: translatedReply,
+        translatedReply: confirmedChineseReply,
+        keyPoints: [],
+        missingInfo: [],
+        riskNotes: [],
+      } : current);
+      setEditedChineseReply(confirmedChineseReply);
+      setChineseDirty(false);
+      setTranslationUpdated(true);
+      setSyncedTargetLang(targetLang);
+    } catch (translationError) {
+      if (controller.signal.aborted) return;
+      setError(translationError instanceof Error
+        ? translationError.message
+        : '根据中文更新外文草稿失败。');
+    } finally {
+      if (chineseTranslationRef.current === controller) {
+        chineseTranslationRef.current = null;
+        setTranslatingChinese(false);
+      }
+    }
+  };
+
   const saveGmailDraft = async () => {
     if (isEmailContentEmpty(replyContent)) return;
+    if (translationOutOfSync) {
+      setError('中文内容已修改，请先点击“根据中文更新外文”，再保存 Gmail 草稿。');
+      return;
+    }
     if (!recipientEmail) {
       setError('未找到可用的红人邮箱；系统通知邮箱不会作为收件人。');
       return;
@@ -384,10 +481,15 @@ export function AITemplateReplyComposer({
               </div>
               <Select
                 value={selectedTemplate?.id}
+                disabled={loading || translatingChinese}
                 onValueChange={(value) => {
                   setSelectedTemplateId(value);
                   setSuggestion(null);
                   setReplyContent('');
+                  setEditedChineseReply('');
+                  setChineseDirty(false);
+                  setTranslationUpdated(false);
+                  setSyncedTargetLang('');
                   setDraftSaved(false);
                 }}
               >
@@ -420,7 +522,17 @@ export function AITemplateReplyComposer({
                 className="min-h-32 resize-y"
               />
               <div className="mt-3 grid grid-cols-2 gap-2">
-                <Select value={targetLang} onValueChange={setTargetLang}>
+                <Select
+                  value={targetLang}
+                  disabled={loading || translatingChinese}
+                  onValueChange={(value) => {
+                    setTargetLang(value);
+                    if (suggestion) {
+                      setTranslationUpdated(false);
+                      setDraftSaved(false);
+                    }
+                  }}
+                >
                   <SelectTrigger className="w-full"><Languages /><SelectValue /></SelectTrigger>
                   <SelectContent>
                     {LANGUAGE_OPTIONS.map(([code, label]) => (
@@ -437,7 +549,7 @@ export function AITemplateReplyComposer({
                   </SelectContent>
                 </Select>
               </div>
-              <Button className="mt-3 w-full" disabled={!selectedTemplate || !userIdeas.trim() || loading || settingsLoading} onClick={generate}>
+              <Button className="mt-3 w-full" disabled={!selectedTemplate || !userIdeas.trim() || loading || translatingChinese || settingsLoading} onClick={generate}>
                 {loading ? <Loader2 className="animate-spin" /> : <Sparkles />}
                 {loading ? stage || '正在生成' : '按模板生成邮件'}
               </Button>
@@ -469,6 +581,7 @@ export function AITemplateReplyComposer({
                 value={replyContent}
                 onChange={(value) => {
                   setReplyContent(value);
+                  setTranslationUpdated(false);
                   setDraftSaved(false);
                 }}
                 placeholder="AI 邮件草稿"
@@ -510,13 +623,61 @@ export function AITemplateReplyComposer({
                 <div className="rounded-xl border bg-slate-50/60">
                   <CollapsibleTrigger asChild>
                     <Button variant="ghost" className="h-10 w-full justify-between rounded-xl px-3">
-                      <span>中文对照</span>
+                      <span>中文确认稿（可编辑）</span>
                       {translationOpen ? <ChevronUp /> : <ChevronDown />}
                     </Button>
                   </CollapsibleTrigger>
                   <CollapsibleContent>
-                    <div className="border-t px-3 py-3 text-sm leading-6 whitespace-pre-wrap text-muted-foreground">
-                      {suggestion.translatedReply}
+                    <div className="border-t bg-white">
+                      <div className="flex items-center justify-between gap-3 border-b px-3 py-2">
+                        <p className="text-xs text-muted-foreground">
+                          直接修改中文；确认后再更新为{languageName}，输入过程中不会调用 AI。
+                        </p>
+                        <Badge
+                          variant="outline"
+                          className={translationOutOfSync
+                            ? 'shrink-0 border-amber-200 bg-amber-50 text-amber-700'
+                            : translationUpdated
+                              ? 'shrink-0 border-emerald-200 bg-emerald-50 text-emerald-700'
+                              : 'shrink-0'}
+                        >
+                          {translationOutOfSync ? '待更新外文' : translationUpdated ? '外文已同步' : '中文对照'}
+                        </Badge>
+                      </div>
+                      <Textarea
+                        value={editedChineseReply}
+                        onChange={(event) => {
+                          setEditedChineseReply(event.target.value);
+                          setChineseDirty(event.target.value.trim() !== suggestion.translatedReply.trim());
+                          setTranslationUpdated(false);
+                          setDraftSaved(false);
+                        }}
+                        placeholder="修改中文邮件正文..."
+                        className="min-h-56 resize-y rounded-none border-0 px-3 py-3 text-sm leading-6 shadow-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-primary/20"
+                        disabled={translatingChinese}
+                      />
+                      <div className="flex flex-wrap items-center justify-between gap-3 border-t bg-slate-50/70 px-3 py-2.5">
+                        <p className={`text-xs ${translationOutOfSync ? 'text-amber-700' : 'text-muted-foreground'}`}>
+                          {targetLanguageChanged
+                            ? `目标语言已改为${languageName}；请更新外文后再保存 Gmail 草稿。`
+                            : chineseDirty
+                              ? '中文已修改；更新外文成功前不能保存 Gmail 草稿。'
+                            : translationUpdated
+                              ? `上方外文已按这份中文更新为${languageName}。`
+                              : '修改中文后，再由 AI 忠实翻译，不会重新决定商务内容。'}
+                        </p>
+                        <Button
+                          type="button"
+                          size="sm"
+                          disabled={!editedChineseReply.trim() || !translationOutOfSync || translatingChinese || loading}
+                          onClick={updateDraftFromChinese}
+                        >
+                          {translatingChinese
+                            ? <Loader2 className="animate-spin" />
+                            : <Languages />}
+                          {translatingChinese ? '正在翻译...' : '根据中文更新外文'}
+                        </Button>
+                      </div>
                     </div>
                   </CollapsibleContent>
                 </div>
@@ -536,10 +697,14 @@ export function AITemplateReplyComposer({
       <div className="flex shrink-0 items-center justify-between gap-3 border-t bg-white px-4 py-3">
         <p className="truncate text-xs text-muted-foreground">收件人：{recipientEmail || '未识别到有效邮箱'}</p>
         <div className="flex shrink-0 gap-2">
-          <Button variant="outline" disabled={!userIdeas.trim() || loading} onClick={generate}>
+          <Button variant="outline" disabled={!userIdeas.trim() || loading || translatingChinese} onClick={generate}>
             <RefreshCw />重新生成
           </Button>
-          <Button disabled={isEmailContentEmpty(replyContent) || savingDraft || loading || draftSaved} onClick={saveGmailDraft}>
+          <Button
+            disabled={isEmailContentEmpty(replyContent) || savingDraft || loading || translatingChinese || translationOutOfSync || draftSaved}
+            title={translationOutOfSync ? '请先根据中文更新外文' : undefined}
+            onClick={saveGmailDraft}
+          >
             {savingDraft ? <Loader2 className="animate-spin" /> : draftSaved ? <CheckCircle2 /> : <Save />}
             {draftSaved ? '已保存草稿' : '保存 Gmail 草稿'}
           </Button>
