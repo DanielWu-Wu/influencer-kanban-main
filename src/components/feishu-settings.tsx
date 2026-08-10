@@ -5,15 +5,19 @@ import {
   CheckCircle2,
   ChevronDown,
   ChevronUp,
+  Copy,
   Database,
   Eye,
+  ExternalLink,
   FileSpreadsheet,
+  KeyRound,
   LoaderCircle,
   LogOut,
   Plug,
   RefreshCw,
   Save,
   ShieldCheck,
+  Trash2,
   Wand2,
 } from 'lucide-react';
 import { Badge } from '@/components/ui/badge';
@@ -37,6 +41,8 @@ type ConnectionState = {
   configured: boolean;
   connected: boolean;
   name?: string;
+  credentialSource?: 'personal' | 'global';
+  appId?: string;
   error?: string;
 };
 
@@ -157,22 +163,36 @@ export function FeishuSettings({
     connected: false,
   });
   const [message, setMessage] = useState('');
+  const [appId, setAppId] = useState('');
+  const [appSecret, setAppSecret] = useState('');
+  const [editingCredentials, setEditingCredentials] = useState(false);
+  const [savingCredentials, setSavingCredentials] = useState(false);
+  const [callbackUrl, setCallbackUrl] = useState('');
+  const [copiedCallback, setCopiedCallback] = useState(false);
 
   useEffect(() => {
     const params = new URLSearchParams(window.location.search);
     const error = params.get('feishu_error');
     if (error) {
       const messages: Record<string, string> = {
-        missing_app_id: 'Vercel 尚未配置飞书 App ID。',
+        missing_app_id: '尚未配置飞书企业应用。',
+        missing_app_credentials: '请先保存你自己的飞书企业应用 App ID 和 App Secret。',
+        credential_error: '无法读取飞书应用密钥，请检查服务器加密配置或重新保存凭证。',
+        credentials_changed: '授权期间飞书应用凭证发生变化，请重新点击连接。',
+        authorization_expired: '本次飞书授权已超过 10 分钟，请重新点击连接。',
         invalid_state: '飞书授权校验失败，请重新连接。',
         no_code: '飞书没有返回授权码，请重新连接。',
-        callback_failed: '飞书授权回调失败，请检查 Vercel 配置。',
+        callback_failed: '飞书授权回调失败，请检查应用凭证、回调地址和权限配置。',
         access_denied: '你取消了飞书授权。',
       };
       setMessage(messages[error] || `飞书连接失败：${error}`);
     } else if (params.get('feishu_connected')) {
       setMessage('飞书账号已连接。请分别配置资源库、开发记录表和详细合作记录表。');
     }
+  }, []);
+
+  useEffect(() => {
+    setCallbackUrl(`${window.location.origin}/api/auth/feishu/callback`);
   }, []);
 
   useEffect(() => {
@@ -186,7 +206,12 @@ export function FeishuSettings({
           configured: Boolean(result.configured),
           connected: Boolean(result.connected),
           name: result.data?.name,
+          credentialSource: result.source,
+          appId: result.appId || result.data?.appId,
         });
+        if (typeof result.callbackUrl === 'string' && result.callbackUrl) {
+          setCallbackUrl(result.callbackUrl);
+        }
       } catch (error) {
         setConnection({
           loading: false,
@@ -203,6 +228,82 @@ export function FeishuSettings({
     await fetch('/api/auth/feishu/session', { method: 'DELETE' });
     setConnection((current) => ({ ...current, connected: false, name: undefined }));
     setMessage('飞书连接已断开。');
+  };
+
+  const saveCredentials = async () => {
+    if (!appId.trim() || !appSecret.trim()) {
+      setMessage('请完整填写 App ID 和 App Secret。');
+      return;
+    }
+    if (connection.connected && !window.confirm('更换应用凭证会断开当前飞书授权，需要重新连接。是否继续？')) {
+      return;
+    }
+    setSavingCredentials(true);
+    setMessage('');
+    try {
+      const response = await fetch('/api/secrets/feishu-app', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ appId: appId.trim(), appSecret: appSecret.trim() }),
+      });
+      const result = await response.json();
+      if (!response.ok) throw new Error(result.error || '保存飞书应用凭证失败。');
+      setConnection((current) => ({
+        ...current,
+        configured: true,
+        connected: false,
+        name: undefined,
+        credentialSource: 'personal',
+        appId: result.appId,
+        error: undefined,
+      }));
+      setAppSecret('');
+      setEditingCredentials(false);
+      setMessage('企业应用凭证已安全保存。下一步请点击“一键连接飞书”。');
+    } catch (error) {
+      setMessage(error instanceof Error ? error.message : '保存飞书应用凭证失败。');
+    } finally {
+      setSavingCredentials(false);
+    }
+  };
+
+  const deleteCredentials = async () => {
+    if (!window.confirm('删除个人飞书应用配置会同时断开当前飞书授权，三张表的网址和字段映射会保留。是否继续？')) {
+      return;
+    }
+    setSavingCredentials(true);
+    setMessage('');
+    try {
+      const response = await fetch('/api/secrets/feishu-app', { method: 'DELETE' });
+      const result = await response.json();
+      if (!response.ok) throw new Error(result.error || '删除飞书应用配置失败。');
+      setConnection((current) => ({
+        ...current,
+        configured: Boolean(result.configured),
+        connected: false,
+        name: undefined,
+        credentialSource: result.source,
+        appId: result.appId,
+        error: undefined,
+      }));
+      setAppId('');
+      setAppSecret('');
+      setEditingCredentials(false);
+      setMessage(result.configured
+        ? '个人应用配置已删除，当前已恢复管理员兼容配置。'
+        : '个人应用配置已删除。');
+    } catch (error) {
+      setMessage(error instanceof Error ? error.message : '删除飞书应用配置失败。');
+    } finally {
+      setSavingCredentials(false);
+    }
+  };
+
+  const copyCallbackUrl = async () => {
+    if (!callbackUrl) return;
+    await navigator.clipboard.writeText(callbackUrl);
+    setCopiedCallback(true);
+    window.setTimeout(() => setCopiedCallback(false), 1600);
   };
 
   return (
@@ -237,10 +338,123 @@ export function FeishuSettings({
 
       {expanded && (
         <CardContent className="space-y-4 pt-0">
+          <section className="space-y-4 rounded-lg border border-blue-100 bg-blue-50/45 p-4">
+            <div className="flex items-start justify-between gap-4">
+              <div>
+                <div className="flex items-center gap-2 text-sm font-semibold text-slate-900">
+                  <KeyRound className="h-4 w-4 text-blue-600" />
+                  第一步：配置你所在企业的自建应用
+                </div>
+                <p className="mt-1 text-xs leading-5 text-muted-foreground">
+                  每位成员只配置自己的企业应用。App Secret 仅加密保存在当前账号的私密空间，不会显示给管理员或其他成员。
+                </p>
+              </div>
+              <Button variant="outline" size="sm" className="shrink-0 gap-1.5 bg-white/80" asChild>
+                <a href="https://open.feishu.cn/app" target="_blank" rel="noreferrer">
+                  飞书开发者后台
+                  <ExternalLink className="h-3.5 w-3.5" />
+                </a>
+              </Button>
+            </div>
+
+            <div className="space-y-2">
+              <Label htmlFor="feishu-callback-url">重定向 URL（复制到飞书应用的安全设置）</Label>
+              <div className="flex gap-2">
+                <Input id="feishu-callback-url" value={callbackUrl} readOnly className="bg-white/85 font-mono text-xs" />
+                <Button type="button" variant="outline" className="shrink-0 gap-1.5 bg-white/85" onClick={copyCallbackUrl}>
+                  {copiedCallback ? <CheckCircle2 className="h-4 w-4 text-emerald-600" /> : <Copy className="h-4 w-4" />}
+                  {copiedCallback ? '已复制' : '复制'}
+                </Button>
+              </div>
+            </div>
+
+            {connection.credentialSource === 'personal' && !editingCredentials ? (
+              <div className="flex flex-wrap items-center justify-between gap-3 rounded-lg border border-emerald-200 bg-emerald-50/80 p-3">
+                <div>
+                  <div className="flex items-center gap-2 text-sm font-medium text-emerald-800">
+                    <CheckCircle2 className="h-4 w-4" />
+                    当前账号已配置个人企业应用
+                  </div>
+                  <p className="mt-1 text-xs text-emerald-700">App ID：{connection.appId}</p>
+                </div>
+                <div className="flex gap-2">
+                  <Button type="button" variant="outline" size="sm" className="bg-white/80" onClick={() => {
+                    setAppId(connection.appId || '');
+                    setEditingCredentials(true);
+                  }}>
+                    更换凭证
+                  </Button>
+                  <Button type="button" variant="outline" size="sm" className="gap-1.5 bg-white/80 text-red-600 hover:text-red-700" onClick={deleteCredentials} disabled={savingCredentials}>
+                    <Trash2 className="h-3.5 w-3.5" />
+                    删除
+                  </Button>
+                </div>
+              </div>
+            ) : (
+              <div className="space-y-3 rounded-lg border border-white/80 bg-white/70 p-3">
+                {connection.credentialSource === 'global' && !editingCredentials && (
+                  <StatusBox text="当前正在使用管理员兼容配置。团队成员建议在这里改为自己企业的应用。" />
+                )}
+                <div className="grid gap-3 md:grid-cols-2">
+                  <div className="space-y-1.5">
+                    <Label htmlFor="feishu-app-id">App ID</Label>
+                    <Input
+                      id="feishu-app-id"
+                      value={appId}
+                      onChange={(event) => setAppId(event.target.value)}
+                      placeholder="cli_xxxxxxxxxxxxxxxx"
+                      autoComplete="off"
+                    />
+                  </div>
+                  <div className="space-y-1.5">
+                    <Label htmlFor="feishu-app-secret">App Secret</Label>
+                    <Input
+                      id="feishu-app-secret"
+                      type="password"
+                      value={appSecret}
+                      onChange={(event) => setAppSecret(event.target.value)}
+                      placeholder="只在保存时传给服务器"
+                      autoComplete="new-password"
+                    />
+                  </div>
+                </div>
+                <div className="flex justify-end gap-2">
+                  {editingCredentials && (
+                    <Button type="button" variant="ghost" onClick={() => {
+                      setEditingCredentials(false);
+                      setAppId('');
+                      setAppSecret('');
+                    }}>
+                      取消
+                    </Button>
+                  )}
+                  <Button type="button" className="gap-2" onClick={saveCredentials} disabled={savingCredentials}>
+                    {savingCredentials ? <LoaderCircle className="h-4 w-4 animate-spin" /> : <Save className="h-4 w-4" />}
+                    保存应用凭证
+                  </Button>
+                </div>
+              </div>
+            )}
+
+            <details className="rounded-lg border border-white/80 bg-white/65 p-3 text-xs text-muted-foreground">
+              <summary className="cursor-pointer font-medium text-slate-700">查看应用权限配置指引</summary>
+              <ol className="mt-2 list-decimal space-y-1.5 pl-5 leading-5">
+                <li>在飞书开发者后台创建“企业自建应用”，启用网页应用能力。</li>
+                <li>把上方重定向 URL 加入应用的安全设置。</li>
+                <li>申请多维表格读取、记录新增/更新和离线授权权限，并发布应用版本。</li>
+                <li>将应用安装到自己的企业后，复制 App ID 和 App Secret 到这里保存。</li>
+              </ol>
+              <p className="mt-2 break-words font-mono leading-5">
+                权限范围：offline_access、bitable:app:readonly、base:app:read、base:table:read、base:field:read、base:record:retrieve、base:record:read、base:record:create、base:record:update、wiki:wiki:readonly
+              </p>
+              <p className="mt-2 leading-5">看板仍只会在你明确确认时写入飞书；配置应用不会自动修改任何表格数据。</p>
+            </details>
+          </section>
+
           {connection.loading ? (
             <StatusBox icon={<LoaderCircle className="h-4 w-4 animate-spin" />} text="正在检查飞书连接状态..." />
           ) : !connection.configured ? (
-            <StatusBox tone="warning" text="当前本地环境尚未配置飞书 App ID 和 App Secret。你可以先填写并暂存三个子表网址，配置凭证后再授权和检查字段。" />
+            <StatusBox tone="warning" text="请先在上方保存你自己的飞书企业应用 App ID 和 App Secret。三张表网址可以先填写并暂存。" />
           ) : connection.connected ? (
             <div className="flex items-center justify-between gap-4 rounded-lg border border-emerald-200/80 bg-emerald-50/80 p-3">
               <div className="min-w-0">

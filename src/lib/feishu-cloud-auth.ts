@@ -1,5 +1,10 @@
 import type { SupabaseClient } from '@supabase/supabase-js';
-import { getUserSecret, setUserSecret } from './user-private-storage';
+import {
+  resolveFeishuAppCredentials,
+  type FeishuCredentialSource,
+  type ResolvedFeishuAppCredentials,
+} from './feishu-app-credentials';
+import { deleteUserSecret, getUserSecret, setUserSecret } from './user-private-storage';
 
 const FEISHU_TOKEN_ENDPOINT = 'https://open.feishu.cn/open-apis/authen/v2/oauth/token';
 
@@ -12,6 +17,17 @@ export interface StoredFeishuAuth {
   name?: string;
   openId?: string;
   tenantKey?: string;
+  appId?: string;
+  credentialSource?: FeishuCredentialSource;
+  credentialFingerprint?: string;
+}
+
+export interface StoredFeishuOAuthPending {
+  state: string;
+  appId: string;
+  credentialFingerprint: string;
+  redirectUri: string;
+  createdAt: number;
 }
 
 type FeishuTokenResponse = {
@@ -46,18 +62,18 @@ function normalizeTokenResponse(payload: FeishuTokenResponse) {
   return source;
 }
 
-export async function exchangeFeishuCode(code: string, redirectUri: string) {
-  const clientId = process.env.FEISHU_APP_ID;
-  const clientSecret = process.env.FEISHU_APP_SECRET;
-  if (!clientId || !clientSecret) throw new Error('飞书应用凭证尚未配置。');
-
+export async function exchangeFeishuCode(
+  code: string,
+  redirectUri: string,
+  credentials: ResolvedFeishuAppCredentials,
+) {
   const response = await fetch(FEISHU_TOKEN_ENDPOINT, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json; charset=utf-8' },
     body: JSON.stringify({
       grant_type: 'authorization_code',
-      client_id: clientId,
-      client_secret: clientSecret,
+      client_id: credentials.appId,
+      client_secret: credentials.appSecret,
       code,
       redirect_uri: redirectUri,
     }),
@@ -96,25 +112,67 @@ export async function saveStoredFeishuAuth(
   await setUserSecret(supabase, 'feishu_auth', auth);
 }
 
+export async function getStoredFeishuOAuthPending(supabase: SupabaseClient) {
+  return getUserSecret<StoredFeishuOAuthPending>(supabase, 'feishu_oauth_pending');
+}
+
+export async function saveStoredFeishuOAuthPending(
+  supabase: SupabaseClient,
+  pending: StoredFeishuOAuthPending,
+) {
+  await setUserSecret(supabase, 'feishu_oauth_pending', pending);
+}
+
+export async function deleteStoredFeishuOAuthPending(supabase: SupabaseClient) {
+  await deleteUserSecret(supabase, 'feishu_oauth_pending');
+}
+
+function assertMatchingCredentials(
+  auth: StoredFeishuAuth,
+  credentials: ResolvedFeishuAppCredentials,
+) {
+  if (auth.credentialFingerprint) {
+    if (auth.credentialFingerprint !== credentials.fingerprint) {
+      throw new Error('飞书应用凭证已经更换，请重新连接飞书。');
+    }
+    return;
+  }
+
+  // 兼容旧版全局授权；切换到个人企业应用后必须重新授权，避免令牌被错误应用刷新。
+  if (credentials.source === 'personal') {
+    throw new Error('当前账号已改用自己的飞书企业应用，请重新连接飞书。');
+  }
+}
+
 export async function refreshStoredFeishuAuth(supabase: SupabaseClient) {
   const auth = await getStoredFeishuAuth(supabase);
   if (!auth) throw new Error('尚未连接飞书。');
-  if (auth.expiresAt > Date.now() + 60_000) return auth;
+  const credentials = await resolveFeishuAppCredentials(supabase);
+  assertMatchingCredentials(auth, credentials);
+  if (auth.expiresAt > Date.now() + 60_000) {
+    if (!auth.credentialFingerprint) {
+      const upgraded = {
+        ...auth,
+        appId: credentials.appId,
+        credentialSource: credentials.source,
+        credentialFingerprint: credentials.fingerprint,
+      } satisfies StoredFeishuAuth;
+      await saveStoredFeishuAuth(supabase, upgraded);
+      return upgraded;
+    }
+    return auth;
+  }
   if (!auth.refreshToken) {
     throw new Error('飞书授权已过期且没有刷新令牌，请重新连接飞书。');
   }
-
-  const clientId = process.env.FEISHU_APP_ID;
-  const clientSecret = process.env.FEISHU_APP_SECRET;
-  if (!clientId || !clientSecret) throw new Error('飞书应用凭证尚未配置。');
 
   const response = await fetch(FEISHU_TOKEN_ENDPOINT, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json; charset=utf-8' },
     body: JSON.stringify({
       grant_type: 'refresh_token',
-      client_id: clientId,
-      client_secret: clientSecret,
+      client_id: credentials.appId,
+      client_secret: credentials.appSecret,
       refresh_token: auth.refreshToken,
     }),
     cache: 'no-store',
@@ -132,6 +190,9 @@ export async function refreshStoredFeishuAuth(supabase: SupabaseClient) {
     refreshExpiresAt: token.refresh_token_expires_in || token.refresh_expires_in
       ? Date.now() + (token.refresh_token_expires_in || token.refresh_expires_in)! * 1000
       : auth.refreshExpiresAt,
+    appId: credentials.appId,
+    credentialSource: credentials.source,
+    credentialFingerprint: credentials.fingerprint,
   };
   await saveStoredFeishuAuth(supabase, updated);
   return updated;
@@ -142,5 +203,7 @@ export function toBrowserFeishuAuth(auth: StoredFeishuAuth) {
     isConnected: true,
     name: auth.name,
     expiresAt: auth.expiresAt,
+    appId: auth.appId,
+    credentialSource: auth.credentialSource,
   };
 }

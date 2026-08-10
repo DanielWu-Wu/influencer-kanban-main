@@ -1,9 +1,11 @@
 import { NextRequest, NextResponse } from 'next/server';
 import {
+  deleteStoredFeishuOAuthPending,
   getStoredFeishuAuth,
   refreshStoredFeishuAuth,
   toBrowserFeishuAuth,
 } from '@/lib/feishu-cloud-auth';
+import { getFeishuAppCredentialStatus } from '@/lib/feishu-app-credentials';
 import { deleteUserSecret } from '@/lib/user-private-storage';
 import { getRequestUser } from '@/lib/supabase/server';
 
@@ -12,19 +14,23 @@ export async function GET(request: NextRequest) {
   if (!appAuth) return NextResponse.json({ error: '未登录。' }, { status: 401 });
 
   try {
+    const callbackUrl = process.env.FEISHU_REDIRECT_URI
+      || `${new URL(request.url).origin}/api/auth/feishu/callback`;
+    const credentials = await getFeishuAppCredentialStatus(appAuth.supabase);
     const stored = await getStoredFeishuAuth(appAuth.supabase);
     if (!stored) {
       return NextResponse.json({
-        configured: Boolean(process.env.FEISHU_APP_ID && process.env.FEISHU_APP_SECRET),
+        ...credentials,
         connected: false,
+        callbackUrl,
       });
     }
-    const fresh = stored.expiresAt > Date.now() + 60_000
-      ? stored
-      : await refreshStoredFeishuAuth(appAuth.supabase);
+    // 即使令牌尚未过期，也要确认它仍属于当前账号正在使用的企业应用。
+    const fresh = await refreshStoredFeishuAuth(appAuth.supabase);
     return NextResponse.json({
-      configured: true,
+      ...credentials,
       connected: true,
+      callbackUrl,
       data: toBrowserFeishuAuth(fresh),
     });
   } catch (error) {
@@ -38,7 +44,9 @@ export async function GET(request: NextRequest) {
 export async function DELETE(request: NextRequest) {
   const appAuth = await getRequestUser(request);
   if (!appAuth) return NextResponse.json({ error: '未登录。' }, { status: 401 });
-  await deleteUserSecret(appAuth.supabase, 'feishu_auth');
+  await Promise.all([
+    deleteUserSecret(appAuth.supabase, 'feishu_auth'),
+    deleteStoredFeishuOAuthPending(appAuth.supabase),
+  ]);
   return NextResponse.json({ success: true });
 }
-
