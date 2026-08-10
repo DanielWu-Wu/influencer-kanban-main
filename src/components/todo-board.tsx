@@ -87,6 +87,8 @@ export function TodoBoard({
   const [editingTodoId, setEditingTodoId] = useState<string | null>(null);
   const [filterPriority, setFilterPriority] = useState<TodoPriority | 'all'>('all');
   const [todoDraft, setTodoDraft] = useState<TodoDraft>(createTodoDraft);
+  const [pendingExpanded, setPendingExpanded] = useState(true);
+  const [completedTodayExpanded, setCompletedTodayExpanded] = useState(true);
   const [historyExpanded, setHistoryExpanded] = useState(false);
 
   const pendingTodos = todos.filter(t => t.status === 'pending');
@@ -301,23 +303,29 @@ export function TodoBoard({
       {/* 待办列表 */}
       <div className="flex-1 overflow-y-auto space-y-3">
         <div className="flex items-center justify-between px-1 py-1">
-          <h3 className="flex items-center gap-2 text-sm font-medium text-muted-foreground">
+          <button
+            type="button"
+            onClick={() => setPendingExpanded((expanded) => !expanded)}
+            className="flex items-center gap-2 text-sm font-medium text-muted-foreground hover:text-foreground"
+            aria-expanded={pendingExpanded}
+          >
+            {pendingExpanded ? <ChevronDown className="h-4 w-4" /> : <ChevronRight className="h-4 w-4" />}
             <Circle className="h-4 w-4" />
             待完成 ({pendingItems.length})
-          </h3>
+          </button>
           {gmailLoading && (
             <span className="text-xs text-muted-foreground">正在读取近 72 小时 Gmail 来信…</span>
           )}
         </div>
 
-        {gmailError && (
+        {pendingExpanded && gmailError && (
           <div className="flex items-center justify-between gap-3 rounded-xl border border-amber-200 bg-amber-50/70 px-4 py-3 text-sm text-amber-800">
             <span className="flex items-center gap-2"><AlertCircle className="h-4 w-4" />{gmailError}</span>
             <Button type="button" variant="outline" size="sm" onClick={onRefreshGmail}>重试</Button>
           </div>
         )}
 
-        {pendingItems.length === 0 && !gmailLoading ? (
+        {pendingExpanded && (pendingItems.length === 0 && !gmailLoading ? (
           <div className="flex flex-col items-center justify-center py-16 text-center">
             <div className="w-16 h-16 rounded-2xl bg-green-100 flex items-center justify-center mb-4">
               <CheckCircle2 className="w-8 h-8 text-green-500" />
@@ -388,16 +396,22 @@ export function TodoBoard({
               </article>
             ))}
           </div>
-        )}
+        ))}
 
         {/* 今日已完成 */}
         {completedTodayItems.length > 0 && (
           <div className="mt-8">
-            <h3 className="text-sm font-medium text-muted-foreground mb-3 flex items-center gap-2">
+            <button
+              type="button"
+              onClick={() => setCompletedTodayExpanded((expanded) => !expanded)}
+              className="mb-3 flex items-center gap-2 text-sm font-medium text-muted-foreground hover:text-foreground"
+              aria-expanded={completedTodayExpanded}
+            >
+              {completedTodayExpanded ? <ChevronDown className="h-4 w-4" /> : <ChevronRight className="h-4 w-4" />}
               <CheckCircle2 className="w-4 h-4 text-green-500" />
               今日已完成 ({completedTodayItems.length})
-            </h3>
-            {renderCompletedList(completedTodayItems)}
+            </button>
+            {completedTodayExpanded && renderCompletedList(completedTodayItems)}
           </div>
         )}
 
