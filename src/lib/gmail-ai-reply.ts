@@ -6,6 +6,8 @@ export type GmailAIHistoryMessage = {
   subject?: string;
   from?: string;
   to?: string;
+  cc?: string;
+  replyTo?: string;
   date?: string;
   body?: string;
 };
@@ -181,6 +183,7 @@ export function buildCompactGmailAIConversation(
 时间：${message.date || '未知'}
 发件人：${message.from || '未知'}
 收件人：${message.to || '未知'}
+抄送：${message.cc || '无'}
 正文：`;
     const bodyLimit = Math.max(300, Math.min(maxMessageCharacters, remaining - header.length));
     const body = compactGmailAIMessageBody(String(message.body || ''), bodyLimit);
@@ -202,15 +205,26 @@ export function selectRelevantGmailAIDraftMessages(
   messages: GmailAIHistoryMessage[],
   gmailAccountEmail = '',
   limit = GMAIL_AI_DRAFT_HISTORY_LIMIT,
+  targetMessageId = '',
 ) {
-  const sorted = [...messages]
-    .sort((a, b) => parseMessageTime(a.date) - parseMessageTime(b.date))
-    .slice(-GMAIL_AI_HISTORY_LIMIT);
+  const chronological = [...messages]
+    .sort((a, b) => parseMessageTime(a.date) - parseMessageTime(b.date));
+  const targetMessage = targetMessageId
+    ? chronological.find((message) => message.id === targetMessageId)
+    : undefined;
+  const recent = chronological.slice(-GMAIL_AI_HISTORY_LIMIT);
+  const sorted = targetMessage && !recent.some((message) => message.id === targetMessageId)
+    ? [targetMessage, ...recent.slice(-(GMAIL_AI_HISTORY_LIMIT - 1))]
+        .sort((a, b) => parseMessageTime(a.date) - parseMessageTime(b.date))
+    : recent;
   if (sorted.length <= limit) return sorted;
 
   const normalizedAccount = gmailAccountEmail.trim().toLowerCase();
   const selected = new Set<number>();
-  selected.add(sorted.length - 1);
+  const targetIndex = targetMessageId
+    ? sorted.findIndex((message) => message.id === targetMessageId)
+    : -1;
+  selected.add(targetIndex >= 0 ? targetIndex : sorted.length - 1);
 
   for (let index = sorted.length - 1; index >= 0; index -= 1) {
     const from = String(sorted[index].from || '').toLowerCase();
@@ -239,16 +253,37 @@ export function selectRelevantGmailAIDraftMessages(
     .map((index) => sorted[index]);
 }
 
+export function scopeGmailAIMessagesToReplyTarget(
+  messages: GmailAIHistoryMessage[],
+  targetMessageId: string,
+  targetDate?: string,
+) {
+  const targetTime = parseMessageTime(targetDate);
+  const scoped = messages.filter((message) => (
+    message.id === targetMessageId
+    || !targetTime
+    || parseMessageTime(message.date) <= targetTime
+  ));
+  const hasTarget = scoped.some((message) => message.id === targetMessageId);
+  const target = hasTarget ? undefined : messages.find((message) => message.id === targetMessageId);
+  return [...scoped, ...(target ? [target] : [])]
+    .sort((a, b) => parseMessageTime(a.date) - parseMessageTime(b.date))
+    .slice(-GMAIL_AI_HISTORY_LIMIT);
+}
+
 export function buildGmailAIHistoryCacheKey(parts: {
   accountEmail?: string;
+  threadId?: string;
   contactEmail: string;
   latestMessageId?: string;
   latestMessageDate?: string;
+  targetMessageId?: string;
 }) {
   return [
     parts.accountEmail?.trim().toLowerCase() || 'unknown-account',
+    parts.threadId || 'unknown-thread',
     parts.contactEmail.trim().toLowerCase(),
-    parts.latestMessageId || 'unknown-message',
+    parts.targetMessageId || parts.latestMessageId || 'unknown-message',
     parts.latestMessageDate || 'unknown-date',
   ].join('|');
 }

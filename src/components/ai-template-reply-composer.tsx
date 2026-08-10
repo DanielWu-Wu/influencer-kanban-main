@@ -44,9 +44,15 @@ import {
   getOrLoadGmailAIHistory,
   GMAIL_AI_HISTORY_LIMIT,
   mergeRecentGmailAIMessages,
+  scopeGmailAIMessagesToReplyTarget,
   type GmailAIHistoryMessage,
 } from '@/lib/gmail-ai-reply';
-import { getGmailThreadContact, isIgnoredGmailThreadSender } from '@/lib/gmail-thread-contact';
+import { isIgnoredGmailThreadSender } from '@/lib/gmail-thread-contact';
+import {
+  buildGmailReplyReferences,
+  buildGmailReplySubject,
+  type GmailReplyTarget,
+} from '@/lib/gmail-reply-target';
 import { getAIReplyTemplates, type AIReplyTemplate } from '@/lib/ai-reply-templates';
 import { useEmailDrafts, useEmailTemplates, useGmailAuth, useSettings } from '@/lib/data';
 import type { GmailThread } from '@/lib/types';
@@ -71,8 +77,11 @@ const LANGUAGE_OPTIONS = [
   ['cs', '捷克语'], ['ro', '罗马尼亚语'], ['uk', '乌克兰语'], ['ru', '俄语'],
 ] as const;
 
-function buildThreadMessages(thread: GmailThread): GmailAIHistoryMessage[] {
-  return thread.messages
+function buildThreadMessages(
+  thread: GmailThread,
+  target: GmailReplyTarget | null,
+): GmailAIHistoryMessage[] {
+  const messages = thread.messages
     .filter((message) => !isIgnoredGmailThreadSender(message.from))
     .map((message) => ({
       id: message.id,
@@ -80,9 +89,14 @@ function buildThreadMessages(thread: GmailThread): GmailAIHistoryMessage[] {
       subject: message.subject || thread.subject,
       from: message.from,
       to: message.to,
+      cc: message.cc,
+      replyTo: message.replyTo,
       date: message.date,
       body: message.body,
     }));
+  return target
+    ? scopeGmailAIMessagesToReplyTarget(messages, target.messageId, target.date)
+    : messages;
 }
 
 function toneLabel(tone: ReplyTone) {
@@ -93,11 +107,13 @@ function toneLabel(tone: ReplyTone) {
 
 export function AITemplateReplyComposer({
   thread,
+  replyTarget,
   onMinimize,
   onClose,
   onDraftSaved,
 }: {
   thread: GmailThread;
+  replyTarget: GmailReplyTarget | null;
   onMinimize?: () => void;
   onClose: () => void;
   onDraftSaved?: (content: string) => void;
@@ -132,15 +148,9 @@ export function AITemplateReplyComposer({
   const generationRef = useRef<AbortController | null>(null);
   const chineseTranslationRef = useRef<AbortController | null>(null);
 
-  const threadMessages = useMemo(() => buildThreadMessages(thread), [thread]);
-  const threadContact = useMemo(
-    () => getGmailThreadContact(thread, auth?.email),
-    [auth?.email, thread],
-  );
-  const externalMessage = threadContact.message || [...thread.messages]
-    .reverse()
-    .find((message) => !isIgnoredGmailThreadSender(message.from));
-  const recipientEmail = threadContact.emails[0] || '';
+  const threadMessages = useMemo(() => buildThreadMessages(thread, replyTarget), [replyTarget, thread]);
+  const externalMessage = replyTarget?.message;
+  const recipientEmail = replyTarget?.recipientEmail || '';
   const languageName = LANGUAGE_OPTIONS.find(([code]) => code === targetLang)?.[1] || targetLang;
   const targetLanguageChanged = Boolean(suggestion && syncedTargetLang && syncedTargetLang !== targetLang);
   const translationOutOfSync = chineseDirty || targetLanguageChanged;
@@ -173,17 +183,15 @@ export function AITemplateReplyComposer({
   };
 
   const loadContactHistory = async () => {
-    if (!recipientEmail) throw new Error('未找到可用的红人邮箱；系统通知邮箱不会作为回复收件人。');
-    const latest = [...threadMessages]
-      .sort((a, b) => new Date(a.date || 0).getTime() - new Date(b.date || 0).getTime())
-      .at(-1);
     const cacheKey = buildGmailAIHistoryCacheKey({
       accountEmail: auth?.email,
-      contactEmail: recipientEmail,
-      latestMessageId: latest?.id,
-      latestMessageDate: latest?.date,
+      threadId: thread.id,
+      contactEmail: recipientEmail || 'no-recipient',
+      targetMessageId: replyTarget?.messageId,
+      latestMessageDate: replyTarget?.date,
     });
     const loaded = await getOrLoadGmailAIHistory(cacheKey, async () => {
+      if (!recipientEmail || !replyTarget) return threadMessages;
       const accessToken = await getAccessToken();
       const response = await fetch('/api/gmail', {
         method: 'POST',
@@ -193,19 +201,30 @@ export function AITemplateReplyComposer({
           accessToken,
           contactEmail: recipientEmail,
           maxResults: GMAIL_AI_HISTORY_LIMIT,
-          knownMessageIds: threadMessages.map((message) => message.id).filter(Boolean),
+          knownMessageIds: thread.messages.map((message) => message.id).filter(Boolean),
         }),
       });
       const result = await response.json();
       if (!response.ok || !result.success) throw new Error(result.error || '读取联系人历史邮件失败。');
-      return mergeRecentGmailAIMessages(result.data || [], threadMessages);
+      const scopedFetched = scopeGmailAIMessagesToReplyTarget(
+        result.data || [],
+        replyTarget.messageId,
+        replyTarget.date,
+      );
+      const merged = mergeRecentGmailAIMessages(scopedFetched, threadMessages);
+      return scopeGmailAIMessagesToReplyTarget(
+        merged,
+        replyTarget.messageId,
+        replyTarget.date,
+      );
     });
     return loaded.value;
   };
 
   const baseAIPayload = (history: GmailAIHistoryMessage[], template: AIReplyTemplate) => ({
-    threadSubject: thread.subject,
+    threadSubject: replyTarget?.subject || thread.subject,
     threadMessages: history,
+    targetMessageId: replyTarget?.messageId || '',
     templateReply: true,
     replyTemplate: template,
     userIdeas: userIdeas.trim(),
@@ -405,8 +424,8 @@ export function AITemplateReplyComposer({
       setError('中文内容已修改，请先点击“根据中文更新外文”，再保存 Gmail 草稿。');
       return;
     }
-    if (!recipientEmail) {
-      setError('未找到可用的红人邮箱；系统通知邮箱不会作为收件人。');
+    if (!recipientEmail || !replyTarget) {
+      setError('请先确认最终回复收件人，再保存 Gmail 草稿。');
       return;
     }
     setSavingDraft(true);
@@ -419,10 +438,8 @@ export function AITemplateReplyComposer({
         settings.emailSignatureScope,
         'regular',
       );
-      const subject = /^re:/i.test(thread.subject) ? thread.subject : `Re: ${thread.subject}`;
-      const references = [externalMessage?.references, externalMessage?.rfcMessageId]
-        .filter(Boolean)
-        .join(' ');
+      const subject = buildGmailReplySubject(replyTarget);
+      const references = buildGmailReplyReferences(replyTarget);
       const response = await fetch('/api/gmail', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -695,14 +712,14 @@ export function AITemplateReplyComposer({
       </ScrollArea>
 
       <div className="flex shrink-0 items-center justify-between gap-3 border-t bg-white px-4 py-3">
-        <p className="truncate text-xs text-muted-foreground">收件人：{recipientEmail || '未识别到有效邮箱'}</p>
+        <p className="truncate text-xs text-muted-foreground">收件人：{recipientEmail || '保存草稿前需确认'}</p>
         <div className="flex shrink-0 gap-2">
           <Button variant="outline" disabled={!userIdeas.trim() || loading || translatingChinese} onClick={generate}>
             <RefreshCw />重新生成
           </Button>
           <Button
-            disabled={isEmailContentEmpty(replyContent) || savingDraft || loading || translatingChinese || translationOutOfSync || draftSaved}
-            title={translationOutOfSync ? '请先根据中文更新外文' : undefined}
+            disabled={!recipientEmail || isEmailContentEmpty(replyContent) || savingDraft || loading || translatingChinese || translationOutOfSync || draftSaved}
+            title={!recipientEmail ? '请先确认最终回复收件人' : translationOutOfSync ? '请先根据中文更新外文' : undefined}
             onClick={saveGmailDraft}
           >
             {savingDraft ? <Loader2 className="animate-spin" /> : draftSaved ? <CheckCircle2 /> : <Save />}

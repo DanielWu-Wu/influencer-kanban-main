@@ -80,10 +80,14 @@ export interface AppSettings {
   promptTemplates?: PromptTemplate[];
   selectedPromptTemplates?: Partial<Record<PromptType, string>>;
   modelProvider?: 'builtin' | 'custom';
+  aiProviderPreset?: 'deepseek' | 'openai' | 'custom';
   customApiUrl?: string;
   customApiKey?: string;
   customApiKeyConfigured?: boolean;
   customModelName?: string;
+  customApiVerifiedAt?: string;
+  customApiVerifiedUrl?: string;
+  customApiVerifiedModel?: string;
   youtubeApiKey?: string;
   youtubeApiKeyConfigured?: boolean;
   youtubeDefaultRegion?: string;

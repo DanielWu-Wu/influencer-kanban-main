@@ -7,19 +7,45 @@ import { Label } from '@/components/ui/label';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
 import { Badge } from '@/components/ui/badge';
 import { Separator } from '@/components/ui/separator';
+import { Alert, AlertDescription, AlertTitle } from '@/components/ui/alert';
+import { Collapsible, CollapsibleContent, CollapsibleTrigger } from '@/components/ui/collapsible';
+import { Field, FieldDescription, FieldError, FieldGroup, FieldLabel } from '@/components/ui/field';
+import {
+  Select,
+  SelectContent,
+  SelectGroup,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from '@/components/ui/select';
 import { useGmailAuth, useSettings } from '@/lib/data';
 import { ProductDatabaseSettings } from '@/components/product-database-settings';
 import { CloudSyncSettings } from '@/components/cloud-sync-settings';
 import { FeishuSettings } from '@/components/feishu-settings';
 import { YouTubeApiSettings } from '@/components/youtube-api-settings';
 import {
+  AI_PROVIDER_PRESETS,
+  applyAIProviderPreset,
+  hasAIConfigErrors,
+  inferAIProviderPreset,
+  validateAIProviderConfig,
+  type AIConfigValidation,
+  type AIProviderPresetId,
+} from '@/lib/ai-provider-config';
+import {
   Settings, Mail, Zap,
   CheckCircle2, AlertTriangle,
-  Plug, RefreshCw, Save, HelpCircle, Link2, Cpu,
-  ChevronDown, ChevronUp, Info, User, Clock, Heart, LogOut, KeyRound
+  Plug, RefreshCw, Save, HelpCircle, Cpu,
+  ChevronDown, ChevronUp, Info, User, Clock, Heart, LogOut, KeyRound, SlidersHorizontal
 } from 'lucide-react';
 
 const STORED_AI_KEY = '••••••••••••';
+
+type VerifiedModelConfig = {
+  apiUrl: string;
+  modelName: string;
+  verifiedAt: string;
+};
 
 export function SettingsPanel() {
   const { settings, updateSettings, loading: settingsLoading } = useSettings();
@@ -32,14 +58,47 @@ export function SettingsPanel() {
     settings.customApiKey || (settings.customApiKeyConfigured ? STORED_AI_KEY : ''),
   );
   const [customModelName, setCustomModelName] = useState(settings.customModelName || '');
+  const [aiProviderPreset, setAiProviderPreset] = useState<AIProviderPresetId>(() => (
+    inferAIProviderPreset(settings.customApiUrl, settings.aiProviderPreset)
+  ));
+  const [advancedModelSettingsOpen, setAdvancedModelSettingsOpen] = useState(() => (
+    inferAIProviderPreset(settings.customApiUrl, settings.aiProviderPreset) === 'custom'
+  ));
+  const [modelFieldErrors, setModelFieldErrors] = useState<AIConfigValidation>({});
+  const [verifiedModelConfig, setVerifiedModelConfig] = useState<VerifiedModelConfig | null>(() => {
+    if (
+      settings.customApiVerifiedAt
+      && settings.customApiVerifiedUrl === settings.customApiUrl?.trim()
+      && settings.customApiVerifiedModel === settings.customModelName?.trim()
+    ) {
+      return {
+        apiUrl: String(settings.customApiVerifiedUrl),
+        modelName: String(settings.customApiVerifiedModel),
+        verifiedAt: settings.customApiVerifiedAt,
+      };
+    }
+    return null;
+  });
   const [testingModel, setTestingModel] = useState(false);
   const [modelTestResult, setModelTestResult] = useState<{ success: boolean; message: string } | null>(null);
   const [saved, setSaved] = useState(false);
   const [expandedSection, setExpandedSection] = useState<string | null>(null);
-  const modelApiConnected = modelTestResult?.success === true || Boolean(
-    settings.customApiUrl?.trim()
-    && settings.customModelName?.trim()
-    && settings.customApiKeyConfigured,
+  const hasConfiguredApiKey = customApiKey === STORED_AI_KEY
+    || Boolean(customApiKey.trim())
+    || Boolean(settings.customApiKeyConfigured);
+  const modelConfigComplete = Boolean(
+    customApiUrl.trim() && customModelName.trim() && hasConfiguredApiKey,
+  );
+  const selectedProvider = AI_PROVIDER_PRESETS[aiProviderPreset];
+  const selectedProviderHasModel = selectedProvider.models.some(
+    (model) => model.id === customModelName.trim(),
+  );
+  const manualModelEntry = aiProviderPreset === 'custom' || !selectedProviderHasModel;
+  const verifiedModelConfigSaved = Boolean(
+    verifiedModelConfig
+    && settings.customApiVerifiedAt === verifiedModelConfig.verifiedAt
+    && settings.customApiVerifiedUrl === verifiedModelConfig.apiUrl
+    && settings.customApiVerifiedModel === verifiedModelConfig.modelName,
   );
 
   useEffect(() => {
@@ -51,6 +110,20 @@ export function SettingsPanel() {
       settings.customApiKey || (settings.customApiKeyConfigured ? STORED_AI_KEY : ''),
     );
     setCustomModelName(settings.customModelName || '');
+    setAiProviderPreset(inferAIProviderPreset(settings.customApiUrl, settings.aiProviderPreset));
+    if (
+      settings.customApiVerifiedAt
+      && settings.customApiVerifiedUrl === settings.customApiUrl?.trim()
+      && settings.customApiVerifiedModel === settings.customModelName?.trim()
+    ) {
+      setVerifiedModelConfig({
+        apiUrl: String(settings.customApiVerifiedUrl),
+        modelName: String(settings.customApiVerifiedModel),
+        verifiedAt: settings.customApiVerifiedAt,
+      });
+    } else {
+      setVerifiedModelConfig(null);
+    }
   }, [settings, settingsLoading]);
 
   useEffect(() => {
@@ -64,11 +137,67 @@ export function SettingsPanel() {
     setExpandedSection(expandedSection === section ? null : section);
   };
 
+  const invalidateModelVerification = () => {
+    setModelTestResult(null);
+    setModelFieldErrors({});
+    setVerifiedModelConfig(null);
+  };
+
+  const handleProviderPresetChange = (nextProvider: AIProviderPresetId) => {
+    const next = applyAIProviderPreset(
+      nextProvider,
+      customApiUrl,
+      customModelName,
+      aiProviderPreset,
+    );
+    setAiProviderPreset(nextProvider);
+    setCustomApiUrl(next.apiUrl);
+    setCustomModelName(next.modelName);
+    setAdvancedModelSettingsOpen(nextProvider === 'custom');
+    invalidateModelVerification();
+  };
+
+  const handleModelNameChange = (nextModelName: string) => {
+    setCustomModelName(nextModelName === '__custom__' ? '' : nextModelName);
+    invalidateModelVerification();
+  };
+
+  const handleApiUrlChange = (nextApiUrl: string) => {
+    setCustomApiUrl(nextApiUrl);
+    if (aiProviderPreset !== 'custom' && nextApiUrl.trim() !== selectedProvider.apiUrl) {
+      setAiProviderPreset('custom');
+    }
+    invalidateModelVerification();
+  };
+
   const handleSaveAll = async () => {
+    const hasAnyModelConfig = Boolean(
+      customApiUrl.trim()
+      || customModelName.trim()
+      || customApiKey.trim()
+      || settings.customApiKeyConfigured,
+    );
+    if (hasAnyModelConfig) {
+      const validation = validateAIProviderConfig({
+        apiUrl: customApiUrl,
+        modelName: customModelName,
+        hasApiKey: hasConfiguredApiKey,
+      });
+      if (hasAIConfigErrors(validation)) {
+        setModelFieldErrors(validation);
+        setModelTestResult({ success: false, message: '模型配置尚未填写完整，请检查标红字段。' });
+        setExpandedSection('model');
+        if (validation.apiUrl) setAdvancedModelSettingsOpen(true);
+        return;
+      }
+    }
+
+    const apiKeyWasReplaced = Boolean(
+      customApiKey && customApiKey !== STORED_AI_KEY,
+    );
     if (
       modelProvider === 'custom' &&
-      customApiKey &&
-      customApiKey !== STORED_AI_KEY
+      apiKeyWasReplaced
     ) {
       const response = await fetch('/api/secrets/ai-key', {
         method: 'POST',
@@ -83,25 +212,44 @@ export function SettingsPanel() {
       setCustomApiKey(STORED_AI_KEY);
     }
 
+    const verifiedCurrentConfig = verifiedModelConfig
+      && verifiedModelConfig.apiUrl === customApiUrl.trim()
+      && verifiedModelConfig.modelName === customModelName.trim()
+      ? verifiedModelConfig
+      : null;
+
     updateSettings({
       brandName,
       senderName,
       modelProvider,
+      aiProviderPreset,
       customApiUrl,
       customApiKey: undefined,
       customApiKeyConfigured:
         settings.customApiKeyConfigured ||
-        (modelProvider === 'custom' && Boolean(customApiKey)),
+        (modelProvider === 'custom' && (apiKeyWasReplaced || Boolean(customApiKey))),
       customModelName,
+      customApiVerifiedAt: verifiedCurrentConfig?.verifiedAt || '',
+      customApiVerifiedUrl: verifiedCurrentConfig?.apiUrl || '',
+      customApiVerifiedModel: verifiedCurrentConfig?.modelName || '',
     });
+    if (verifiedCurrentConfig) {
+      setModelTestResult({ success: true, message: '连接已验证，配置已经保存。' });
+    }
     setSaved(true);
     setTimeout(() => setSaved(false), 2000);
   };
 
   const handleTestModel = async () => {
-    const hasApiKey = customApiKey === STORED_AI_KEY || Boolean(customApiKey) || settings.customApiKeyConfigured;
-    if (modelProvider === 'custom' && (!customApiUrl || !hasApiKey || !customModelName)) {
-      setModelTestResult({ success: false, message: '请先填写完整的 API 配置信息' });
+    const validation = validateAIProviderConfig({
+      apiUrl: customApiUrl,
+      modelName: customModelName,
+      hasApiKey: hasConfiguredApiKey,
+    });
+    setModelFieldErrors(validation);
+    if (hasAIConfigErrors(validation)) {
+      setModelTestResult({ success: false, message: '模型配置尚未填写完整，请检查标红字段。' });
+      if (validation.apiUrl) setAdvancedModelSettingsOpen(true);
       return;
     }
 
@@ -109,23 +257,6 @@ export function SettingsPanel() {
     setModelTestResult(null);
 
     try {
-      if (modelProvider === 'custom' && customApiKey && customApiKey !== STORED_AI_KEY) {
-        const saveResponse = await fetch('/api/secrets/ai-key', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ apiKey: customApiKey }),
-        });
-        const saveResult = await saveResponse.json();
-        if (!saveResponse.ok) {
-          throw new Error(saveResult.error || 'AI API Key 保存失败');
-        }
-        setCustomApiKey(STORED_AI_KEY);
-        updateSettings({
-          customApiKey: undefined,
-          customApiKeyConfigured: true,
-        });
-      }
-
       const res = await fetch('/api/ai', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -144,17 +275,30 @@ export function SettingsPanel() {
           modelProvider,
           customApiUrl,
           customModelName,
+          customApiKey: customApiKey && customApiKey !== STORED_AI_KEY
+            ? customApiKey.trim()
+            : undefined,
         }),
       });
 
       const data = await res.json();
       if (data.success) {
-        setModelTestResult({ success: true, message: '模型连接成功！' });
+        setVerifiedModelConfig({
+          apiUrl: customApiUrl.trim(),
+          modelName: customModelName.trim(),
+          verifiedAt: new Date().toISOString(),
+        });
+        setModelTestResult({ success: true, message: '连接测试成功。请点击右上角“保存全部”完成保存。' });
       } else {
+        setVerifiedModelConfig(null);
         setModelTestResult({ success: false, message: data.error || '模型连接失败' });
       }
-    } catch {
-      setModelTestResult({ success: false, message: '连接失败，请检查配置' });
+    } catch (error) {
+      setVerifiedModelConfig(null);
+      setModelTestResult({
+        success: false,
+        message: error instanceof Error ? error.message : '连接失败，请检查配置',
+      });
     } finally {
       setTestingModel(false);
     }
@@ -175,22 +319,24 @@ export function SettingsPanel() {
           </h2>
           <p className="mt-0.5 text-sm text-muted-foreground">管理产品资料、集成连接、品牌信息和模型配置</p>
         </div>
-        <Button onClick={handleSaveAll} size="sm" className="h-10 gap-1.5 rounded-lg shadow-apple">
-          {saved ? (
-            <>
-              <CheckCircle2 className="w-4 h-4" />
-              已保存
-            </>
-          ) : (
-            <>
-              <Save className="w-4 h-4" />
-              保存全部
-            </>
-          )}
-        </Button>
-        <Button variant="outline" size="sm" className="h-10" onClick={() => { window.location.href = '/change-password'; }}>
-          <KeyRound data-icon="inline-start" />修改密码
-        </Button>
+        <div className="flex items-center gap-2">
+          <Button onClick={handleSaveAll} size="sm" className="h-10 gap-1.5 rounded-lg shadow-apple">
+            {saved ? (
+              <>
+                <CheckCircle2 className="w-4 h-4" />
+                已保存
+              </>
+            ) : (
+              <>
+                <Save className="w-4 h-4" />
+                保存全部
+              </>
+            )}
+          </Button>
+          <Button variant="outline" size="sm" className="h-10" onClick={() => { window.location.href = '/change-password'; }}>
+            <KeyRound data-icon="inline-start" />修改密码
+          </Button>
+        </div>
       </div>
 
       <Separator className="mb-4 flex-shrink-0 bg-white/60" />
@@ -323,10 +469,14 @@ export function SettingsPanel() {
                   </div>
                 </div>
                 <div className="flex items-center gap-2">
-                  {modelApiConnected && (
-                    <Badge variant="secondary" className="rounded-md bg-emerald-50 text-xs text-emerald-700">
-                      已连接
+                  {verifiedModelConfig ? (
+                    <Badge variant="secondary" className="rounded-md text-xs">
+                      {verifiedModelConfigSaved ? '已验证' : '已验证 · 待保存'}
                     </Badge>
+                  ) : modelConfigComplete ? (
+                    <Badge variant="outline" className="rounded-md text-xs">待测试</Badge>
+                  ) : (
+                    <Badge variant="outline" className="rounded-md text-xs">未配置</Badge>
                   )}
                   {expandedSection === 'model' ? (
                     <ChevronUp className="w-4 h-4 text-muted-foreground" />
@@ -339,115 +489,169 @@ export function SettingsPanel() {
           </button>
 
           {expandedSection === 'model' && (
-            <CardContent className="space-y-4 pt-0">
-              <div className="flex items-center justify-between">
-                <Badge variant="outline" className="gap-1 rounded-md border-white/70 bg-white/55 text-xs">
-                  <Info className="w-3 h-3" />
-                  用于「翻译」和「AI 回复」功能
-                </Badge>
-              </div>
+            <CardContent className="flex flex-col gap-5 pt-0">
+              <Badge variant="outline" className="w-fit gap-1 rounded-md border-white/70 bg-white/55 text-xs">
+                <Info className="size-3" />
+                用于「翻译」「AI 回复」「开发信」和「Follow Up」
+              </Badge>
 
-              <div className="space-y-3">
-                <Label className="text-xs">模型来源</Label>
-                <div className="rounded-lg border-2 border-primary bg-primary/5 p-3 text-left">
-                  <div className="flex items-center gap-2 text-sm font-medium">
-                    <Link2 className="w-4 h-4" />
-                    自定义 API
-                  </div>
-                  <p className="mt-1 text-xs text-muted-foreground">
-                    使用你自己申请的 DeepSeek / OpenAI / 其他 OpenAI 兼容接口
-                  </p>
-                </div>
-              </div>
+              <Alert className="border-primary/20 bg-primary/5">
+                <HelpCircle />
+                <AlertTitle>三步完成模型配置</AlertTitle>
+                <AlertDescription>
+                  <ol className="list-inside list-decimal">
+                    <li>选择模型服务，官方地址会自动填写。</li>
+                    <li>粘贴服务商提供的 API Key，不需要添加 Bearer。</li>
+                    <li>测试成功后，点击右上角“保存全部”。</li>
+                  </ol>
+                </AlertDescription>
+              </Alert>
 
-              <div className="space-y-3">
-                  <div className="space-y-2 rounded-lg border border-white/65 bg-white/55 p-3">
-                    <h4 className="flex items-center gap-1.5 text-xs font-medium text-foreground">
-                      <HelpCircle className="w-3.5 h-3.5 text-primary" />
-                      支持的模型提供商
-                    </h4>
-                    <ul className="list-inside list-disc space-y-0.5 text-xs text-muted-foreground">
-                      <li>OpenAI (GPT-4o, GPT-4, GPT-3.5)</li>
-                      <li>DeepSeek (deepseek-chat, deepseek-reasoner)</li>
-                      <li>智谱 AI (GLM-4)</li>
-                      <li>通义千问 (Qwen)</li>
-                      <li>其他 OpenAI 兼容接口</li>
-                    </ul>
-                  </div>
+              <FieldGroup className="gap-5">
+                <Field>
+                  <FieldLabel htmlFor="ai-provider-preset">模型服务</FieldLabel>
+                  <Select
+                    value={aiProviderPreset}
+                    onValueChange={(value) => handleProviderPresetChange(value as AIProviderPresetId)}
+                  >
+                    <SelectTrigger id="ai-provider-preset" className="h-10 w-full">
+                      <SelectValue />
+                    </SelectTrigger>
+                    <SelectContent>
+                      <SelectGroup>
+                        {Object.values(AI_PROVIDER_PRESETS).map((provider) => (
+                          <SelectItem key={provider.id} value={provider.id}>{provider.label}</SelectItem>
+                        ))}
+                      </SelectGroup>
+                    </SelectContent>
+                  </Select>
+                  <FieldDescription>{selectedProvider.description}</FieldDescription>
+                </Field>
 
-                  <div className="space-y-2">
-                    <Label htmlFor="custom-api-url" className="text-xs">API 地址</Label>
-                    <Input
-                      id="custom-api-url"
-                      type="text"
-                      placeholder="https://api.openai.com/v1/chat/completions"
-                      value={customApiUrl}
-                      onChange={(e) => setCustomApiUrl(e.target.value)}
-                      className="rounded-lg bg-white/75 text-sm"
-                    />
-                  </div>
-                  <div className="space-y-2">
-                    <Label htmlFor="custom-api-key" className="text-xs">API Key</Label>
-                    <Input
-                      id="custom-api-key"
-                      type="password"
-                      placeholder="sk-xxxxxxxxxx"
-                      value={customApiKey}
-                      onChange={(e) => setCustomApiKey(e.target.value)}
-                      onFocus={() => {
-                        if (customApiKey === STORED_AI_KEY) setCustomApiKey('');
-                      }}
-                      className="rounded-lg bg-white/75 text-sm"
-                    />
-                  </div>
-                  <div className="space-y-2">
-                    <Label htmlFor="custom-model-name" className="text-xs">模型名称</Label>
+                <Field data-invalid={Boolean(modelFieldErrors.apiKey)}>
+                  <FieldLabel htmlFor="custom-api-key">API Key</FieldLabel>
+                  <Input
+                    id="custom-api-key"
+                    type="password"
+                    autoComplete="off"
+                    placeholder="粘贴服务商提供的 API Key"
+                    value={customApiKey}
+                    aria-invalid={Boolean(modelFieldErrors.apiKey)}
+                    onChange={(event) => {
+                      setCustomApiKey(event.target.value);
+                      invalidateModelVerification();
+                    }}
+                    onFocus={(event) => {
+                      if (customApiKey === STORED_AI_KEY) event.currentTarget.select();
+                    }}
+                    className="h-10 rounded-lg bg-white/75 text-sm"
+                  />
+                  <FieldDescription>
+                    Key 只保存到当前账号的私有云端空间，不会共享给其他团队成员。
+                  </FieldDescription>
+                  <FieldError>{modelFieldErrors.apiKey}</FieldError>
+                </Field>
+
+                <Field data-invalid={Boolean(modelFieldErrors.modelName)}>
+                  <FieldLabel htmlFor={manualModelEntry ? 'custom-model-name' : 'model-preset'}>使用模型</FieldLabel>
+                  {aiProviderPreset !== 'custom' ? (
+                    <Select
+                      value={manualModelEntry ? '__custom__' : customModelName}
+                      onValueChange={handleModelNameChange}
+                    >
+                      <SelectTrigger
+                        id="model-preset"
+                        className="h-10 w-full"
+                        aria-invalid={Boolean(modelFieldErrors.modelName)}
+                      >
+                        <SelectValue placeholder="选择模型" />
+                      </SelectTrigger>
+                      <SelectContent>
+                        <SelectGroup>
+                          {selectedProvider.models.map((model) => (
+                            <SelectItem key={model.id} value={model.id}>
+                              {model.label}{model.recommended ? '（推荐）' : ''}
+                            </SelectItem>
+                          ))}
+                          <SelectItem value="__custom__">手动填写模型名称</SelectItem>
+                        </SelectGroup>
+                      </SelectContent>
+                    </Select>
+                  ) : null}
+                  {manualModelEntry ? (
                     <Input
                       id="custom-model-name"
                       type="text"
-                      placeholder="gpt-4o / deepseek-chat / glm-4"
+                      placeholder="例如：供应商提供的模型 ID"
                       value={customModelName}
-                      onChange={(e) => setCustomModelName(e.target.value)}
-                      className="rounded-lg bg-white/75 text-sm"
+                      aria-invalid={Boolean(modelFieldErrors.modelName)}
+                      onChange={(event) => handleModelNameChange(event.target.value)}
+                      className="h-10 rounded-lg bg-white/75 text-sm"
                     />
-                  </div>
+                  ) : null}
+                  <FieldDescription>
+                    {selectedProvider.models.find((model) => model.id === customModelName)?.description
+                      || '请填写接口服务商提供的完整模型 ID。'}
+                  </FieldDescription>
+                  <FieldError>{modelFieldErrors.modelName}</FieldError>
+                </Field>
 
-                  <Button
-                    variant="outline"
-                    onClick={handleTestModel}
-                    disabled={
-                      testingModel ||
-                      !customApiUrl ||
-                      !(customApiKey || settings.customApiKeyConfigured) ||
-                      !customModelName
-                    }
-                    className="h-10 w-full rounded-lg bg-white/75"
-                  >
-                    {testingModel ? (
-                      <RefreshCw className="w-4 h-4 mr-1 animate-spin" />
-                    ) : (
-                      <Plug className="w-4 h-4 mr-1" />
-                    )}
-                    测试连接
-                  </Button>
-
-                  {modelTestResult && (
-                    <div className={`flex items-center gap-2 rounded-lg border p-3 ${
-                      modelTestResult.success ? 'border-green-200 bg-green-50/85' : 'border-red-100 bg-red-50/90'
-                    }`}>
-                      {modelTestResult.success ? (
-                        <CheckCircle2 className="w-4 h-4 text-green-600" />
-                      ) : (
-                        <AlertTriangle className="w-4 h-4 text-red-600" />
-                      )}
-                      <span className={`text-sm ${
-                        modelTestResult.success ? 'text-green-700' : 'text-red-700'
-                      }`}>
-                        {modelTestResult.message}
+                <Collapsible open={advancedModelSettingsOpen} onOpenChange={setAdvancedModelSettingsOpen}>
+                  <CollapsibleTrigger asChild>
+                    <Button type="button" variant="ghost" className="w-full justify-between">
+                      <span className="flex items-center gap-2">
+                        <SlidersHorizontal data-icon="inline-start" />
+                        高级设置
                       </span>
-                    </div>
+                      {advancedModelSettingsOpen ? <ChevronUp /> : <ChevronDown />}
+                    </Button>
+                  </CollapsibleTrigger>
+                  <CollapsibleContent className="pt-3">
+                    <Field data-invalid={Boolean(modelFieldErrors.apiUrl)}>
+                      <FieldLabel htmlFor="custom-api-url">完整 API 请求地址</FieldLabel>
+                      <Input
+                        id="custom-api-url"
+                        type="url"
+                        placeholder="https://example.com/v1/chat/completions"
+                        value={customApiUrl}
+                        aria-invalid={Boolean(modelFieldErrors.apiUrl)}
+                        onChange={(event) => handleApiUrlChange(event.target.value)}
+                        className="h-10 rounded-lg bg-white/75 text-sm"
+                      />
+                      <FieldDescription>
+                        系统会直接请求这个地址，结尾通常是 /chat/completions。修改官方地址会切换为其他兼容接口。
+                      </FieldDescription>
+                      <FieldError>{modelFieldErrors.apiUrl}</FieldError>
+                    </Field>
+                  </CollapsibleContent>
+                </Collapsible>
+
+                <Button
+                  type="button"
+                  variant="outline"
+                  onClick={handleTestModel}
+                  disabled={testingModel}
+                  className="h-10 w-full rounded-lg bg-white/75"
+                >
+                  {testingModel ? (
+                    <RefreshCw data-icon="inline-start" className="animate-spin" />
+                  ) : (
+                    <Plug data-icon="inline-start" />
                   )}
-              </div>
+                  {testingModel ? '正在测试连接' : '测试连接'}
+                </Button>
+
+                {modelTestResult ? (
+                  <Alert
+                    variant={modelTestResult.success ? 'default' : 'destructive'}
+                    className={modelTestResult.success ? 'border-primary/20 bg-primary/5' : undefined}
+                  >
+                    {modelTestResult.success ? <CheckCircle2 /> : <AlertTriangle />}
+                    <AlertTitle>{modelTestResult.success ? '连接测试成功' : '连接测试失败'}</AlertTitle>
+                    <AlertDescription>{modelTestResult.message}</AlertDescription>
+                  </Alert>
+                ) : null}
+              </FieldGroup>
             </CardContent>
           )}
         </Card>

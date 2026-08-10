@@ -35,7 +35,6 @@ import {
   toBase64Url,
 } from '@/lib/email-content';
 import {
-  getGmailThreadContact,
   isIgnoredGmailThreadSender,
 } from '@/lib/gmail-thread-contact';
 import {
@@ -45,8 +44,14 @@ import {
   getOrLoadGmailAIHistory,
   GMAIL_AI_HISTORY_LIMIT,
   mergeRecentGmailAIMessages,
+  scopeGmailAIMessagesToReplyTarget,
   type GmailAIHistoryMessage,
 } from '@/lib/gmail-ai-reply';
+import {
+  buildGmailReplyReferences,
+  buildGmailReplySubject,
+  type GmailReplyTarget,
+} from '@/lib/gmail-reply-target';
 import { GmailThread } from '@/lib/types';
 import { RichEmailEditor } from './rich-email-editor';
 import { useDelayedEmailSender } from './delayed-email-provider';
@@ -54,6 +59,7 @@ import { useRecordAssistant } from './record-assistant-provider';
 
 interface EmailComposerProps {
   thread: GmailThread;
+  replyTarget: GmailReplyTarget | null;
   mode: 'compose' | 'ai';
   onMinimize?: () => void;
   onClose: () => void;
@@ -151,8 +157,8 @@ const QUICK_REPLY_IDEAS = [
   ['询问数据', '请询问频道近期视频表现和受众数据。'],
 ] as const;
 
-function buildThreadMessages(thread: GmailThread) {
-  return thread.messages
+function buildThreadMessages(thread: GmailThread, target: GmailReplyTarget | null) {
+  const messages = thread.messages
     .filter((message) => !isIgnoredGmailThreadSender(message.from))
     .map((message) => ({
       id: message.id,
@@ -160,13 +166,19 @@ function buildThreadMessages(thread: GmailThread) {
       subject: message.subject || thread.subject,
       from: message.from,
       to: message.to,
+      cc: message.cc,
+      replyTo: message.replyTo,
       date: message.date,
       body: message.body,
     }));
+  return target
+    ? scopeGmailAIMessagesToReplyTarget(messages, target.messageId, target.date)
+    : messages;
 }
 
 export function EmailComposer({
   thread,
+  replyTarget,
   mode,
   onMinimize,
   onClose,
@@ -210,19 +222,9 @@ export function EmailComposer({
   const generationRunRef = useRef(0);
   const generationControllerRef = useRef<AbortController | null>(null);
 
-  const threadMessages = useMemo(() => buildThreadMessages(thread), [thread]);
-  const lastConversationMessage = useMemo(
-    () => [...thread.messages]
-      .reverse()
-      .find((message) => !isIgnoredGmailThreadSender(message.from)),
-    [thread.messages],
-  );
-  const threadContact = useMemo(
-    () => getGmailThreadContact(thread, auth?.email),
-    [auth?.email, thread],
-  );
-  const externalMessage = threadContact.message || lastConversationMessage;
-  const recipientEmail = threadContact.emails[0] || '';
+  const threadMessages = useMemo(() => buildThreadMessages(thread, replyTarget), [replyTarget, thread]);
+  const externalMessage = replyTarget?.message;
+  const recipientEmail = replyTarget?.recipientEmail || '';
 
   const invokeAI = async (
     payload: Record<string, unknown>,
@@ -233,8 +235,9 @@ export function EmailComposer({
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
         ...payload,
-        threadSubject: thread.subject,
+        threadSubject: replyTarget?.subject || thread.subject,
         threadMessages: messages,
+        targetMessageId: replyTarget?.messageId || '',
         analysisPrompt: settings.aiAnalysisPrompt || '',
         draftPrompt: settings.aiDraftPrompt || settings.aiEmailPrompt || '',
         modelProvider: settings.modelProvider || 'builtin',
@@ -248,20 +251,16 @@ export function EmailComposer({
   };
 
   const loadContactHistory = async (force = false) => {
-    if (!recipientEmail) {
-      throw new Error('未找到可用的红人邮箱；Mailsuite 等系统通知邮箱不会作为回复收件人。');
-    }
-    const latestThreadMessage = [...threadMessages]
-      .sort((a, b) => new Date(a.date || 0).getTime() - new Date(b.date || 0).getTime())
-      .at(-1);
     const historyKey = buildGmailAIHistoryCacheKey({
       accountEmail: auth?.email,
-      contactEmail: recipientEmail,
-      latestMessageId: latestThreadMessage?.id,
-      latestMessageDate: latestThreadMessage?.date,
+      threadId: thread.id,
+      contactEmail: recipientEmail || 'no-recipient',
+      targetMessageId: replyTarget?.messageId,
+      latestMessageDate: replyTarget?.date,
     });
     const startedAt = performance.now();
     const loaded = await getOrLoadGmailAIHistory(historyKey, async () => {
+      if (!recipientEmail || !replyTarget) return threadMessages;
       const accessToken = await getAccessToken();
       const response = await fetch('/api/gmail', {
         method: 'POST',
@@ -271,16 +270,26 @@ export function EmailComposer({
           accessToken,
           contactEmail: recipientEmail,
           maxResults: GMAIL_AI_HISTORY_LIMIT,
-          knownMessageIds: threadMessages.map((message) => message.id).filter(Boolean),
+          knownMessageIds: thread.messages.map((message) => message.id).filter(Boolean),
         }),
       });
       const result = await response.json();
       if (!response.ok || !result.success) {
         throw new Error(result.error || '读取联系人历史邮件失败');
       }
-      return mergeRecentGmailAIMessages(
+      const scopedFetched = scopeGmailAIMessagesToReplyTarget(
         (result.data || []) as GmailAIHistoryMessage[],
+        replyTarget.messageId,
+        replyTarget.date,
+      );
+      const merged = mergeRecentGmailAIMessages(
+        scopedFetched,
         threadMessages,
+      );
+      return scopeGmailAIMessagesToReplyTarget(
+        merged,
+        replyTarget.messageId,
+        replyTarget.date,
       );
     }, force);
     console.info('[Gmail AI client history timing]', {
@@ -335,9 +344,9 @@ export function EmailComposer({
 
   useEffect(() => {
     if (mode === 'ai' && !settingsLoading) void analyzeThread();
-    // The analysis should run once when the AI composer opens for this thread.
+    // Re-run only when the selected reply anchor or confirmed recipient changes.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [mode, thread.id, settingsLoading]);
+  }, [mode, recipientEmail, replyTarget?.messageId, settingsLoading, thread.id]);
 
   useEffect(() => () => {
     analysisRunRef.current += 1;
@@ -396,6 +405,7 @@ export function EmailComposer({
             targetLangName,
             replyTone,
             gmailAccountEmail: auth?.email || '',
+            targetMessageId: replyTarget?.messageId || '',
             draftPrompt: settings.aiDraftPrompt || settings.aiEmailPrompt || '',
             modelProvider: settings.modelProvider || 'builtin',
             customApiUrl: settings.customApiUrl || '',
@@ -591,8 +601,8 @@ export function EmailComposer({
 
   const createOutgoingEmail = async () => {
     if (isEmailContentEmpty(replyContent)) throw new Error('请先填写回复内容。');
-    if (!recipientEmail) {
-      throw new Error('未找到可用的红人邮箱；已排除 Mailsuite 等系统通知邮箱。');
+    if (!recipientEmail || !replyTarget) {
+      throw new Error('请先确认最终回复收件人，再保存草稿或发送。');
     }
     const finalReply = appendEmailSignature(
       replyContent,
@@ -603,10 +613,8 @@ export function EmailComposer({
       ),
     );
     const accessToken = await getAccessToken();
-    const references = [externalMessage?.references, externalMessage?.rfcMessageId]
-      .filter(Boolean)
-      .join(' ');
-    const subject = /^re:/i.test(thread.subject) ? thread.subject : `Re: ${thread.subject}`;
+    const references = buildGmailReplyReferences(replyTarget);
+    const subject = buildGmailReplySubject(replyTarget);
     const rawEmail = await buildRichRawEmail({
       to: recipientEmail,
       subject,
@@ -659,7 +667,7 @@ export function EmailComposer({
   const sendEmail = async () => {
     if (isEmailContentEmpty(replyContent)) return;
     if (!recipientEmail) {
-      setAiError('未找到可用的红人邮箱；已排除 Mailsuite 等系统通知邮箱。');
+      setAiError('请先确认最终回复收件人，再发送邮件。');
       return;
     }
     const recipient = recipientEmail;
@@ -1184,7 +1192,7 @@ export function EmailComposer({
               {generationSettings}
               <div className="flex flex-wrap items-center justify-end gap-2">
                 <span className={`mr-1 text-xs ${recipientEmail ? 'text-gray-500' : 'text-red-600'}`}>
-                  收件人：{recipientEmail || '未找到可用的红人邮箱'}
+                  收件人：{recipientEmail || '保存草稿前需确认'}
                 </span>
                 <Button
                   variant="ghost"
@@ -1260,7 +1268,7 @@ export function EmailComposer({
       <RichEmailEditor value={replyContent} onChange={setReplyContent} placeholder="输入回复内容..." minHeight="12rem" />
       {aiError && <ErrorMessage message={aiError} />}
       <p className={`text-xs ${recipientEmail ? 'text-muted-foreground' : 'text-destructive'}`}>
-        回复收件人：{recipientEmail || '未找到可用的红人邮箱，Mailsuite 等系统通知邮箱已排除'}
+        回复收件人：{recipientEmail || '尚未确认；AI 仍可正常生成内容'}
       </p>
       <div className="grid grid-cols-2 gap-2">
         <Button variant="outline" onClick={sendEmail} disabled={!recipientEmail || sending || savingDraft || isEmailContentEmpty(replyContent)}>

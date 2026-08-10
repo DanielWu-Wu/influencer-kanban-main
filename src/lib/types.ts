@@ -242,6 +242,9 @@ export interface GmailMessage {
   threadId: string;
   from: string;
   to: string;
+  cc?: string;
+  bcc?: string;
+  replyTo?: string;
   subject: string;
   snippet: string;
   body: string;

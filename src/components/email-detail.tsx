@@ -4,6 +4,7 @@ import { useEffect, useMemo, useState } from 'react';
 import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
 import { ScrollArea } from '@/components/ui/scroll-area';
+import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover';
 import { GmailAttachment, GmailThread, GmailMessage } from '@/lib/types';
 import { useEmailTranslations, useGmailAuth, useSettings } from '@/lib/data';
 import { 
@@ -13,6 +14,8 @@ import {
   Database, Save, CheckCircle2, XCircle,
   ExternalLink, Maximize2, X,
   FileText,
+  CornerUpLeft,
+  Users,
 } from 'lucide-react';
 import { EmailComposer } from './email-composer';
 import { AITemplateReplyComposer } from './ai-template-reply-composer';
@@ -24,6 +27,12 @@ import { repairTextEncoding, splitEmailForTranslation } from '@/lib/email-text';
 import { extractMappedFeishuChannelUrl } from '@/lib/feishu-field-value';
 import type { FeishuFieldKey, FeishuFieldMapping } from '@/lib/feishu-mapping';
 import { getGmailThreadContact } from '@/lib/gmail-thread-contact';
+import {
+  collectGmailThreadParticipants,
+  formatGmailRecipientSummary,
+  getDefaultGmailReplyMessage,
+  resolveGmailReplyTarget,
+} from '@/lib/gmail-reply-target';
 import { outreachLanguageLabel } from '@/lib/outreach-languages';
 import {
   fetchFeishuRecordsCached,
@@ -39,6 +48,7 @@ import {
   type ChannelAvatarState,
 } from '@/lib/youtube-channel-avatar';
 import { useRecordAssistant } from './record-assistant-provider';
+import { GmailReplyTargetBar } from './gmail-reply-target-bar';
 
 interface EmailDetailProps {
   thread: GmailThread;
@@ -208,6 +218,10 @@ export function EmailDetail({
   });
   const [composerState, setComposerState] = useState<'closed' | 'expanded' | 'minimized'>('closed');
   const [replyMode, setReplyMode] = useState<'compose' | 'template' | 'ai'>('compose');
+  const [selectedReplyMessageId, setSelectedReplyMessageId] = useState(
+    () => getDefaultGmailReplyMessage(thread)?.id || '',
+  );
+  const [recipientOverrides, setRecipientOverrides] = useState<Record<string, string>>({});
   const [savedReplyDraft, setSavedReplyDraft] = useState('');
   const [changingReadStateId, setChangingReadStateId] = useState<string | null>(null);
   const [downloadingAttachmentIds, setDownloadingAttachmentIds] = useState<Set<string>>(new Set());
@@ -219,6 +233,16 @@ export function EmailDetail({
   } | null>(null);
   const { addTranslation, getTranslation } = useEmailTranslations();
   const { auth, connect } = useGmailAuth();
+  const defaultReplyMessageId = useMemo(
+    () => getDefaultGmailReplyMessage(thread)?.id || '',
+    [thread],
+  );
+
+  useEffect(() => {
+    setSelectedReplyMessageId(defaultReplyMessageId);
+    setRecipientOverrides({});
+    setComposerState('closed');
+  }, [auth?.email, defaultReplyMessageId, thread.id]);
 
   const toggleMessage = (messageId: string) => {
     const newExpanded = new Set(expandedMessages);
@@ -348,6 +372,17 @@ export function EmailDetail({
   const { settings } = useSettings();
   const { appendLog } = useRecordAssistant();
   const displayMessages = useMemo(() => sortMessagesNewestFirst(thread.messages), [thread.messages]);
+  const replyTarget = useMemo(() => resolveGmailReplyTarget({
+    thread,
+    messageId: selectedReplyMessageId,
+    ownEmail: auth?.email,
+    selectedRecipient: recipientOverrides[selectedReplyMessageId],
+    suggestedCreatorEmail: creatorProfile?.email,
+  }), [auth?.email, creatorProfile?.email, recipientOverrides, selectedReplyMessageId, thread]);
+  const threadParticipants = useMemo(
+    () => collectGmailThreadParticipants(thread, auth?.email, creatorProfile?.email),
+    [auth?.email, creatorProfile?.email, thread],
+  );
   const messageLanguageLabels = useMemo(() => new Map(
     displayMessages.map((message) => {
       const displayBody = repairTextEncoding(message.body);
@@ -361,6 +396,19 @@ export function EmailDetail({
   ), [displayMessages]);
   const newestDisplayMessageId = displayMessages[0]?.id || '';
   const creatorYouTubeChannelUrl = getDirectYouTubeChannelUrl(creatorProfile);
+
+  const openReplyForMessage = (message: GmailMessage, mode: 'compose' | 'ai') => {
+    setSelectedReplyMessageId(message.id);
+    setExpandedMessages((current) => new Set(current).add(message.id));
+    setReplyMode(mode);
+    setComposerState('expanded');
+  };
+
+  const updateReplyRecipient = (email: string) => {
+    if (!replyTarget) return;
+    setSelectedReplyMessageId(replyTarget.messageId);
+    setRecipientOverrides((current) => ({ ...current, [replyTarget.messageId]: email }));
+  };
 
   useEffect(() => {
     setExpandedMessages(new Set(newestDisplayMessageId ? [newestDisplayMessageId] : []));
@@ -998,9 +1046,37 @@ export function EmailDetail({
           </Button>
           <div className="min-w-0">
             <h2 className="truncate text-base font-semibold">{thread.subject || '(无主题)'}</h2>
-            <p className="text-xs text-muted-foreground">
-              {thread.messages.length} 封邮件 · {thread.participantCount} 位参与者
-            </p>
+            <Popover>
+              <PopoverTrigger asChild>
+                <Button variant="ghost" size="sm" className="h-6 px-1 text-xs text-muted-foreground">
+                  <Users data-icon="inline-start" />
+                  {thread.messages.length} 封邮件 · 查看参与者（{threadParticipants.length}）
+                </Button>
+              </PopoverTrigger>
+              <PopoverContent align="start" className="flex w-96 flex-col gap-3">
+                <div>
+                  <p className="text-sm font-medium">邮件线程参与者</p>
+                  <p className="text-xs text-muted-foreground">根据 Gmail 的发件人、收件人和抄送信息汇总。</p>
+                </div>
+                <div className="flex max-h-72 flex-col gap-2 overflow-y-auto">
+                  {threadParticipants.map((participant) => (
+                    <div key={participant.email} className="flex items-start justify-between gap-3 rounded-lg border px-3 py-2">
+                      <div className="min-w-0">
+                        <p className="truncate text-sm font-medium">{participant.name || participant.email}</p>
+                        <p className="truncate text-xs text-muted-foreground">{participant.email}</p>
+                      </div>
+                      <Badge variant={participant.role === 'creator' ? 'default' : 'secondary'}>
+                        {participant.role === 'account'
+                          ? '当前账号'
+                          : participant.role === 'creator'
+                            ? '飞书已匹配红人'
+                            : '其他联系人'}
+                      </Badge>
+                    </div>
+                  ))}
+                </div>
+              </PopoverContent>
+            </Popover>
           </div>
         </div>
         <div className="flex items-center gap-1">
@@ -1016,7 +1092,16 @@ export function EmailDetail({
           >
             <Sparkles className="w-4 h-4 text-primary" />
           </Button>
-          <Button variant="ghost" size="icon" className="h-9 w-9 rounded-lg hover:bg-white/70">
+          <Button
+            variant="ghost"
+            size="icon"
+            className="h-9 w-9 rounded-lg hover:bg-white/70"
+            title="回复当前选中的邮件"
+            onClick={() => {
+              setReplyMode('compose');
+              setComposerState('expanded');
+            }}
+          >
             <Reply className="w-4 h-4" />
           </Button>
           <Button variant="ghost" size="icon" className="h-9 w-9 rounded-lg hover:bg-white/70">
@@ -1212,6 +1297,7 @@ export function EmailDetail({
             const translation = getTranslation(message.id);
             const isExpanded = expandedMessages.has(message.id);
             const isNewest = index === 0;
+            const isReplyTarget = replyTarget?.messageId === message.id;
             const visibleAttachments = (message.attachments || []).filter(
               (attachment) => !attachment.inline,
             );
@@ -1229,7 +1315,11 @@ export function EmailDetail({
                 <div
                   className={`
                     cursor-pointer rounded-xl border p-4 shadow-[var(--glass-shadow-soft)] transition-[background-color,border-color,box-shadow] duration-200
-                    ${isNewest ? 'border-primary/22 bg-primary/[0.045]' : 'border-border/55 bg-white/92'}
+                    ${isReplyTarget
+                      ? 'border-primary/60 bg-primary/[0.07] ring-2 ring-primary/10'
+                      : isNewest
+                        ? 'border-primary/22 bg-primary/[0.045]'
+                        : 'border-border/55 bg-white/92'}
                   `}
                   onClick={() => toggleMessage(message.id)}
                 >
@@ -1250,9 +1340,13 @@ export function EmailDetail({
                           <span className="font-medium">{sender.name}</span>
                           <span className="text-xs text-muted-foreground">&lt;{sender.email}&gt;</span>
                         </div>
-                        <p className="text-xs text-muted-foreground">
-                          {formatDate(message.date)}
-                        </p>
+                        <div className="flex flex-wrap items-center gap-2 text-xs text-muted-foreground">
+                          <span>{formatDate(message.date)}</span>
+                          <span>·</span>
+                          <span>{formatGmailRecipientSummary(message)}</span>
+                          {/^(fwd?|转发):/i.test(message.subject || '') && <Badge variant="outline">已转发</Badge>}
+                          {isReplyTarget && <Badge variant="default">当前回复依据</Badge>}
+                        </div>
                       </div>
                     </div>
 
@@ -1332,6 +1426,14 @@ export function EmailDetail({
                         </div>
                       </div>
 
+                      <div className="flex flex-col gap-1 rounded-lg border bg-muted/25 px-3 py-2 text-xs">
+                        <p><span className="text-muted-foreground">发件人：</span>{message.from || '未显示'}</p>
+                        <p><span className="text-muted-foreground">收件人：</span>{message.to || '未显示'}</p>
+                        {message.cc ? <p><span className="text-muted-foreground">抄送：</span>{message.cc}</p> : null}
+                        {message.bcc ? <p><span className="text-muted-foreground">密送：</span>{message.bcc}</p> : null}
+                        {message.replyTo ? <p><span className="text-muted-foreground">Reply-To：</span>{message.replyTo}</p> : null}
+                      </div>
+
                       {showingTranslationIds.has(message.id) && translation ? (
                         <div className="prose prose-sm max-w-none">
                           <pre className="max-w-full whitespace-pre-wrap break-words rounded-lg border border-blue-100 bg-blue-50/80 p-4 font-sans text-sm">
@@ -1392,6 +1494,24 @@ export function EmailDetail({
 
                       {/* 操作按钮 */}
                       <div className="flex items-center gap-2 pt-2">
+                        <Button
+                          size="sm"
+                          variant="outline"
+                          className="h-8 rounded-lg bg-white/75"
+                          onClick={() => openReplyForMessage(message, 'compose')}
+                        >
+                          <CornerUpLeft data-icon="inline-start" />
+                          {message.labels.includes('SENT') ? '基于此邮件继续起草' : '回复此邮件'}
+                        </Button>
+                        <Button
+                          size="sm"
+                          variant="outline"
+                          className="h-8 rounded-lg border-primary/25 bg-primary/5 text-primary"
+                          onClick={() => openReplyForMessage(message, 'ai')}
+                        >
+                          <Sparkles data-icon="inline-start" />
+                          {message.labels.includes('SENT') ? 'AI 继续起草' : 'AI 回复此邮件'}
+                        </Button>
                         <Button 
                           size="sm" 
                           variant="outline" 
@@ -1436,7 +1556,7 @@ export function EmailDetail({
 
       {/* 底部回复区域 */}
       <div
-        className={`shrink-0 ${
+        className={`flex shrink-0 flex-col ${
           composerState === 'expanded' && (replyMode === 'ai' || replyMode === 'template')
             ? 'h-[68dvh] min-h-0 overflow-hidden border-t border-gray-300 bg-white shadow-[0_-8px_24px_rgba(15,23,42,0.08)] sm:h-[min(62dvh,640px)]'
             : composerState === 'expanded'
@@ -1446,6 +1566,14 @@ export function EmailDetail({
                 : 'material-toolbar border-t border-border/55 p-4'
         }`}
       >
+        {composerState === 'expanded' && replyTarget ? (
+          <GmailReplyTargetBar
+            target={replyTarget}
+            ownEmail={auth?.email}
+            onRecipientChange={updateReplyRecipient}
+            onChooseMessage={() => setComposerState('closed')}
+          />
+        ) : null}
         {composerState === 'closed' ? (
           <div className="flex items-center justify-center gap-3">
             <Button
@@ -1518,19 +1646,21 @@ export function EmailDetail({
                 </Button>
               </div>
             )}
-            <div className={composerState === 'minimized' ? 'hidden' : 'h-full min-h-0'}>
+            <div className={composerState === 'minimized' ? 'hidden' : 'min-h-0 flex-1'}>
               {replyMode === 'template' ? (
                 <AITemplateReplyComposer
-                  key={`template-${thread.id}`}
+                  key={`template-${thread.id}-${replyTarget?.messageId || 'default'}`}
                   thread={thread}
+                  replyTarget={replyTarget}
                   onMinimize={() => setComposerState('minimized')}
                   onClose={() => setComposerState('closed')}
                   onDraftSaved={setSavedReplyDraft}
                 />
               ) : (
                 <EmailComposer
-                  key={replyMode}
+                  key={`${replyMode}-${replyTarget?.messageId || 'default'}`}
                   thread={thread}
+                  replyTarget={replyTarget}
                   mode={replyMode}
                   onMinimize={replyMode === 'ai' ? () => setComposerState('minimized') : undefined}
                   onClose={() => setComposerState('closed')}

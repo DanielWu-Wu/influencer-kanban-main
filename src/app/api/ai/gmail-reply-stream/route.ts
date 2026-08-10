@@ -212,6 +212,8 @@ export async function POST(request: NextRequest) {
         const selectedMessages = selectRelevantGmailAIDraftMessages(
           threadMessages,
           String(body.gmailAccountEmail || ''),
+          undefined,
+          String(body.targetMessageId || ''),
         );
         const conversation = buildCompactGmailAIConversation(selectedMessages);
         const analysis = body.analysis || {};

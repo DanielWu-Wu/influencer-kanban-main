@@ -30,6 +30,7 @@ import {
   getGmailThreadContact,
   isIgnoredGmailThreadSender,
 } from '@/lib/gmail-thread-contact';
+import { collectGmailThreadParticipants } from '@/lib/gmail-reply-target';
 import {
   fetchFeishuRecordsCached,
   type CachedFeishuRecord as FeishuRecord,
@@ -465,6 +466,9 @@ async function parseGmailThread(
       threadId: String(message.threadId),
       from: getHeader(headers, 'From'),
       to: getHeader(headers, 'To'),
+      cc: getHeader(headers, 'Cc'),
+      bcc: getHeader(headers, 'Bcc'),
+      replyTo: getHeader(headers, 'Reply-To'),
       subject: getHeader(headers, 'Subject'),
       snippet: String(message.snippet || ''),
       body,
@@ -479,7 +483,7 @@ async function parseGmailThread(
     };
   }));
 
-  const participantCount = new Set(messages.map((message) => message.from).filter(Boolean)).size;
+  const participantCount = collectGmailThreadParticipants({ messages }).length;
   const rawDate = getHeader(lastHeaders, 'Date');
   const lastInternalDate = Number(apiMessages[apiMessages.length - 1]?.internalDate);
   const lastMessageDate = Number.isFinite(lastInternalDate)
