@@ -158,6 +158,14 @@ export type CooperationCalendarEvent = {
 };
 
 const DAY_MS = 24 * 60 * 60 * 1000;
+const COOPERATION_NOTICE_TIME_ZONE = 'Asia/Shanghai';
+const COOPERATION_DATE_KEY_PATTERN = /^\d{4}-\d{2}-\d{2}$/;
+const cooperationNoticeDateFormatter = new Intl.DateTimeFormat('en-US', {
+  timeZone: COOPERATION_NOTICE_TIME_ZONE,
+  year: 'numeric',
+  month: '2-digit',
+  day: '2-digit',
+});
 
 const FIELD_ALIASES: Partial<Record<FeishuFieldKey, string[]>> = {
   channelName: ['红人频道名字', '红人频道名', '频道名称'],
@@ -269,6 +277,24 @@ export function parseFeishuDate(value: unknown) {
   }
   const parsed = new Date(text).getTime();
   return Number.isFinite(parsed) ? parsed : undefined;
+}
+
+export function formatCooperationNoticeDate(value: unknown) {
+  const text = flattenFeishuValue(value).trim();
+  if (!text) return '';
+  if (COOPERATION_DATE_KEY_PATTERN.test(text)) return text;
+
+  const numeric = Number(text);
+  const timestamp = Number.isFinite(numeric) && numeric > 0
+    ? (numeric < 10_000_000_000 ? numeric * 1000 : numeric)
+    : new Date(text).getTime();
+  if (!Number.isFinite(timestamp)) return '';
+
+  const parts = cooperationNoticeDateFormatter.formatToParts(new Date(timestamp));
+  const year = parts.find((part) => part.type === 'year')?.value;
+  const month = parts.find((part) => part.type === 'month')?.value;
+  const day = parts.find((part) => part.type === 'day')?.value;
+  return year && month && day ? `${year}-${month}-${day}` : '';
 }
 
 function parseFeishuBoolean(value: unknown) {

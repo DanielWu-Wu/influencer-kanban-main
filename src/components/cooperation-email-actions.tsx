@@ -46,7 +46,11 @@ import {
   stripConfiguredEmailSignature,
   textToEmailHtml,
 } from '@/lib/email-content';
-import { type CooperationProject } from '@/lib/cooperation-projects';
+import {
+  formatCooperationNoticeDate,
+  type CooperationProject,
+} from '@/lib/cooperation-projects';
+import { getUsableCooperationEmailHistory } from '@/lib/cooperation-email-thread';
 import {
   collectProfileEmails,
   extractEmailAddresses,
@@ -67,6 +71,9 @@ type GmailHistoryMessage = {
   to: string;
   date: string;
   body: string;
+  snippet?: string;
+  labelIds?: string[];
+  mimeType?: string;
   automated?: boolean;
   deliveryFailure?: boolean;
 };
@@ -220,7 +227,6 @@ export function CooperationEmailActions({
 }: Props) {
   const { auth, connect } = useGmailAuth();
   const [confirmDraftOpen, setConfirmDraftOpen] = useState(false);
-  const [confirmSentOpen, setConfirmSentOpen] = useState(false);
   const [recipientSelection, setRecipientSelection] = useState<{
     type: NoticeType;
     emails: string[];
@@ -232,7 +238,6 @@ export function CooperationEmailActions({
 
   useEffect(() => {
     setConfirmDraftOpen(false);
-    setConfirmSentOpen(false);
     setRecipientSelection(null);
     setSelectedRecipient('');
     setResolvingRecipientType(null);
@@ -264,6 +269,9 @@ export function CooperationEmailActions({
   };
 
   const generateNoticeForRecipient = async (type: NoticeType, recipient: string) => {
+    const existingGmailDraftId = draft?.type === type && draft.recipient === recipient
+      ? draft.gmailDraftId
+      : undefined;
     setDraft({
       type,
       status: 'generating',
@@ -275,10 +283,11 @@ export function CooperationEmailActions({
       riskNotes: [],
       missingInfo: [],
       chineseDirty: false,
+      gmailDraftId: existingGmailDraftId,
     });
     try {
       const historyMessages = await loadContactHistory(recipient);
-      const validHistory = historyMessages.filter((message) => !message.automated && !message.deliveryFailure);
+      const validHistory = getUsableCooperationEmailHistory(historyMessages);
       const thread = validHistory.at(-1);
       const response = await fetch('/api/ai', {
         method: 'POST',
@@ -295,7 +304,7 @@ export function CooperationEmailActions({
             region: project.region,
             product: project.product,
             cooperationType: project.cooperationType,
-            shippingDate: project.shippingDate,
+            shippingDate: formatCooperationNoticeDate(project.shippingDate),
             shippingTracking: project.shippingTracking,
             discountCode: project.discountCode,
           },
@@ -324,6 +333,7 @@ export function CooperationEmailActions({
         missingInfo: Array.isArray(result.data?.missingInfo) ? result.data.missingInfo.map(String) : [],
         chineseDirty: false,
         thread,
+        gmailDraftId: existingGmailDraftId,
       });
       toast.success(`${project.channelName} 的${NOTICE_META[type].shortLabel}草稿已生成，可以打开项目检查。`);
     } catch (error) {
@@ -364,7 +374,7 @@ export function CooperationEmailActions({
             region: project.region,
             product: project.product,
             cooperationType: project.cooperationType,
-            shippingDate: project.shippingDate,
+            shippingDate: formatCooperationNoticeDate(project.shippingDate),
             shippingTracking: project.shippingTracking,
             discountCode: project.discountCode,
           },
@@ -481,6 +491,7 @@ export function CooperationEmailActions({
       subject: draft.subject.trim(),
       body: applyPlainTextEmailSignature(cleanBody, emailSignature),
       bodyHtml: appendEmailSignature(textToEmailHtml(cleanBody), emailSignature),
+      draftId: draft.gmailDraftId,
     };
     if (draft.thread?.threadId) {
       payload.threadId = draft.thread.threadId;
@@ -499,6 +510,44 @@ export function CooperationEmailActions({
     return result;
   };
 
+  const getNoticeWritebackConfig = (type: NoticeType) => {
+    const mappingKey = type === 'logistics' ? 'logisticsNotified' : 'discountNotified';
+    return {
+      fieldName: settings.feishuCooperationFieldMapping?.[mappingKey],
+      fieldLabel: type === 'logistics' ? '物流信息已告知' : '折扣信息已告知',
+    };
+  };
+
+  const writeNotifiedToFeishu = async (type: NoticeType) => {
+    const { fieldName, fieldLabel } = getNoticeWritebackConfig(type);
+    if (!settings.feishuCooperationUrl || !fieldName) {
+      throw new Error(`请先在“设置 > 飞书”映射${fieldLabel}字段。`);
+    }
+    const response = await fetch('/api/feishu/records', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        action: 'update',
+        url: settings.feishuCooperationUrl,
+        recordId: project.id,
+        fields: { [fieldName]: true },
+      }),
+    });
+    const result = await response.json();
+    if (!response.ok || !result.success) {
+      throw new Error(String(result.error || `同步飞书“${fieldLabel}”失败。`));
+    }
+    return fieldLabel;
+  };
+
+  const refreshProjectAfterWriteback = async () => {
+    try {
+      await onProjectUpdated();
+    } catch {
+      toast.warning('飞书已成功勾选，但合作项目列表刷新失败，请手动点击“刷新项目”。');
+    }
+  };
+
   const saveDraft = async () => {
     if (!draft) return;
     if (draft.chineseDirty) {
@@ -507,6 +556,11 @@ export function CooperationEmailActions({
     }
     if (!auth?.accessToken) {
       toast.error('请先在“设置 > Gmail 邮件”连接 Gmail。');
+      return;
+    }
+    const { fieldName, fieldLabel } = getNoticeWritebackConfig(draft.type);
+    if (!settings.feishuCooperationUrl || !fieldName) {
+      toast.error(`请先在“设置 > 飞书”映射${fieldLabel}字段，再保存 Gmail 草稿。`);
       return;
     }
     setConfirmDraftOpen(false);
@@ -519,12 +573,23 @@ export function CooperationEmailActions({
         if (!isGmailAuthError(error)) throw error;
         result = await createGmailDraft(await refreshGmailAuth());
       }
-      setDraft((current) => current ? {
-        ...current,
-        status: 'saved',
-        gmailDraftId: String(result.data?.id || result.data?.message?.id || ''),
-      } : null);
-      toast.success('邮件已保存到 Gmail 草稿，尚未发送，也没有写回“已告知”。');
+      const gmailDraftId = String(result.data?.id || result.data?.message?.id || '');
+      setDraft((current) => current ? { ...current, status: 'writing', gmailDraftId } : null);
+      try {
+        await writeNotifiedToFeishu(draft.type);
+        setDraft((current) => current ? { ...current, status: 'written', error: undefined } : null);
+        toast.success(`Gmail 草稿已保存，并已同步勾选飞书“${fieldLabel}”；邮件尚未发送。`);
+        await refreshProjectAfterWriteback();
+      } catch (writebackError) {
+        const message = writebackError instanceof Error ? writebackError.message : `同步飞书“${fieldLabel}”失败。`;
+        setDraft((current) => current ? {
+          ...current,
+          status: 'saved',
+          gmailDraftId,
+          error: `Gmail 草稿已保存，但${message}`,
+        } : null);
+        toast.error(`Gmail 草稿已保存，但${message} 请点击“重试同步飞书”。`);
+      }
     } catch (error) {
       setDraft((current) => current ? {
         ...current,
@@ -535,40 +600,22 @@ export function CooperationEmailActions({
     }
   };
 
-  const confirmSentAndWriteBack = async () => {
+  const retryNotifiedWriteback = async () => {
     if (!draft) return;
-    setConfirmSentOpen(false);
-    const mapping = settings.feishuCooperationFieldMapping || {};
-    const mappingKey = draft.type === 'logistics' ? 'logisticsNotified' : 'discountNotified';
-    const fieldName = mapping[mappingKey];
-    if (!settings.feishuCooperationUrl || !fieldName) {
-      toast.error(`请先在“设置 > 飞书”映射${draft.type === 'logistics' ? '物流信息已告知' : '折扣信息已告知'}字段。`);
-      return;
-    }
     setDraft((current) => current ? { ...current, status: 'writing', error: undefined } : null);
     try {
-      const response = await fetch('/api/feishu/records', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          action: 'update',
-          url: settings.feishuCooperationUrl,
-          recordId: project.id,
-          fields: { [fieldName]: true },
-        }),
-      });
-      const result = await response.json();
-      if (!response.ok || !result.success) throw new Error(String(result.error || '写回飞书失败。'));
-      setDraft((current) => current ? { ...current, status: 'written' } : null);
-      toast.success('已确认邮件实际发送，并写回飞书“已告知”状态。');
-      await onProjectUpdated();
+      const fieldLabel = await writeNotifiedToFeishu(draft.type);
+      setDraft((current) => current ? { ...current, status: 'written', error: undefined } : null);
+      toast.success(`已同步勾选飞书“${fieldLabel}”，不会重复创建 Gmail 草稿。`);
+      await refreshProjectAfterWriteback();
     } catch (error) {
+      const message = error instanceof Error ? error.message : '同步飞书失败。';
       setDraft((current) => current ? {
         ...current,
         status: 'saved',
-        error: error instanceof Error ? error.message : '写回飞书失败。',
+        error: `Gmail 草稿已保存，但${message}`,
       } : null);
-      toast.error(error instanceof Error ? error.message : '写回飞书失败。');
+      toast.error(message);
     }
   };
 
@@ -586,7 +633,7 @@ export function CooperationEmailActions({
   return (
     <section className="border-b border-slate-200 py-4">
       <h3 className="text-sm font-semibold text-slate-900">邮件动作</h3>
-      <p className="mt-1 text-xs leading-5 text-slate-500">先生成并检查，再保存 Gmail 草稿；系统不会自动发送。</p>
+      <p className="mt-1 text-xs leading-5 text-slate-500">先生成并检查；保存 Gmail 草稿成功后自动同步飞书“已告知”，系统不会自动发送。</p>
 
       <div className="mt-3 grid gap-2">
         {(Object.keys(NOTICE_META) as NoticeType[]).map((type) => {
@@ -718,17 +765,31 @@ export function CooperationEmailActions({
                   <RefreshCw className="h-4 w-4" />重新生成
                 </Button>
                 <Button size="sm" onClick={() => setConfirmDraftOpen(true)} disabled={!draft.subject.trim() || !draft.body.trim() || draft.chineseDirty || draftBusy}>
-                  {draft.status === 'saving' ? <Loader2 className="h-4 w-4 animate-spin" /> : <Save className="h-4 w-4" />}
-                  {draft.status === 'saved' || draft.status === 'written' ? '重新保存 Gmail 草稿' : '保存 Gmail 草稿'}
+                  {draft.status === 'saving' || draft.status === 'writing' ? <Loader2 className="h-4 w-4 animate-spin" /> : <Save className="h-4 w-4" />}
+                  {draft.status === 'saving'
+                    ? '正在保存 Gmail 草稿'
+                    : draft.status === 'writing'
+                      ? '正在同步飞书'
+                      : draft.status === 'saved' || draft.status === 'written'
+                        ? '重新保存 Gmail 草稿'
+                        : '保存 Gmail 草稿'}
                 </Button>
-                {draft.status === 'saved' || draft.status === 'written' ? (
-                  <Button variant="outline" size="sm" className="border-emerald-200 bg-emerald-50 text-emerald-700" onClick={() => setConfirmSentOpen(true)} disabled={draft.status === 'written'}>
-                    <MailCheck className="h-4 w-4" />{draft.status === 'written' ? '已写回飞书' : '确认已发送并写回'}
+                {draft.status === 'saved' ? (
+                  <Button variant="outline" size="sm" className="border-amber-200 bg-amber-50 text-amber-700" onClick={() => void retryNotifiedWriteback()}>
+                    <RefreshCw className="h-4 w-4" />重试同步飞书
+                  </Button>
+                ) : null}
+                {draft.status === 'written' ? (
+                  <Button variant="outline" size="sm" className="border-emerald-200 bg-emerald-50 text-emerald-700" disabled>
+                    <CheckCircle2 className="h-4 w-4" />飞书已同步
                   </Button>
                 ) : null}
               </div>
               {draft.status === 'saved' ? (
-                <p className="flex items-center gap-1 text-[11px] text-emerald-700"><CheckCircle2 className="h-3.5 w-3.5" />草稿已保存，尚未发送，也未标记“已告知”。</p>
+                <p className="flex items-center gap-1 text-[11px] text-amber-700"><AlertTriangle className="h-3.5 w-3.5" />草稿已保存，但飞书尚未同步；点击“重试同步飞书”不会重复创建草稿。</p>
+              ) : null}
+              {draft.status === 'written' ? (
+                <p className="flex items-center gap-1 text-[11px] text-emerald-700"><CheckCircle2 className="h-3.5 w-3.5" />草稿已保存，飞书“已告知”已勾选；邮件尚未发送。</p>
               ) : null}
             </>
           )}
@@ -789,31 +850,15 @@ export function CooperationEmailActions({
           <AlertDialogHeader>
             <AlertDialogTitle>确认保存 Gmail 草稿</AlertDialogTitle>
             <AlertDialogDescription>
-              将为 {project.channelName} 创建一封收件人为 {draft?.recipient || '待确认邮箱'} 的{activeMeta?.shortLabel}草稿。
-              系统不会发送邮件，也不会写回飞书“已告知”状态。
+              将为 {project.channelName}{draft?.gmailDraftId ? `更新现有${activeMeta?.shortLabel || ''}草稿` : `创建一封${activeMeta?.shortLabel || ''}草稿`}，
+              收件人为 {draft?.recipient || '待确认邮箱'}。
+              草稿创建成功后，系统会同步勾选飞书“{draft ? getNoticeWritebackConfig(draft.type).fieldLabel : '已告知'}”；系统不会发送邮件。
             </AlertDialogDescription>
           </AlertDialogHeader>
           <AlertDialogFooter>
             <AlertDialogCancel>继续检查</AlertDialogCancel>
             <AlertDialogAction onClick={(event) => { event.preventDefault(); void saveDraft(); }}>
               <Save className="h-4 w-4" />确认保存草稿
-            </AlertDialogAction>
-          </AlertDialogFooter>
-        </AlertDialogContent>
-      </AlertDialog>
-
-      <AlertDialog open={confirmSentOpen} onOpenChange={setConfirmSentOpen}>
-        <AlertDialogContent>
-          <AlertDialogHeader>
-            <AlertDialogTitle>确认邮件已经实际发送</AlertDialogTitle>
-            <AlertDialogDescription>
-              只有你已经在 Gmail 中真实发送这封{activeMeta?.shortLabel}邮件，才应继续。确认后系统将把飞书中的“已告知”状态更新为已完成。
-            </AlertDialogDescription>
-          </AlertDialogHeader>
-          <AlertDialogFooter>
-            <AlertDialogCancel>尚未发送</AlertDialogCancel>
-            <AlertDialogAction onClick={(event) => { event.preventDefault(); void confirmSentAndWriteBack(); }}>
-              <CheckCircle2 className="h-4 w-4" />确认发送并写回
             </AlertDialogAction>
           </AlertDialogFooter>
         </AlertDialogContent>

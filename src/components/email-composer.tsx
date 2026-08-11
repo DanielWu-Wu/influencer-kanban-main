@@ -193,9 +193,14 @@ export function EmailComposer({
   const [translatingEditedReply, setTranslatingEditedReply] = useState(false);
   const [translationUpdated, setTranslationUpdated] = useState(false);
   const [generationStage, setGenerationStage] = useState('');
+  const [optimizationLoading, setOptimizationLoading] = useState(false);
+  const [optimizationError, setOptimizationError] = useState('');
+  const [optimizedSuggestion, setOptimizedSuggestion] = useState<AISuggestion | null>(null);
+  const [draftUsedAnalysis, setDraftUsedAnalysis] = useState(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const analysisRunRef = useRef(0);
   const generationRunRef = useRef(0);
+  const optimizationRunRef = useRef(0);
   const generationControllerRef = useRef<AbortController | null>(null);
   const targetLangLockedRef = useRef(false);
   const targetContextKeyRef = useRef('');
@@ -319,6 +324,7 @@ export function EmailComposer({
   useEffect(() => () => {
     analysisRunRef.current += 1;
     generationRunRef.current += 1;
+    optimizationRunRef.current += 1;
     generationControllerRef.current?.abort();
   }, [thread.id]);
 
@@ -417,6 +423,8 @@ export function EmailComposer({
     generationRunRef.current = runId;
     setAiLoading(true);
     setAiError('');
+    setOptimizedSuggestion(null);
+    setOptimizationError('');
     setGenerationStage('正在准备邮件上下文');
 
     try {
@@ -620,6 +628,7 @@ export function EmailComposer({
       setTranslationExpanded(true);
       setTranslationEditing(false);
       setTranslationUpdated(false);
+      setDraftUsedAnalysis(Boolean(analysis));
       setGeneratedLangName(targetLangName);
       addSuggestion({
         threadId: thread.id,
@@ -648,6 +657,64 @@ export function EmailComposer({
         generationControllerRef.current = null;
       }
     }
+  };
+
+  const optimizeReplyWithPortrait = async () => {
+    if (!analysis || !suggestion || optimizationLoading || aiLoading) return;
+    const generationMessages = historyMessages.length ? historyMessages : threadMessages;
+    const currentDraft = emailHtmlToText(replyContent).trim();
+    if (!currentDraft || generationMessages.length === 0) {
+      setOptimizationError('当前草稿或邮件上下文为空，暂时无法进行画像优化。');
+      return;
+    }
+
+    const runId = optimizationRunRef.current + 1;
+    optimizationRunRef.current = runId;
+    setOptimizationLoading(true);
+    setOptimizationError('');
+    setOptimizedSuggestion(null);
+
+    try {
+      const result = await invokeAI({
+        action: 'optimizeDraft',
+        analysis,
+        userIdeas,
+        currentDraft,
+        targetLang,
+        targetLangName,
+        replyTone,
+        gmailAccountEmail: auth?.email || '',
+      }, generationMessages) as AISuggestion;
+      if (runId !== optimizationRunRef.current) return;
+      const cleanSuggestedReply = stripConfiguredEmailSignature(
+        result.suggestedReply,
+        settings.emailSignature,
+      );
+      setOptimizedSuggestion({
+        ...result,
+        suggestedReply: cleanSuggestedReply,
+        keyPoints: result.keyPoints || [],
+      });
+    } catch (error) {
+      if (runId !== optimizationRunRef.current) return;
+      setOptimizationError(error instanceof Error ? error.message : '结合红人画像优化失败，请稍后重试。');
+    } finally {
+      if (runId === optimizationRunRef.current) setOptimizationLoading(false);
+    }
+  };
+
+  const applyOptimizedSuggestion = () => {
+    if (!optimizedSuggestion) return;
+    setSuggestion(optimizedSuggestion);
+    setReplyContent(optimizedSuggestion.suggestedReply);
+    setEditedChineseReply(optimizedSuggestion.translatedReply);
+    setTranslationExpanded(true);
+    setTranslationEditing(false);
+    setTranslationUpdated(false);
+    setDraftUsedAnalysis(true);
+    setOptimizedSuggestion(null);
+    setOptimizationError('');
+    setAiError('');
   };
 
   const updateDraftFromChinese = async () => {
@@ -736,6 +803,10 @@ export function EmailComposer({
   };
 
   const saveToGmailDrafts = async () => {
+    if (mode === 'ai' && !translationUpdated) {
+      setAiError('请先确认或修改中文，并点击“确认中文并更新外文”，再保存 Gmail 草稿。');
+      return;
+    }
     setSavingDraft(true);
     setAiError('');
 
@@ -775,6 +846,10 @@ export function EmailComposer({
 
   const sendEmail = async () => {
     if (isEmailContentEmpty(replyContent)) return;
+    if (mode === 'ai' && !translationUpdated) {
+      setAiError('请先确认或修改中文，并点击“确认中文并更新外文”，再发送邮件。');
+      return;
+    }
     if (!recipientEmail) {
       setAiError('请先确认最终回复收件人，再发送邮件。');
       return;
@@ -846,8 +921,8 @@ export function EmailComposer({
   };
 
   const copyToClipboard = async () => {
-    if (!suggestion) return;
-    await navigator.clipboard.writeText(suggestion.suggestedReply);
+    if (!suggestion || isEmailContentEmpty(replyContent)) return;
+    await navigator.clipboard.writeText(emailHtmlToText(replyContent));
     setCopied(true);
     window.setTimeout(() => setCopied(false), 2000);
   };
@@ -1158,13 +1233,39 @@ export function EmailComposer({
 
       {suggestion && (
         <>
-          {analysis && ((analysis.openQuestions?.length || 0) > 0 || (analysis.risks?.length || 0) > 0) && (
-            <section className="overflow-hidden rounded-lg border border-amber-200 bg-amber-50/60">
-              <div className="flex flex-wrap items-center gap-2 border-b border-amber-100 px-4 py-2.5">
-                <Badge variant="outline" className="border-amber-200 bg-white font-normal text-amber-700">
-                  后台分析已完成
-                </Badge>
-                <p className="text-xs text-amber-800">发送前请结合以下信息核对草稿，系统不会自动改写或发送。</p>
+          {analysis && (
+            <section className={`overflow-hidden rounded-lg border ${draftUsedAnalysis ? 'border-emerald-200 bg-emerald-50/60' : 'border-amber-200 bg-amber-50/60'}`}>
+              <div className={`flex flex-wrap items-center justify-between gap-3 border-b px-4 py-2.5 ${draftUsedAnalysis ? 'border-emerald-100' : 'border-amber-100'}`}>
+                <div className="flex flex-wrap items-center gap-2">
+                  <Badge
+                    variant="outline"
+                    className={draftUsedAnalysis
+                      ? 'border-emerald-200 bg-white font-normal text-emerald-700'
+                      : 'border-amber-200 bg-white font-normal text-amber-700'}
+                  >
+                    {draftUsedAnalysis ? '当前草稿已结合画像' : '后台红人画像已完成'}
+                  </Badge>
+                  <p className={`text-xs ${draftUsedAnalysis ? 'text-emerald-800' : 'text-amber-800'}`}>
+                    {draftUsedAnalysis
+                      ? '仍需完成最终中文确认，系统不会自动发送。'
+                      : '可以对比画像优化版；当前草稿不会被自动覆盖。'}
+                  </p>
+                </div>
+                {!draftUsedAnalysis && !optimizedSuggestion && (
+                  <Button
+                    type="button"
+                    variant="outline"
+                    size="sm"
+                    className="h-8 shrink-0 border-amber-200 bg-white text-amber-800 hover:bg-amber-100"
+                    disabled={optimizationLoading || aiLoading || translatingEditedReply || translationEditing}
+                    onClick={optimizeReplyWithPortrait}
+                  >
+                    {optimizationLoading
+                      ? <Loader2 className="animate-spin" data-icon="inline-start" />
+                      : <Sparkles data-icon="inline-start" />}
+                    {optimizationLoading ? '正在生成优化版...' : '结合画像优化草稿'}
+                  </Button>
+                )}
               </div>
               <div className="grid sm:grid-cols-2">
                 <AnalysisList
@@ -1184,6 +1285,44 @@ export function EmailComposer({
               </div>
             </section>
           )}
+          {optimizationError && (
+            <ErrorMessage message={optimizationError}>
+              <Button variant="outline" size="sm" onClick={optimizeReplyWithPortrait}>重新优化</Button>
+            </ErrorMessage>
+          )}
+          {optimizedSuggestion && (
+            <section className="overflow-hidden rounded-lg border border-blue-200 bg-white shadow-sm">
+              <div className="border-b border-blue-100 bg-blue-50/70 px-4 py-3">
+                <div className="flex flex-wrap items-center gap-2">
+                  <h3 className="text-sm font-semibold text-blue-950">当前版与画像优化版</h3>
+                  <Badge variant="outline" className="border-blue-200 bg-white font-normal text-blue-700">等待你选择</Badge>
+                </div>
+                <p className="mt-1 text-xs text-blue-800">先看中文差异；选择后还必须完成最终中文确认，才允许保存或发送。</p>
+              </div>
+              <div className="grid lg:grid-cols-2">
+                <DraftComparisonCard
+                  title="当前版本"
+                  chineseText={suggestion.translatedReply}
+                  foreignText={emailHtmlToText(replyContent)}
+                  actionLabel="保留当前版"
+                  onSelect={() => {
+                    setOptimizedSuggestion(null);
+                    setOptimizationError('');
+                  }}
+                  className="border-b border-blue-100 lg:border-b-0 lg:border-r"
+                />
+                <DraftComparisonCard
+                  title="画像优化版本"
+                  chineseText={optimizedSuggestion.translatedReply}
+                  foreignText={optimizedSuggestion.suggestedReply}
+                  keyPoints={optimizedSuggestion.keyPoints}
+                  actionLabel="使用优化版"
+                  primary
+                  onSelect={applyOptimizedSuggestion}
+                />
+              </div>
+            </section>
+          )}
           <section className="overflow-hidden rounded-lg border border-gray-300 bg-white shadow-sm">
             <div className="flex items-center justify-between gap-3 border-b border-gray-100 px-4 py-3">
               <div className="min-w-0">
@@ -1191,6 +1330,14 @@ export function EmailComposer({
                   <h3 className="text-sm font-semibold text-gray-900">回复草稿</h3>
                   <Badge variant="secondary" className="bg-gray-100 font-normal text-gray-700">
                     {generatedLangName || targetLangName}
+                  </Badge>
+                  <Badge
+                    variant="outline"
+                    className={translationUpdated
+                      ? 'border-emerald-200 bg-emerald-50 font-normal text-emerald-700'
+                      : 'border-amber-200 bg-amber-50 font-normal text-amber-700'}
+                  >
+                    {translationUpdated ? '已完成最终中文确认' : '待最终中文确认'}
                   </Badge>
                   {aiLoading && generationStage && (
                     <Badge variant="outline" className="border-blue-200 bg-blue-50 font-normal text-blue-700">
@@ -1240,7 +1387,7 @@ export function EmailComposer({
                       <p className="text-sm font-medium text-gray-900">编辑中文邮件</p>
                       <p className="mt-0.5 text-xs text-gray-500">修改完成后，AI 将只翻译这份中文，不会重新分析或改写你的商务决定。</p>
                     </div>
-                    <Badge variant="outline" className="border-gray-200 font-normal text-gray-500">待确认</Badge>
+                    <Badge variant="outline" className="border-amber-200 bg-amber-50 font-normal text-amber-700">最终人工确认</Badge>
                   </div>
                   <Textarea
                     value={editedChineseReply}
@@ -1277,7 +1424,7 @@ export function EmailComposer({
                         {translatingEditedReply
                           ? <Loader2 className="animate-spin" data-icon="inline-start" />
                           : <Languages data-icon="inline-start" />}
-                        {translatingEditedReply ? '正在翻译...' : '根据中文更新外文'}
+                        {translatingEditedReply ? '正在翻译...' : '确认中文并更新外文'}
                       </Button>
                     </div>
                   </div>
@@ -1285,8 +1432,10 @@ export function EmailComposer({
               ) : (
                 <div className="border-t border-gray-100 bg-gray-50">
                   <div className="flex items-center justify-between gap-3 border-b border-gray-100 px-4 py-2.5">
-                    <p className={`text-xs ${translationUpdated ? 'text-emerald-700' : 'text-gray-500'}`}>
-                      {translationUpdated ? '外文草稿已按这份中文更新' : '可修改中文版本，再生成对应语言的外文草稿。'}
+                    <p className={`text-xs ${translationUpdated ? 'text-emerald-700' : 'text-amber-700'}`}>
+                      {translationUpdated
+                        ? '最终中文已确认，外文草稿已与这份中文同步。'
+                        : '最终步骤：请确认或修改中文，再根据中文更新外文。'}
                     </p>
                     <Button
                       type="button"
@@ -1301,7 +1450,7 @@ export function EmailComposer({
                         setAiError('');
                       }}
                     >
-                      编辑中文
+                      {translationUpdated ? '再次修改中文' : '确认/修改中文'}
                     </Button>
                   </div>
                   <div className="whitespace-pre-wrap px-4 py-3 text-sm leading-6 text-gray-700">
@@ -1348,12 +1497,21 @@ export function EmailComposer({
                 <span className={`mr-1 text-xs ${recipientEmail ? 'text-gray-500' : 'text-red-600'}`}>
                   收件人：{recipientEmail || '保存草稿前需确认'}
                 </span>
+                {!translationUpdated && (
+                  <span className="mr-1 text-xs font-medium text-amber-700">
+                    请先完成最终中文确认
+                  </span>
+                )}
                 <Button
                   variant="ghost"
                   className="text-gray-600 hover:bg-gray-100 hover:text-gray-900"
-                  disabled={aiLoading || translatingEditedReply || translationEditing || sending || savingDraft}
+                  disabled={aiLoading || optimizationLoading || translatingEditedReply || translationEditing || sending || savingDraft}
                   onClick={() => {
+                    optimizationRunRef.current += 1;
                     setSuggestion(null);
+                    setOptimizedSuggestion(null);
+                    setOptimizationError('');
+                    setDraftUsedAnalysis(false);
                     setTranslationEditing(false);
                     setTranslationUpdated(false);
                     setAiError('');
@@ -1364,7 +1522,7 @@ export function EmailComposer({
                 <Button
                   variant="outline"
                   onClick={generateReply}
-                  disabled={!userIdeas.trim() || aiLoading || translatingEditedReply || translationEditing || sending || savingDraft}
+                  disabled={!userIdeas.trim() || aiLoading || optimizationLoading || Boolean(optimizedSuggestion) || translatingEditedReply || translationEditing || sending || savingDraft}
                 >
                   {aiLoading ? <Loader2 className="animate-spin" data-icon="inline-start" /> : <RefreshCw data-icon="inline-start" />}
                   {aiLoading ? '重新生成中...' : '重新生成'}
@@ -1372,12 +1530,12 @@ export function EmailComposer({
                 <Button
                   variant="outline"
                   onClick={sendEmail}
-                  disabled={!recipientEmail || aiLoading || translatingEditedReply || translationEditing || sending || savingDraft || isEmailContentEmpty(replyContent)}
+                  disabled={!recipientEmail || !translationUpdated || aiLoading || optimizationLoading || Boolean(optimizedSuggestion) || translatingEditedReply || translationEditing || sending || savingDraft || isEmailContentEmpty(replyContent)}
                 >
                   {sending ? <Loader2 className="animate-spin" data-icon="inline-start" /> : <Send data-icon="inline-start" />}
                   直接发送
                 </Button>
-                <Button onClick={saveToGmailDrafts} disabled={!recipientEmail || aiLoading || translatingEditedReply || translationEditing || savingDraft || sending || isEmailContentEmpty(replyContent)}>
+                <Button onClick={saveToGmailDrafts} disabled={!recipientEmail || !translationUpdated || aiLoading || optimizationLoading || Boolean(optimizedSuggestion) || translatingEditedReply || translationEditing || savingDraft || sending || isEmailContentEmpty(replyContent)}>
                   {savingDraft ? <Loader2 className="animate-spin" data-icon="inline-start" /> : <Save data-icon="inline-start" />}
                   保存 Gmail 草稿
                 </Button>
@@ -1432,6 +1590,57 @@ export function EmailComposer({
           保存为草稿
         </Button>
       </div>
+    </div>
+  );
+}
+
+function DraftComparisonCard({
+  title,
+  chineseText,
+  foreignText,
+  keyPoints = [],
+  actionLabel,
+  onSelect,
+  primary = false,
+  className = '',
+}: {
+  title: string;
+  chineseText: string;
+  foreignText: string;
+  keyPoints?: string[];
+  actionLabel: string;
+  onSelect: () => void;
+  primary?: boolean;
+  className?: string;
+}) {
+  return (
+    <div className={`flex min-w-0 flex-col gap-3 p-4 ${className}`}>
+      <div className="flex items-center justify-between gap-2">
+        <p className="text-sm font-semibold text-gray-900">{title}</p>
+        {primary && <Badge className="bg-blue-600 font-normal hover:bg-blue-600">结合画像</Badge>}
+      </div>
+      <div className="min-h-36 flex-1 rounded-md border border-gray-200 bg-gray-50 px-3 py-2.5">
+        <p className="text-xs font-medium text-gray-500">中文对照</p>
+        <p className="mt-1.5 whitespace-pre-wrap text-sm leading-6 text-gray-800">
+          {chineseText || '暂无中文对照，请在选择版本后进入最终中文确认。'}
+        </p>
+      </div>
+      {keyPoints.length > 0 && (
+        <div className="rounded-md border border-blue-100 bg-blue-50/60 px-3 py-2.5">
+          <p className="text-xs font-medium text-blue-700">画像优化变化</p>
+          <ul className="mt-1.5 space-y-1 text-xs leading-5 text-blue-950">
+            {keyPoints.map((point, index) => <li key={`portrait-change-${index}`}>• {point}</li>)}
+          </ul>
+        </div>
+      )}
+      <details className="rounded-md border border-gray-200 bg-white px-3 py-2 text-xs text-gray-600">
+        <summary className="cursor-pointer select-none font-medium">查看外文正文</summary>
+        <p className="mt-2 whitespace-pre-wrap text-sm leading-6 text-gray-700">{foreignText}</p>
+      </details>
+      <Button type="button" variant={primary ? 'default' : 'outline'} onClick={onSelect}>
+        {primary && <Check data-icon="inline-start" />}
+        {actionLabel}
+      </Button>
     </div>
   );
 }

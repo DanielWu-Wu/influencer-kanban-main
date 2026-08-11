@@ -3,6 +3,7 @@ import './feishu-record-cache.test';
 import './feishu-batch.test';
 import './feishu-field-value.test';
 import './cooperation-projects.test';
+import './cooperation-email-thread.test';
 import './email-language.test';
 import './gmail-ai-reply.test';
 import './gmail-reply-target.test';

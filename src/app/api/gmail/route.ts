@@ -157,6 +157,7 @@ function parseHistoryMessage(message: Record<string, unknown>) {
     labelIds: Array.isArray(message.labelIds)
       ? message.labelIds.map((label) => String(label || ''))
       : [],
+    mimeType: String(payload.mimeType || ''),
     rfcMessageId: getHeader(headers, 'Message-ID'),
     references: getHeader(headers, 'References'),
     subject: getHeader(headers, 'Subject') || '无主题',
@@ -465,6 +466,7 @@ export async function POST(request: NextRequest) {
       threadId,
       inReplyTo,
       references,
+      draftId,
       contactEmail,
       maxResults: requestedMaxResults,
       knownMessageIds,
@@ -644,37 +646,64 @@ export async function POST(request: NextRequest) {
         .replace(/\//g, '_')
         .replace(/=+$/, '');
 
-      let lastStatus = 500;
-      let lastError = '';
-      for (let attempt = 0; attempt < 3; attempt += 1) {
-        const res = await fetch('https://gmail.googleapis.com/gmail/v1/users/me/drafts', {
-          method: 'POST',
-          headers,
-          body: JSON.stringify({
-            message: {
-              raw: encodedEmail,
-              threadId: threadId || undefined,
-            },
-          }),
-        });
+      const requestedDraftId = String(draftId || '').trim();
+      if (requestedDraftId && !/^[A-Za-z0-9_-]+$/.test(requestedDraftId)) {
+        return NextResponse.json({ error: 'Gmail 草稿编号无效，请重新生成草稿。' }, { status: 400 });
+      }
 
-        if (res.ok) {
-          const data = await res.json();
-          return NextResponse.json({ success: true, data });
+      const persistDraft = async (existingDraftId = '') => {
+        let lastStatus = 500;
+        let lastError = '';
+        const endpoint = existingDraftId
+          ? `https://gmail.googleapis.com/gmail/v1/users/me/drafts/${encodeURIComponent(existingDraftId)}`
+          : 'https://gmail.googleapis.com/gmail/v1/users/me/drafts';
+        for (let attempt = 0; attempt < 3; attempt += 1) {
+          const res = await fetch(endpoint, {
+            method: existingDraftId ? 'PUT' : 'POST',
+            headers,
+            body: JSON.stringify({
+              message: {
+                raw: encodedEmail,
+                threadId: threadId || undefined,
+              },
+            }),
+          });
+
+          if (res.ok) {
+            return {
+              ok: true as const,
+              data: await res.json(),
+              operation: existingDraftId ? 'updated' as const : 'created' as const,
+            };
+          }
+
+          lastStatus = res.status;
+          lastError = await res.text();
+          if (!shouldRetryGmailDraft(res.status, lastError) || attempt === 2) break;
+          await sleep(600 * (attempt + 1));
         }
+        return { ok: false as const, status: lastStatus, error: lastError };
+      };
 
-        lastStatus = res.status;
-        lastError = await res.text();
-        if (!shouldRetryGmailDraft(res.status, lastError) || attempt === 2) break;
-        await sleep(600 * (attempt + 1));
+      let savedDraft = await persistDraft(requestedDraftId);
+      if (!savedDraft.ok && requestedDraftId && [404, 410].includes(savedDraft.status)) {
+        savedDraft = await persistDraft();
+      }
+
+      if (savedDraft.ok) {
+        return NextResponse.json({
+          success: true,
+          data: savedDraft.data,
+          operation: savedDraft.operation,
+        });
       }
 
       return NextResponse.json(
         {
-          error: `创建草稿失败：${summarizeGmailError(lastStatus, lastError)}`,
-          details: lastError,
+          error: `${requestedDraftId ? '更新' : '创建'}草稿失败：${summarizeGmailError(savedDraft.status, savedDraft.error)}`,
+          details: savedDraft.error,
         },
-        { status: lastStatus },
+        { status: savedDraft.status },
       );
     }
 

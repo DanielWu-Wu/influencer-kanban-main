@@ -341,7 +341,7 @@ export function WorkCalendar({
                   setShowDayDetails(true);
                 }}
               />
-              <span className={`relative z-[1] block w-7 h-7 leading-7 mx-auto rounded-full text-sm font-medium pointer-events-none
+              <span className={`relative z-[1] block w-7 h-7 leading-7 mx-auto rounded-full text-center text-sm font-medium pointer-events-none
                   ${isToday ? 'bg-blue-500 text-white' : ''}
                   ${!day.isCurrentMonth ? 'text-muted-foreground/40' : ''}
                 `}>

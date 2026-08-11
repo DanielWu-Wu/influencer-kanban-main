@@ -2,6 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import {
   buildCooperationCalendarEvents,
+  formatCooperationNoticeDate,
   formatCooperationFullDate,
   matchesCooperationStageFilter,
   normalizeCooperationDateSelection,
@@ -27,6 +28,17 @@ test('合作项目阶段时间显示完整中文年月日', () => {
     formatCooperationFullDate(Date.UTC(2026, 9, 11, 12)),
     '2026年10月11日',
   );
+});
+
+test('物流邮件日期把飞书时间戳固定转换为上海业务日期', () => {
+  assert.equal(formatCooperationNoticeDate(1786291200000), '2026-08-10');
+  assert.equal(formatCooperationNoticeDate('1786291200'), '2026-08-10');
+  assert.equal(formatCooperationNoticeDate('2026-08-10'), '2026-08-10');
+});
+
+test('物流邮件日期不会把无效或缺失值交给 AI 推算', () => {
+  assert.equal(formatCooperationNoticeDate(undefined), '');
+  assert.equal(formatCooperationNoticeDate('not-a-date'), '');
 });
 
 test('合作阶段筛选支持同时显示多个所选阶段', () => {
