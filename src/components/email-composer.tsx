@@ -35,16 +35,11 @@ import {
   toBase64Url,
 } from '@/lib/email-content';
 import {
-  isIgnoredGmailThreadSender,
-} from '@/lib/gmail-thread-contact';
-import {
   buildGmailAIAnalysisCacheKey,
-  buildGmailAIHistoryCacheKey,
+  buildGmailAIThreadMessages,
   getOrLoadGmailAIAnalysis,
-  getOrLoadGmailAIHistory,
   GMAIL_AI_HISTORY_LIMIT,
-  mergeRecentGmailAIMessages,
-  scopeGmailAIMessagesToReplyTarget,
+  loadGmailAIContactHistory,
   type GmailAIHistoryMessage,
 } from '@/lib/gmail-ai-reply';
 import {
@@ -157,25 +152,6 @@ const QUICK_REPLY_IDEAS = [
   ['询问数据', '请询问频道近期视频表现和受众数据。'],
 ] as const;
 
-function buildThreadMessages(thread: GmailThread, target: GmailReplyTarget | null) {
-  const messages = thread.messages
-    .filter((message) => !isIgnoredGmailThreadSender(message.from))
-    .map((message) => ({
-      id: message.id,
-      threadId: message.threadId,
-      subject: message.subject || thread.subject,
-      from: message.from,
-      to: message.to,
-      cc: message.cc,
-      replyTo: message.replyTo,
-      date: message.date,
-      body: message.body,
-    }));
-  return target
-    ? scopeGmailAIMessagesToReplyTarget(messages, target.messageId, target.date)
-    : messages;
-}
-
 export function EmailComposer({
   thread,
   replyTarget,
@@ -222,7 +198,11 @@ export function EmailComposer({
   const generationRunRef = useRef(0);
   const generationControllerRef = useRef<AbortController | null>(null);
 
-  const threadMessages = useMemo(() => buildThreadMessages(thread, replyTarget), [replyTarget, thread]);
+  const threadMessages = useMemo(() => buildGmailAIThreadMessages(
+    thread,
+    replyTarget?.messageId,
+    replyTarget?.date,
+  ), [replyTarget?.date, replyTarget?.messageId, thread]);
   const externalMessage = replyTarget?.message;
   const recipientEmail = replyTarget?.recipientEmail || '';
 
@@ -251,53 +231,15 @@ export function EmailComposer({
   };
 
   const loadContactHistory = async (force = false) => {
-    const historyKey = buildGmailAIHistoryCacheKey({
+    const loaded = await loadGmailAIContactHistory({
       accountEmail: auth?.email,
-      threadId: thread.id,
-      contactEmail: recipientEmail || 'no-recipient',
+      thread,
+      contactEmail: recipientEmail,
       targetMessageId: replyTarget?.messageId,
-      latestMessageDate: replyTarget?.date,
+      targetMessageDate: replyTarget?.date,
+      force,
     });
-    const startedAt = performance.now();
-    const loaded = await getOrLoadGmailAIHistory(historyKey, async () => {
-      if (!recipientEmail || !replyTarget) return threadMessages;
-      const accessToken = await getAccessToken();
-      const response = await fetch('/api/gmail', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          action: 'contactHistory',
-          accessToken,
-          contactEmail: recipientEmail,
-          maxResults: GMAIL_AI_HISTORY_LIMIT,
-          knownMessageIds: thread.messages.map((message) => message.id).filter(Boolean),
-        }),
-      });
-      const result = await response.json();
-      if (!response.ok || !result.success) {
-        throw new Error(result.error || '读取联系人历史邮件失败');
-      }
-      const scopedFetched = scopeGmailAIMessagesToReplyTarget(
-        (result.data || []) as GmailAIHistoryMessage[],
-        replyTarget.messageId,
-        replyTarget.date,
-      );
-      const merged = mergeRecentGmailAIMessages(
-        scopedFetched,
-        threadMessages,
-      );
-      return scopeGmailAIMessagesToReplyTarget(
-        merged,
-        replyTarget.messageId,
-        replyTarget.date,
-      );
-    }, force);
-    console.info('[Gmail AI client history timing]', {
-      cacheHit: loaded.cacheHit,
-      messages: loaded.value.length,
-      totalMs: Math.round(performance.now() - startedAt),
-    });
-    return { messages: loaded.value, historyKey };
+    return { messages: loaded.messages, historyKey: loaded.historyKey };
   };
 
   const analyzeThread = async (force = false) => {
@@ -933,6 +875,45 @@ export function EmailComposer({
       {attachmentList}
       {attachmentError && <p className="text-xs text-destructive">{attachmentError}</p>}
 
+      {!suggestion && (
+        <section className="rounded-lg border border-gray-300 bg-white shadow-sm transition focus-within:border-primary focus-within:ring-2 focus-within:ring-primary/15">
+          <div className="border-b border-gray-100 px-4 py-3">
+            <div className="flex items-center justify-between gap-3">
+              <div>
+                <label htmlFor="ai-reply-strategy" className="text-sm font-semibold text-gray-900">回复想法</label>
+                <p className="mt-0.5 text-xs text-gray-500">
+                  {analysisLoading || settingsLoading
+                    ? '可以先填写预算、底线或需要确认的问题；邮件分析会在后台继续。'
+                    : '补充预算、底线、产品安排或需要对方确认的问题。'}
+                </p>
+              </div>
+              <Badge variant="outline" className="shrink-0 border-gray-200 font-normal text-gray-500">必填</Badge>
+            </div>
+          </div>
+          <Textarea
+            id="ai-reply-strategy"
+            value={userIdeas}
+            onChange={(event) => setUserIdeas(event.target.value)}
+            placeholder="例如：价格可以接受，但需要确认视频发布时间；请礼貌询问能否在月底前发布..."
+            className="min-h-28 resize-y rounded-none border-0 bg-white px-4 py-3 shadow-none focus-visible:ring-0"
+          />
+          <div className="flex flex-wrap gap-1.5 border-t border-gray-100 px-3 py-2">
+            {QUICK_REPLY_IDEAS.map(([label, text]) => (
+              <Button
+                key={label}
+                type="button"
+                variant="ghost"
+                size="sm"
+                className="h-8 bg-gray-50 px-2.5 text-xs font-normal text-gray-600 hover:bg-gray-100 hover:text-gray-900"
+                onClick={() => setUserIdeas((current) => current ? `${current}\n${text}` : text)}
+              >
+                {label}
+              </Button>
+            ))}
+          </div>
+        </section>
+      )}
+
       {analysis && !suggestion && (
         <>
           <section className="overflow-hidden rounded-lg border border-gray-200 bg-white">
@@ -1019,41 +1000,10 @@ export function EmailComposer({
             </CollapsibleContent>
           </Collapsible>
 
-          <section className="rounded-lg border border-gray-300 bg-white shadow-sm transition focus-within:border-primary focus-within:ring-2 focus-within:ring-primary/15">
-            <div className="border-b border-gray-100 px-4 py-3">
-              <div className="flex items-center justify-between gap-3">
-                <div>
-                  <label htmlFor="ai-reply-strategy" className="text-sm font-semibold text-gray-900">回复策略</label>
-                  <p className="mt-0.5 text-xs text-gray-500">补充预算、底线、产品安排或需要对方确认的问题。</p>
-                </div>
-                <Badge variant="outline" className="shrink-0 border-gray-200 font-normal text-gray-500">必填</Badge>
-              </div>
-            </div>
-            <Textarea
-              id="ai-reply-strategy"
-              value={userIdeas}
-              onChange={(event) => setUserIdeas(event.target.value)}
-              placeholder="例如：价格可以接受，但需要确认视频发布时间；请礼貌询问能否在月底前发布..."
-              className="min-h-28 resize-y rounded-none border-0 bg-white px-4 py-3 shadow-none focus-visible:ring-0"
-            />
-            <div className="flex flex-wrap gap-1.5 border-t border-gray-100 px-3 py-2">
-              {QUICK_REPLY_IDEAS.map(([label, text]) => (
-                <Button
-                  key={label}
-                  type="button"
-                  variant="ghost"
-                  size="sm"
-                  className="h-8 bg-gray-50 px-2.5 text-xs font-normal text-gray-600 hover:bg-gray-100 hover:text-gray-900"
-                  onClick={() => setUserIdeas((current) => current ? `${current}\n${text}` : text)}
-                >
-                  {label}
-                </Button>
-              ))}
-            </div>
-          </section>
-          {aiError && <ErrorMessage message={aiError} />}
         </>
       )}
+
+      {!suggestion && aiError && <ErrorMessage message={aiError} />}
 
       {suggestion && (
         <>
@@ -1196,12 +1146,22 @@ export function EmailComposer({
         {header}
         <ScrollArea className="min-h-0 flex-1 bg-[#F7F8FA]">{aiBody}</ScrollArea>
         <div className="shrink-0 border-t border-gray-200 bg-white px-4 py-3 shadow-[0_-4px_12px_rgba(15,23,42,0.035)]">
-          {analysis && !suggestion ? (
+          {!suggestion ? (
             <div className="flex flex-col gap-3 lg:flex-row lg:items-center lg:justify-between">
               {generationSettings}
-              <Button className="shrink-0" onClick={generateReply} disabled={!userIdeas.trim() || aiLoading}>
-                {aiLoading ? <Loader2 className="animate-spin" data-icon="inline-start" /> : <Sparkles data-icon="inline-start" />}
-                {aiLoading ? '正在生成草稿...' : '生成邮件草稿'}
+              <Button
+                className="shrink-0"
+                onClick={generateReply}
+                disabled={!analysis || !userIdeas.trim() || analysisLoading || settingsLoading || aiLoading}
+              >
+                {aiLoading || analysisLoading || settingsLoading
+                  ? <Loader2 className="animate-spin" data-icon="inline-start" />
+                  : <Sparkles data-icon="inline-start" />}
+                {aiLoading
+                  ? '正在生成草稿...'
+                  : analysisLoading || settingsLoading
+                    ? '分析完成后生成'
+                    : '生成邮件草稿'}
               </Button>
             </div>
           ) : suggestion ? (
@@ -1246,9 +1206,7 @@ export function EmailComposer({
                 </Button>
               </div>
             </div>
-          ) : (
-            <p className="text-center text-xs text-muted-foreground">分析完成后可在这里生成回复</p>
-          )}
+          ) : null}
         </div>
       </div>
     );

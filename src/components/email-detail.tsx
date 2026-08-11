@@ -361,6 +361,7 @@ export function EmailDetail({
   const [showingTranslationIds, setShowingTranslationIds] = useState<Set<string>>(new Set());
   const [translateErrors, setTranslateErrors] = useState<Record<string, string>>({});
   const [translationProgress, setTranslationProgress] = useState<Record<string, string>>({});
+  const [streamingTranslations, setStreamingTranslations] = useState<Record<string, string>>({});
   const [creatorProfile, setCreatorProfile] = useState<FeishuCreatorProfile | null>(null);
   const [creatorProfileLoading, setCreatorProfileLoading] = useState(false);
   const [creatorProfileError, setCreatorProfileError] = useState('');
@@ -665,7 +666,10 @@ export function EmailDetail({
     }
   };
 
-  const requestTranslation = async (text: string) => {
+  const requestTranslation = async (
+    text: string,
+    onProgress?: (translatedText: string) => void,
+  ) => {
     const response = await fetch('/api/translate', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
@@ -676,19 +680,70 @@ export function EmailDetail({
         modelProvider: settings.modelProvider || 'builtin',
         customApiUrl: settings.customApiUrl || '',
         customModelName: settings.customModelName || '',
+        stream: true,
       }),
     });
 
-    const result = await response.json();
-
-    if (!response.ok || !result.success) {
-      throw new Error(result.error || '翻译失败');
+    const contentType = response.headers.get('content-type')?.toLowerCase() || '';
+    if (!contentType.includes('text/event-stream')) {
+      const result = await response.json();
+      if (!response.ok || !result.success) throw new Error(result.error || '翻译失败');
+      const translatedText = String(result.data.translatedText || '').trim();
+      onProgress?.(translatedText);
+      return {
+        translatedText,
+        sourceLang: String(result.data.sourceLang || 'auto'),
+      };
     }
 
-    return {
-      translatedText: String(result.data.translatedText || '').trim(),
-      sourceLang: String(result.data.sourceLang || 'auto'),
+    if (!response.ok || !response.body) throw new Error('翻译服务没有返回可读取的结果。');
+    const reader = response.body.getReader();
+    const decoder = new TextDecoder();
+    let buffer = '';
+    let translatedText = '';
+    let sourceLang = 'auto';
+    let streamError = '';
+
+    const handleBlock = (block: string) => {
+      const event = block.match(/^event:\s*(.+)$/m)?.[1]?.trim() || 'message';
+      const dataText = block
+        .split(/\r?\n/)
+        .filter((line) => line.startsWith('data:'))
+        .map((line) => line.replace(/^data:\s?/, ''))
+        .join('\n');
+      if (!dataText) return;
+      try {
+        const data = JSON.parse(dataText);
+        if (event === 'delta' && typeof data.text === 'string') {
+          translatedText += data.text;
+          onProgress?.(translatedText);
+        } else if (event === 'final') {
+          translatedText = String(data.translatedText || translatedText).trim();
+          sourceLang = String(data.sourceLang || sourceLang);
+          onProgress?.(translatedText);
+        } else if (event === 'metrics') {
+          console.info('[Email translation client timing]', data);
+        } else if (event === 'error') {
+          streamError = String(data.message || '翻译失败');
+        }
+      } catch {
+        // Ignore malformed keepalive events and continue consuming the stream.
+      }
     };
+
+    while (true) {
+      const { value, done } = await reader.read();
+      if (done) break;
+      buffer += decoder.decode(value, { stream: true });
+      const blocks = buffer.split(/\r?\n\r?\n/);
+      buffer = blocks.pop() || '';
+      blocks.forEach(handleBlock);
+    }
+    buffer += decoder.decode();
+    if (buffer.trim()) handleBlock(buffer);
+    if (streamError) throw new Error(streamError);
+    if (!translatedText.trim()) throw new Error('翻译服务没有返回可用译文。');
+    return { translatedText: translatedText.trim(), sourceLang };
   };
 
   const handleTranslateLegacy = async (message: GmailMessage) => {
@@ -783,8 +838,19 @@ export function EmailDetail({
       const { currentText, quotedText } = splitEmailForTranslation(originalText);
       if (!currentText) throw new Error('这封邮件没有可翻译的正文。');
 
-      const currentResult = await requestTranslation(currentText);
       const hasQuotedHistory = Boolean(quotedText.trim());
+      const translationPrefix = hasQuotedHistory ? '【当前邮件翻译】\n' : '';
+      setShowingTranslationIds((current) => new Set(current).add(message.id));
+      setStreamingTranslations((current) => ({
+        ...current,
+        [message.id]: translationPrefix,
+      }));
+      const currentResult = await requestTranslation(currentText, (partial) => {
+        setStreamingTranslations((current) => ({
+          ...current,
+          [message.id]: `${translationPrefix}${partial}`,
+        }));
+      });
       const currentTranslation = hasQuotedHistory
         ? `【当前邮件翻译】\n${currentResult.translatedText}`
         : currentResult.translatedText;
@@ -809,6 +875,11 @@ export function EmailDetail({
         return next;
       });
       setTranslationProgress((current) => {
+        const next = { ...current };
+        delete next[message.id];
+        return next;
+      });
+      setStreamingTranslations((current) => {
         const next = { ...current };
         delete next[message.id];
         return next;
@@ -846,10 +917,20 @@ export function EmailDetail({
     }));
 
     try {
-      const quotedResult = await requestTranslation(quotedText);
       const baseTranslation = existingTranslation.translatedText
         .replace(/\n\n---\n【引用历史翻译】\n正在继续翻译邮件引用历史\.\.\.$/, '')
         .replace(/\n\n---\n【引用历史翻译】\n引用历史暂时翻译失败，可以稍后再试。$/, '');
+      const translationPrefix = `${baseTranslation}\n\n---\n【引用历史翻译】\n`;
+      setStreamingTranslations((current) => ({
+        ...current,
+        [message.id]: translationPrefix,
+      }));
+      const quotedResult = await requestTranslation(quotedText, (partial) => {
+        setStreamingTranslations((current) => ({
+          ...current,
+          [message.id]: `${translationPrefix}${partial}`,
+        }));
+      });
 
       addTranslation({
         messageId: message.id,
@@ -871,6 +952,11 @@ export function EmailDetail({
         return next;
       });
       setTranslationProgress((current) => {
+        const next = { ...current };
+        delete next[message.id];
+        return next;
+      });
+      setStreamingTranslations((current) => {
         const next = { ...current };
         delete next[message.id];
         return next;
@@ -1295,6 +1381,11 @@ export function EmailDetail({
           {displayMessages.map((message, index) => {
             const sender = getDisplayEmail(message.from);
             const translation = getTranslation(message.id);
+            const visibleTranslationText = streamingTranslations[message.id]
+              || translation?.translatedText
+              || (translatingIds.has(message.id) || translatingQuotedIds.has(message.id)
+                ? '正在等待首段译文…'
+                : '');
             const isExpanded = expandedMessages.has(message.id);
             const isNewest = index === 0;
             const isReplyTarget = replyTarget?.messageId === message.id;
@@ -1434,10 +1525,10 @@ export function EmailDetail({
                         {message.replyTo ? <p><span className="text-muted-foreground">Reply-To：</span>{message.replyTo}</p> : null}
                       </div>
 
-                      {showingTranslationIds.has(message.id) && translation ? (
+                      {showingTranslationIds.has(message.id) && visibleTranslationText ? (
                         <div className="prose prose-sm max-w-none">
                           <pre className="max-w-full whitespace-pre-wrap break-words rounded-lg border border-blue-100 bg-blue-50/80 p-4 font-sans text-sm">
-                            {translation.translatedText}
+                            {visibleTranslationText}
                           </pre>
                           {translationProgress[message.id] && (
                             <p className="mt-2 flex items-center gap-2 text-xs text-muted-foreground">
@@ -1445,7 +1536,7 @@ export function EmailDetail({
                               {translationProgress[message.id]}
                             </p>
                           )}
-                          {hasQuotedHistory(message) && !hasCompletedQuotedTranslation(translation.translatedText) && (
+                          {translation && hasQuotedHistory(message) && !hasCompletedQuotedTranslation(translation.translatedText) && (
                             <div className="mt-3 flex items-center justify-between gap-3 rounded-lg border border-blue-100 bg-white/70 px-3 py-2">
                               <p className="text-xs text-muted-foreground">
                                 检测到这封邮件包含引用历史，默认先翻译当前邮件。

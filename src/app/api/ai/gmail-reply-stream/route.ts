@@ -23,9 +23,10 @@ type ChatOptions = {
   apiKey?: string;
   modelName?: string;
   temperature?: number;
+  requestLabel?: string;
 };
 
-function resolveChatOptions(options: ChatOptions): Required<ChatOptions> {
+function resolveChatOptions(options: ChatOptions): Required<Omit<ChatOptions, 'requestLabel'>> {
   const apiKey =
     options.apiKey
     || process.env.AI_API_KEY
@@ -51,21 +52,26 @@ function resolveChatOptions(options: ChatOptions): Required<ChatOptions> {
   };
 }
 
-async function hydrateSecrets(request: NextRequest, body: Record<string, unknown>) {
+async function hydrateSecrets(
+  appAuth: NonNullable<Awaited<ReturnType<typeof getRequestUser>>>,
+  body: Record<string, unknown>,
+) {
   if (body.modelProvider === 'custom' && !body.customApiKey) {
-    const appAuth = await getRequestUser(request);
-    if (appAuth) {
-      body.customApiKey = await getUserSecret<string>(appAuth.supabase, 'ai_api_key') || '';
-    }
+    body.customApiKey = await getUserSecret<string>(appAuth.supabase, 'ai_api_key') || '';
   }
 }
 
-function getModelOptions(body: Record<string, unknown>, temperature: number): ChatOptions {
+function getModelOptions(
+  body: Record<string, unknown>,
+  temperature: number,
+  requestLabel?: string,
+): ChatOptions {
   return {
     apiUrl: body.modelProvider === 'custom' ? String(body.customApiUrl || '') : undefined,
     apiKey: body.modelProvider === 'custom' ? String(body.customApiKey || '') : undefined,
     modelName: body.modelProvider === 'custom' ? String(body.customModelName || '') : undefined,
     temperature,
+    requestLabel,
   };
 }
 
@@ -86,6 +92,7 @@ async function streamOpenAICompatibleApi(
   onDelta: (delta: string) => void,
 ) {
   const { apiUrl, apiKey, modelName, temperature } = resolveChatOptions(options);
+  const startedAt = performance.now();
   const response = await fetch(apiUrl, {
     method: 'POST',
     headers: {
@@ -94,6 +101,7 @@ async function streamOpenAICompatibleApi(
     },
     body: JSON.stringify({ model: modelName, messages, temperature, stream: true }),
   });
+  const headersAt = performance.now();
   if (!response.ok) {
     const errorText = await response.text();
     throw new Error(`模型流式调用失败 (${response.status}): ${errorText}`);
@@ -107,6 +115,7 @@ async function streamOpenAICompatibleApi(
   const decoder = new TextDecoder();
   let buffer = '';
   let fullText = '';
+  let firstDeltaAt = 0;
 
   while (true) {
     const { value, done } = await reader.read();
@@ -123,6 +132,7 @@ async function streamOpenAICompatibleApi(
           const data = JSON.parse(payload);
           const delta = data?.choices?.[0]?.delta?.content ?? data?.choices?.[0]?.text ?? '';
           if (typeof delta === 'string' && delta) {
+            if (!firstDeltaAt) firstDeltaAt = performance.now();
             fullText += delta;
             onDelta(delta);
           }
@@ -133,6 +143,15 @@ async function streamOpenAICompatibleApi(
     }
   }
 
+  const completedAt = performance.now();
+  console.info('[AI stream provider timing]', {
+    task: options.requestLabel || 'generic_stream',
+    model: modelName,
+    providerHeadersMs: Math.round(headersAt - startedAt),
+    firstDeltaMs: firstDeltaAt ? Math.round(firstDeltaAt - startedAt) : null,
+    providerBodyMs: Math.round(completedAt - headersAt),
+    totalMs: Math.round(completedAt - startedAt),
+  });
   return fullText.trim();
 }
 
@@ -153,9 +172,15 @@ function sseEvent(event: string, data: unknown) {
 }
 
 export async function POST(request: NextRequest) {
-  if (!(await getRequestUser(request))) return NextResponse.json({ error: '未登录或账号无权使用 AI。' }, { status: 401 });
+  const requestStartedAt = performance.now();
+  const authStartedAt = performance.now();
+  const appAuth = await getRequestUser(request);
+  const authMs = Math.round(performance.now() - authStartedAt);
+  if (!appAuth) return NextResponse.json({ error: '未登录或账号无权使用 AI。' }, { status: 401 });
   const body = await request.json().catch(() => ({})) as Record<string, unknown>;
-  await hydrateSecrets(request, body);
+  const secretStartedAt = performance.now();
+  await hydrateSecrets(appAuth, body);
+  const secretMs = Math.round(performance.now() - secretStartedAt);
 
   const encoder = new TextEncoder();
   const stream = new ReadableStream<Uint8Array>({
@@ -198,7 +223,7 @@ export async function POST(request: NextRequest) {
         );
         const conversation = buildCompactGmailAIConversation(selectedMessages);
         const analysis = body.analysis || {};
-        const modelOptions = getModelOptions(body, 0.55);
+        const modelOptions = getModelOptions(body, 0.55, 'gmail_reply_body');
         const startedAt = performance.now();
         let firstDeltaAt = 0;
 
@@ -289,7 +314,7 @@ translatedReply 的强制规则：
 ${suggestedReply}`,
             },
           ],
-          getModelOptions(body, 0.25),
+          getModelOptions(body, 0.25, 'gmail_reply_metadata'),
           (delta) => {
             streamedMetadata += delta;
             const partial = extractStreamingJsonString(streamedMetadata, 'translatedReply');
@@ -322,6 +347,9 @@ ${suggestedReply}`,
           bodyMs: Math.round(metadataStartedAt - startedAt),
           metadataMs: Math.round(performance.now() - metadataStartedAt),
           totalMs: Math.round(totalMs),
+          authMs,
+          secretMs,
+          routeTotalMs: Math.round(performance.now() - requestStartedAt),
         });
         send('final', {
           suggestedReply,

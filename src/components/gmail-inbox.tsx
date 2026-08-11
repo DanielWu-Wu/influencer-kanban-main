@@ -30,7 +30,8 @@ import {
   getGmailThreadContact,
   isIgnoredGmailThreadSender,
 } from '@/lib/gmail-thread-contact';
-import { collectGmailThreadParticipants } from '@/lib/gmail-reply-target';
+import { loadGmailAIContactHistory } from '@/lib/gmail-ai-reply';
+import { collectGmailThreadParticipants, resolveGmailReplyTarget } from '@/lib/gmail-reply-target';
 import {
   fetchFeishuRecordsCached,
   type CachedFeishuRecord as FeishuRecord,
@@ -1320,6 +1321,20 @@ export function GmailInbox({
     threadPrefetchTimerRef.current = null;
   };
 
+  const prefetchGmailAIHistory = (thread: GmailThread) => {
+    const target = resolveGmailReplyTarget({ thread, ownEmail: auth?.email });
+    if (!target?.recipientEmail) return;
+    void loadGmailAIContactHistory({
+      accountEmail: auth?.email,
+      thread,
+      contactEmail: target.recipientEmail,
+      targetMessageId: target.messageId,
+      targetMessageDate: target.date,
+    }).catch(() => {
+      // This read-only prefetch is opportunistic; opening AI assistant will retry visibly.
+    });
+  };
+
   const handleOpenThread = async (thread: GmailThread) => {
     const runId = openingThreadRunRef.current + 1;
     openingThreadRunRef.current = runId;
@@ -1336,6 +1351,7 @@ export function GmailInbox({
       if (openingThreadRunRef.current === runId) {
         onSelectThread(nextThread);
         onThreadLoadStateChange?.(thread.id, { loading: false });
+        prefetchGmailAIHistory(nextThread);
       }
     } catch (caughtError) {
       if (openingThreadRunRef.current === runId) {

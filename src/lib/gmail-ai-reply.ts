@@ -1,4 +1,6 @@
 import { ACCOUNT_SCOPE_CHANGED_EVENT, getAccountCacheScope } from '@/lib/account-cache-scope';
+import { isIgnoredGmailThreadSender } from '@/lib/gmail-thread-contact';
+import type { GmailThread } from '@/lib/types';
 
 export type GmailAIHistoryMessage = {
   id?: string;
@@ -25,6 +27,29 @@ export const GMAIL_AI_CACHE_MAX_ENTRIES = 100;
 export const GMAIL_AI_MAX_CONVERSATION_CHARACTERS = 30_000;
 export const GMAIL_AI_MAX_MESSAGE_CHARACTERS = 3_500;
 export const GMAIL_AI_DRAFT_HISTORY_LIMIT = 6;
+
+export function buildGmailAIThreadMessages(
+  thread: GmailThread,
+  targetMessageId = '',
+  targetMessageDate?: string,
+) {
+  const messages = thread.messages
+    .filter((message) => !isIgnoredGmailThreadSender(message.from))
+    .map((message) => ({
+      id: message.id,
+      threadId: message.threadId,
+      subject: message.subject || thread.subject,
+      from: message.from,
+      to: message.to,
+      cc: message.cc,
+      replyTo: message.replyTo,
+      date: message.date,
+      body: message.body,
+    }));
+  return targetMessageId
+    ? scopeGmailAIMessagesToReplyTarget(messages, targetMessageId, targetMessageDate)
+    : messages;
+}
 
 const QUOTED_HISTORY_MARKERS = [
   /^\s*-{2,}\s*original message\s*-{2,}\s*$/im,
@@ -328,6 +353,75 @@ export async function getOrLoadGmailAIHistory(
   } finally {
     if (historyRequests.get(scopedKey) === request) historyRequests.delete(scopedKey);
   }
+}
+
+export async function loadGmailAIContactHistory(options: {
+  accountEmail?: string;
+  thread: GmailThread;
+  contactEmail: string;
+  targetMessageId?: string;
+  targetMessageDate?: string;
+  force?: boolean;
+}) {
+  const {
+    accountEmail,
+    thread,
+    contactEmail,
+    targetMessageId = '',
+    targetMessageDate,
+    force = false,
+  } = options;
+  const threadMessages = buildGmailAIThreadMessages(
+    thread,
+    targetMessageId,
+    targetMessageDate,
+  );
+  const historyKey = buildGmailAIHistoryCacheKey({
+    accountEmail,
+    threadId: thread.id,
+    contactEmail: contactEmail || 'no-recipient',
+    targetMessageId,
+    latestMessageDate: targetMessageDate,
+  });
+  const startedAt = performance.now();
+  const loaded = await getOrLoadGmailAIHistory(historyKey, async () => {
+    if (!contactEmail || !targetMessageId) return threadMessages;
+    const response = await fetch('/api/gmail', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        action: 'contactHistory',
+        contactEmail,
+        maxResults: GMAIL_AI_HISTORY_LIMIT,
+        knownMessageIds: thread.messages.map((message) => message.id).filter(Boolean),
+      }),
+    });
+    const result = await response.json();
+    if (!response.ok || !result.success) {
+      throw new Error(result.error || '读取联系人历史邮件失败');
+    }
+    console.info('[Gmail AI server history timing]', result.meta || {});
+    const scopedFetched = scopeGmailAIMessagesToReplyTarget(
+      (result.data || []) as GmailAIHistoryMessage[],
+      targetMessageId,
+      targetMessageDate,
+    );
+    const merged = mergeRecentGmailAIMessages(scopedFetched, threadMessages);
+    return scopeGmailAIMessagesToReplyTarget(merged, targetMessageId, targetMessageDate);
+  }, force);
+
+  const totalMs = Math.round(performance.now() - startedAt);
+  console.info('[Gmail AI client history timing]', {
+    cacheHit: loaded.cacheHit,
+    messages: loaded.value.length,
+    totalMs,
+  });
+  return {
+    messages: loaded.value,
+    historyKey,
+    cacheHit: loaded.cacheHit,
+    totalMs,
+  };
 }
 
 export async function getOrLoadGmailAIAnalysis<T>(

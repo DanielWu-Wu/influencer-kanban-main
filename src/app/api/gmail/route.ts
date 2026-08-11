@@ -448,7 +448,10 @@ export async function GET(request: NextRequest) {
 
 // 保存草稿
 export async function POST(request: NextRequest) {
+  const requestStartedAt = performance.now();
+  const accountAuthStartedAt = performance.now();
   const appAuth = await getRequestUser(request);
+  const accountAuthMs = Math.round(performance.now() - accountAuthStartedAt);
   if (!appAuth) return NextResponse.json({ error: '未登录或账号无权访问 Gmail。' }, { status: 401 });
   try {
     const body = await request.json();
@@ -466,7 +469,9 @@ export async function POST(request: NextRequest) {
       maxResults: requestedMaxResults,
       knownMessageIds,
     } = body;
+    const gmailAuthStartedAt = performance.now();
     const { accessToken } = await refreshStoredGmailAuth(appAuth.supabase);
+    const gmailAuthMs = Math.round(performance.now() - gmailAuthStartedAt);
 
     const headers = {
       'Authorization': `Bearer ${accessToken}`,
@@ -516,27 +521,34 @@ export async function POST(request: NextRequest) {
       }));
       const messagesMs = performance.now() - messagesStartedAt;
       const totalMs = performance.now() - startedAt;
-      console.info('[Gmail AI history timing]', {
+      const routeTotalMs = Math.round(performance.now() - requestStartedAt);
+      const timing = {
         requested: maxResults,
         reused: Math.max(0, ((listData.messages || []) as Array<{ id: string }>).length - messageRefs.length),
         fetched: messageRefs.length,
+        accountAuthMs,
+        gmailAuthMs,
         listMs: Math.round(listMs),
         messagesMs: Math.round(messagesMs),
         totalMs: Math.round(totalMs),
-      });
+        routeTotalMs,
+      };
+      console.info('[Gmail AI history timing]', timing);
 
       return NextResponse.json({
         success: true,
         data: messages
           .filter(Boolean)
           .sort((a, b) => new Date(a!.date || 0).getTime() - new Date(b!.date || 0).getTime()),
-        meta: {
-          requested: maxResults,
-          reused: Math.max(0, ((listData.messages || []) as Array<{ id: string }>).length - messageRefs.length),
-          fetched: messageRefs.length,
-          listMs: Math.round(listMs),
-          messagesMs: Math.round(messagesMs),
-          totalMs: Math.round(totalMs),
+        meta: timing,
+      }, {
+        headers: {
+          'Server-Timing': [
+            `account-auth;dur=${accountAuthMs}`,
+            `gmail-auth;dur=${gmailAuthMs}`,
+            `gmail-list;dur=${Math.round(listMs)}`,
+            `gmail-messages;dur=${Math.round(messagesMs)}`,
+          ].join(', '),
         },
       });
     }

@@ -29,6 +29,7 @@ type ChatOptions = {
   apiKey?: string;
   modelName?: string;
   temperature?: number;
+  requestLabel?: string;
 };
 
 type OutreachVideo = {
@@ -53,7 +54,7 @@ type OutreachChannel = {
   recentVideos?: OutreachVideo[];
 };
 
-function resolveChatOptions(options: ChatOptions): Required<ChatOptions> {
+function resolveChatOptions(options: ChatOptions): Required<Omit<ChatOptions, 'requestLabel'>> {
   const apiKey =
     options.apiKey ||
     process.env.AI_API_KEY ||
@@ -85,6 +86,7 @@ async function invokeOpenAICompatibleApi(
   options: ChatOptions,
 ): Promise<string> {
   const { apiUrl, apiKey, modelName, temperature } = resolveChatOptions(options);
+  const startedAt = performance.now();
   const response = await fetch(apiUrl, {
     method: 'POST',
     headers: {
@@ -93,13 +95,22 @@ async function invokeOpenAICompatibleApi(
     },
     body: JSON.stringify({ model: modelName, messages, temperature }),
   });
+  const headersAt = performance.now();
+  const rawText = await response.text();
+  const completedAt = performance.now();
+  console.info('[AI provider timing]', {
+    task: options.requestLabel || 'generic',
+    model: modelName,
+    providerHeadersMs: Math.round(headersAt - startedAt),
+    providerBodyMs: Math.round(completedAt - headersAt),
+    totalMs: Math.round(completedAt - startedAt),
+  });
 
   if (!response.ok) {
-    const errorText = await response.text();
-    throw new Error(`AI API 调用失败 (${response.status}): ${errorText}`);
+    throw new Error(`AI API 调用失败 (${response.status}): ${rawText}`);
   }
 
-  const data = await response.json();
+  const data = JSON.parse(rawText);
   const content = data?.choices?.[0]?.message?.content ?? data?.content;
   if (typeof content !== 'string') throw new Error('无法解析 AI API 返回的数据。');
   return content;
@@ -111,12 +122,17 @@ function parseJson(content: string) {
   return JSON.parse(jsonMatch[0]);
 }
 
-function getModelOptions(body: Record<string, unknown>, temperature: number): ChatOptions {
+function getModelOptions(
+  body: Record<string, unknown>,
+  temperature: number,
+  requestLabel?: string,
+): ChatOptions {
   return {
     apiUrl: body.modelProvider === 'custom' ? String(body.customApiUrl || '') : undefined,
     apiKey: body.modelProvider === 'custom' ? String(body.customApiKey || '') : undefined,
     modelName: body.modelProvider === 'custom' ? String(body.customModelName || '') : undefined,
     temperature,
+    requestLabel,
   };
 }
 
@@ -135,12 +151,12 @@ ${custom}
 --- 用户专属提示词结束 ---`;
 }
 
-async function hydrateSecrets(request: NextRequest, body: Record<string, unknown>) {
+async function hydrateSecrets(
+  appAuth: NonNullable<Awaited<ReturnType<typeof getRequestUser>>>,
+  body: Record<string, unknown>,
+) {
   if (body.modelProvider === 'custom' && !body.customApiKey) {
-    const appAuth = await getRequestUser(request);
-    if (appAuth) {
-      body.customApiKey = await getUserSecret<string>(appAuth.supabase, 'ai_api_key') || '';
-    }
+    body.customApiKey = await getUserSecret<string>(appAuth.supabase, 'ai_api_key') || '';
   }
 }
 
@@ -149,10 +165,16 @@ function safeArray(value: unknown) {
 }
 
 export async function POST(request: NextRequest) {
-  if (!(await getRequestUser(request))) return NextResponse.json({ error: '未登录或账号无权使用 AI。' }, { status: 401 });
+  const requestStartedAt = performance.now();
+  const authStartedAt = performance.now();
+  const appAuth = await getRequestUser(request);
+  const authMs = Math.round(performance.now() - authStartedAt);
+  if (!appAuth) return NextResponse.json({ error: '未登录或账号无权使用 AI。' }, { status: 401 });
   try {
     const body = await request.json() as Record<string, unknown>;
-    await hydrateSecrets(request, body);
+    const secretStartedAt = performance.now();
+    await hydrateSecrets(appAuth, body);
+    const secretMs = Math.round(performance.now() - secretStartedAt);
 
     const action = String(body.action || 'draft');
     const threadSubject = String(body.threadSubject || '无主题');
@@ -923,13 +945,16 @@ ${conversation.text}`;
           { role: 'system', content: systemPrompt },
           { role: 'user', content: userPrompt },
         ],
-        getModelOptions(body, 0.25),
+        getModelOptions(body, 0.25, 'gmail_analysis'),
       ));
       console.info('[Gmail AI analysis timing]', {
         messages: conversation.messageCount,
         inputCharacters: conversation.inputCharacters,
         compactCharacters: conversation.outputCharacters,
         modelMs: Math.round(performance.now() - modelStartedAt),
+        authMs,
+        secretMs,
+        routeTotalMs: Math.round(performance.now() - requestStartedAt),
       });
       return NextResponse.json({ success: true, data: result });
     }
