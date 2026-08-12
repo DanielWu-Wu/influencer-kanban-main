@@ -748,7 +748,10 @@ export function AITemplateReplyComposer({
       </div>
 
       <Dialog open={factEditorOpen} onOpenChange={setFactEditorOpen}>
-        <DialogContent className="flex max-h-[86dvh] max-w-3xl flex-col overflow-hidden p-5">
+        <DialogContent
+          className="flex h-[86dvh] flex-col overflow-hidden p-5 sm:h-[72dvh] sm:max-h-[760px]"
+          style={{ width: 'calc(100vw - 2rem)', maxWidth: '64rem' }}
+        >
           <DialogHeader className="pr-8">
             <DialogTitle className="text-base">专注填写邮件事实</DialogTitle>
             <DialogDescription>像给同事讲事情一样写即可，不需要组织正式邮件语言。</DialogDescription>
@@ -760,7 +763,7 @@ export function AITemplateReplyComposer({
               value={userIdeas}
               onChange={(event) => setUserIdeas(event.target.value)}
               placeholder="例如：货今天已经发了，走 DHL，单号是 123456，预计下周二送达。请他收到后告诉我，并确认大概什么时候可以拍摄。"
-              className="h-full min-h-[360px] resize-none px-4 py-3 text-base leading-7 shadow-inner"
+              className="h-full min-h-0 resize-none px-4 py-3 text-base leading-7 shadow-inner"
             />
           </div>
           <div className="flex items-center justify-between gap-3">
