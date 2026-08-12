@@ -9,6 +9,7 @@ import {
   FileText,
   Languages,
   Loader2,
+  Maximize2,
   Minimize2,
   RefreshCw,
   Save,
@@ -20,6 +21,13 @@ import { Alert, AlertDescription, AlertTitle } from '@/components/ui/alert';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from '@/components/ui/collapsible';
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogHeader,
+  DialogTitle,
+} from '@/components/ui/dialog';
 import { ScrollArea } from '@/components/ui/scroll-area';
 import {
   Select,
@@ -145,6 +153,7 @@ export function AITemplateReplyComposer({
   const [draftSaved, setDraftSaved] = useState(false);
   const [translationOpen, setTranslationOpen] = useState(true);
   const [managerOpen, setManagerOpen] = useState(false);
+  const [factEditorOpen, setFactEditorOpen] = useState(false);
   const generationRef = useRef<AbortController | null>(null);
   const chineseTranslationRef = useRef<AbortController | null>(null);
 
@@ -531,13 +540,23 @@ export function AITemplateReplyComposer({
 
             <div className="rounded-xl border p-4">
               <p className="text-sm font-semibold">2. 用自己的话补充事实</p>
-              <p className="mb-3 mt-1 text-xs text-muted-foreground">可以口语化输入，写清楚“发生了什么、想告诉对方什么、希望对方做什么”即可。</p>
-              <Textarea
-                value={userIdeas}
-                onChange={(event) => setUserIdeas(event.target.value)}
-                placeholder="例如：货今天已经发了，DHL，单号 123456，预计下周二到。请他收到后告诉我，并确认大概什么时候能拍。"
-                className="min-h-32 resize-y"
-              />
+              <p className="mb-3 mt-1 text-xs text-muted-foreground">先快速记录；内容较多时打开专注编辑，减少周围信息干扰。</p>
+              <button
+                type="button"
+                aria-label="打开专注编辑器"
+                onClick={() => setFactEditorOpen(true)}
+                className="group block w-full rounded-xl border border-input bg-white p-3 text-left shadow-inner outline-none transition-[border-color,box-shadow] duration-150 ease-out hover:border-primary/55 focus-visible:border-primary focus-visible:ring-3 focus-visible:ring-primary/10"
+              >
+                <span className={`line-clamp-4 min-h-28 whitespace-pre-wrap text-sm leading-6 ${userIdeas ? 'text-foreground' : 'text-muted-foreground'}`}>
+                  {userIdeas || '点击打开大编辑器，把事情像聊天一样写下来。AI 会帮你整理成正式邮件。'}
+                </span>
+                <span className="mt-2 flex items-center justify-between border-t pt-2 text-xs">
+                  <span className="text-muted-foreground">{userIdeas.length} 字</span>
+                  <span className="flex items-center gap-1.5 font-medium text-primary">
+                    <Maximize2 className="size-3.5" />打开大编辑器
+                  </span>
+                </span>
+              </button>
               <div className="mt-3 grid grid-cols-2 gap-2">
                 <Select
                   value={targetLang}
@@ -727,6 +746,29 @@ export function AITemplateReplyComposer({
           </Button>
         </div>
       </div>
+
+      <Dialog open={factEditorOpen} onOpenChange={setFactEditorOpen}>
+        <DialogContent className="flex max-h-[86dvh] max-w-3xl flex-col overflow-hidden p-5">
+          <DialogHeader className="pr-8">
+            <DialogTitle className="text-base">专注填写邮件事实</DialogTitle>
+            <DialogDescription>像给同事讲事情一样写即可，不需要组织正式邮件语言。</DialogDescription>
+          </DialogHeader>
+          <div className="min-h-0 flex-1">
+            <Textarea
+              autoFocus
+              aria-label="邮件事实"
+              value={userIdeas}
+              onChange={(event) => setUserIdeas(event.target.value)}
+              placeholder="例如：货今天已经发了，走 DHL，单号是 123456，预计下周二送达。请他收到后告诉我，并确认大概什么时候可以拍摄。"
+              className="h-full min-h-[360px] resize-none px-4 py-3 text-base leading-7 shadow-inner"
+            />
+          </div>
+          <div className="flex items-center justify-between gap-3">
+            <span className="text-xs text-muted-foreground">已输入 {userIdeas.length} 字</span>
+            <Button type="button" onClick={() => setFactEditorOpen(false)}>完成填写</Button>
+          </div>
+        </DialogContent>
+      </Dialog>
 
       <AIReplyTemplateManager
         open={managerOpen}
