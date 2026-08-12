@@ -517,7 +517,9 @@ function StageActionCell({
         </Button>
       ) : null}
       {!isSentNow && task?.status === 'error' && (!canGenerate || retryBlockedByMailbox) ? (
-        <p className="max-w-44 text-xs text-destructive">{task.error}</p>
+        <p className={`max-w-44 text-xs ${task.errorCode === 'human_reply' ? 'text-amber-700' : 'text-destructive'}`}>
+          {task.error}
+        </p>
       ) : null}
       {!isSentNow && !task && canGenerate ? (
         <Button type="button" variant="outline" size="sm" className="h-7 px-2 text-xs" onClick={onGenerate}>
@@ -866,7 +868,7 @@ export function OutreachFollowUpTab({ settings, auth, onAuthRefresh }: Props) {
       )));
       if (showFeedback) {
         toast.success(check.reply
-          ? `已检查 ${record.channelName}：收到人工回复，后续跟进已停止。`
+          ? `已检查 ${record.channelName}：已收到对方回信，无需跟进开发信。`
           : `已检查 ${record.channelName}：暂未发现人工回复，已保留当前跟进计划。`);
       }
       return check;
@@ -1494,7 +1496,7 @@ export function OutreachFollowUpTab({ settings, auth, onAuthRefresh }: Props) {
           }
         }}
       >
-        <DialogContent className="flex h-[88vh] max-w-6xl flex-col overflow-hidden p-0">
+        <DialogContent className="flex h-[88vh] max-h-[900px] flex-col overflow-hidden p-0 sm:w-[calc(100%-4rem)] sm:max-w-7xl">
           <DialogHeader className="px-6 pt-6">
             <div className="flex flex-wrap items-center gap-2 pr-8">
               <DialogTitle>{batchReviewStage ? `${stageLabel(batchReviewStage)}批量审核` : '批量审核'}</DialogTitle>
@@ -1505,7 +1507,7 @@ export function OutreachFollowUpTab({ settings, auth, onAuthRefresh }: Props) {
             </DialogDescription>
           </DialogHeader>
           {selectedBatchTask ? (
-            <div className="grid min-h-0 flex-1 grid-cols-[260px_minmax(0,1fr)] border-t">
+            <div className="grid min-h-0 flex-1 grid-cols-[288px_minmax(0,1fr)] border-t">
               <ScrollArea className="border-r bg-muted/20">
                 <div className="flex flex-col gap-2 p-3">
                   {batchReviewTasks.map((task, index) => (

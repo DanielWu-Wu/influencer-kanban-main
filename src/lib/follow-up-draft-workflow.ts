@@ -121,7 +121,7 @@ export function evaluateFollowUpEligibility({
     return { allowed: true, dueAt, code: 'needs_gmail_check', reason: '生成前需要重新检查 Gmail。' };
   }
   if (check.reply) {
-    return { allowed: false, dueAt, code: 'human_reply', reason: '已经收到人工回复，后续跟进已停止。' };
+    return { allowed: false, dueAt, code: 'human_reply', reason: '已收到对方回信，无需跟进开发信' };
   }
   if (check.deliveryFailure) {
     return { allowed: false, dueAt, code: 'delivery_failure', reason: '检测到退信，请修正邮箱后再继续。' };

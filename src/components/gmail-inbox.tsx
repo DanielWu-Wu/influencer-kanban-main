@@ -1337,17 +1337,20 @@ export function GmailInbox({
 
   const handleOpenThread = async (thread: GmailThread) => {
     const runId = openingThreadRunRef.current + 1;
+    const cachedThread = readCachedThreadDetail(thread);
     openingThreadRunRef.current = runId;
     openingThreadRef.current = thread.id;
     setOpeningThreadId(thread.id);
-    onSelectThread(thread);
-    onThreadLoadStateChange?.(thread.id, { loading: true });
-    let nextThread = thread;
+    onSelectThread(cachedThread || thread);
+    onThreadLoadStateChange?.(thread.id, { loading: !cachedThread });
+    let nextThread = cachedThread || thread;
     let accessToken: string | null = null;
 
     try {
       accessToken = await getAccessToken();
-      nextThread = await fetchThreadDetail(thread, accessToken);
+      if (!cachedThread) {
+        nextThread = await fetchThreadDetail(thread, accessToken);
+      }
       if (openingThreadRunRef.current === runId) {
         onSelectThread(nextThread);
         onThreadLoadStateChange?.(thread.id, { loading: false });

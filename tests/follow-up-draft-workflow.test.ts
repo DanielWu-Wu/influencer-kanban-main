@@ -63,12 +63,14 @@ test('未到期时不能生成，达到第3天后允许进入 Gmail 检查', () 
 });
 
 test('人工回复和退信都会阻止生成，自动回复只给出提醒', () => {
-  assert.equal(evaluateFollowUpEligibility({
+  const humanReply = evaluateFollowUpEligibility({
     record,
     stage: 2,
     now: new Date(2026, 7, 5).getTime(),
     check: { ...cleanCheck, reply: initialMessage },
-  }).code, 'human_reply');
+  });
+  assert.equal(humanReply.code, 'human_reply');
+  assert.equal(humanReply.reason, '已收到对方回信，无需跟进开发信');
   assert.equal(evaluateFollowUpEligibility({
     record,
     stage: 2,

@@ -9,8 +9,8 @@ import { Badge } from '@/components/ui/badge';
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from '@/components/ui/dialog';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { 
-  CheckCircle2, Circle, Clock, Flag, Pencil, Plus, Trash2,
-  Flame, AlertCircle, Sparkles, Mail, RefreshCw, ArrowRight, ChevronDown, ChevronRight
+  Check, CheckCircle2, Circle, Clock, Flag, Pencil, Plus, Trash2,
+  Flame, AlertCircle, Sparkles, Mail, RefreshCw, RotateCcw, ArrowRight, ChevronDown, ChevronRight
 } from 'lucide-react';
 import { formatLocalDateKey, parseLocalDateKey } from '@/lib/local-date';
 import { getDailyGmailTaskKey, isCompletedToday } from '@/lib/daily-gmail-todos';
@@ -231,9 +231,6 @@ export function TodoBoard({
         </div>
       ) : (
         <div key={entry.key} className="flex min-h-11 items-center gap-3 border-b border-border/45 px-3 py-1.5 text-muted-foreground last:border-b-0 hover:bg-accent/30">
-          <button type="button" onClick={() => onToggleGmail(getDailyGmailTaskKey(entry.item.threadId, entry.item.messageId))} className="flex-shrink-0" aria-label={`将“${entry.item.channelName}”的来信恢复为待完成`} title="点击恢复为待完成">
-            <CheckCircle2 className="h-4 w-4 text-green-500 transition-colors hover:text-blue-500" />
-          </button>
           <YouTubeChannelAvatar avatar={entry.item.avatar} fallback={entry.item.channelName} label={entry.item.channelName} size="sm" />
           <div className="min-w-0 flex-1">
             <div className="flex min-w-0 items-center gap-2">
@@ -249,6 +246,16 @@ export function TodoBoard({
           {showCompletedDate && entry.item.completedAt && (
             <span className="shrink-0 text-[10px]">{new Date(entry.item.completedAt).toLocaleDateString('zh-CN', { month: 'short', day: 'numeric' })}</span>
           )}
+          <Button
+            type="button"
+            variant="ghost"
+            size="icon-sm"
+            onClick={() => onToggleGmail(getDailyGmailTaskKey(entry.item.threadId, entry.item.messageId))}
+            aria-label={`将“${entry.item.channelName}”的来信恢复为待完成`}
+            title="恢复为待完成"
+          >
+            <RotateCcw />
+          </Button>
           <button type="button" onClick={() => onOpenGmail(entry.item.threadId)} className="flex h-7 w-7 shrink-0 items-center justify-center rounded-md text-blue-600 hover:bg-blue-50" aria-label={`查看“${entry.item.channelName}”的邮件线程`} title="打开该邮件线程"><ArrowRight className="h-3.5 w-3.5" /></button>
         </div>
       ))}
@@ -377,9 +384,6 @@ export function TodoBoard({
             ) : (
               <article key={entry.key} className="group relative flex min-h-[58px] items-center gap-3 border-b border-border/55 px-3 py-2 transition-colors duration-150 ease-out last:border-b-0 hover:bg-blue-50/35 motion-reduce:transition-none">
                 <span className="absolute inset-y-2 left-0 w-[3px] rounded-r-full bg-blue-500" />
-                <button type="button" className="shrink-0 text-slate-300 transition-colors hover:text-blue-500" onClick={() => onToggleGmail(getDailyGmailTaskKey(entry.item.threadId, entry.item.messageId))} aria-label={`将“${entry.item.channelName}”的来信标记为已完成`}>
-                  <Circle className="h-5 w-5" />
-                </button>
                 <YouTubeChannelAvatar avatar={entry.item.avatar} fallback={entry.item.channelName} label={entry.item.channelName} size="sm" />
                 <div className="min-w-0 flex-1">
                   <div className="flex min-w-0 items-center gap-2">
@@ -390,6 +394,16 @@ export function TodoBoard({
                   <p className="mt-1 truncate text-[11px] text-slate-600">{entry.item.summary}{entry.item.summaryPending && <span className="ml-2 text-[10px] text-blue-500">AI 正在优化摘要…</span>}</p>
                 </div>
                 <span className="w-12 shrink-0 text-right text-[10px] text-muted-foreground">{new Date(entry.item.date).toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit' })}</span>
+                <Button
+                  type="button"
+                  variant="ghost"
+                  size="icon-sm"
+                  onClick={() => onToggleGmail(getDailyGmailTaskKey(entry.item.threadId, entry.item.messageId))}
+                  aria-label={`将“${entry.item.channelName}”的来信标记为已完成`}
+                  title="标记为已完成"
+                >
+                  <Check />
+                </Button>
                 <button type="button" onClick={() => onOpenGmail(entry.item.threadId)} className="flex h-7 w-7 shrink-0 items-center justify-center rounded-md text-blue-600 opacity-45 transition-[opacity,background-color] duration-150 ease-out hover:bg-blue-50 group-hover:opacity-100 group-focus-within:opacity-100 motion-reduce:transition-none" aria-label={`查看“${entry.item.channelName}”的邮件线程`} title="打开该邮件线程">
                   <ArrowRight className="h-3.5 w-3.5" />
                 </button>

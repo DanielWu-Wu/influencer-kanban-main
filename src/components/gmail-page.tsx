@@ -85,6 +85,7 @@ export function GmailPage({
     }
     setSelectedThread(thread);
     setShowSettings(false);
+    setDetailExpanded(true);
   };
 
   const handleCloseThread = () => {

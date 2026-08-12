@@ -47,6 +47,10 @@ import {
   buildGmailReplySubject,
   type GmailReplyTarget,
 } from '@/lib/gmail-reply-target';
+import {
+  isGmailBilingualDraftSynchronized,
+  type GmailBilingualDraftSnapshot,
+} from '@/lib/gmail-bilingual-draft';
 import { GmailThread } from '@/lib/types';
 import { RichEmailEditor } from './rich-email-editor';
 import { useDelayedEmailSender } from './delayed-email-provider';
@@ -192,6 +196,7 @@ export function EmailComposer({
   const [editedChineseReply, setEditedChineseReply] = useState('');
   const [translatingEditedReply, setTranslatingEditedReply] = useState(false);
   const [translationUpdated, setTranslationUpdated] = useState(false);
+  const [synchronizedDraft, setSynchronizedDraft] = useState<GmailBilingualDraftSnapshot | null>(null);
   const [generationStage, setGenerationStage] = useState('');
   const [optimizationLoading, setOptimizationLoading] = useState(false);
   const [optimizationError, setOptimizationError] = useState('');
@@ -213,6 +218,12 @@ export function EmailComposer({
   const externalMessage = replyTarget?.message;
   const recipientEmail = replyTarget?.recipientEmail || '';
   const targetContextKey = `${thread.id}:${replyTarget?.messageId || ''}`;
+  const bilingualDraftSynchronized = isGmailBilingualDraftSynchronized({
+    snapshot: synchronizedDraft,
+    foreignBody: replyContent,
+    chineseBody: editedChineseReply,
+    targetLanguage: targetLang,
+  });
 
   useEffect(() => {
     if (targetContextKeyRef.current !== targetContextKey) {
@@ -628,6 +639,11 @@ export function EmailComposer({
       setTranslationExpanded(true);
       setTranslationEditing(false);
       setTranslationUpdated(false);
+      setSynchronizedDraft(result.translatedReply.trim() ? {
+        foreignBody: cleanSuggestedReply,
+        chineseBody: result.translatedReply,
+        targetLanguage: targetLang,
+      } : null);
       setDraftUsedAnalysis(Boolean(analysis));
       setGeneratedLangName(targetLangName);
       addSuggestion({
@@ -711,6 +727,11 @@ export function EmailComposer({
     setTranslationExpanded(true);
     setTranslationEditing(false);
     setTranslationUpdated(false);
+    setSynchronizedDraft(optimizedSuggestion.translatedReply.trim() ? {
+      foreignBody: optimizedSuggestion.suggestedReply,
+      chineseBody: optimizedSuggestion.translatedReply,
+      targetLanguage: targetLang,
+    } : null);
     setDraftUsedAnalysis(true);
     setOptimizedSuggestion(null);
     setOptimizationError('');
@@ -746,6 +767,11 @@ export function EmailComposer({
       setGeneratedLangName(targetLangName);
       setTranslationEditing(false);
       setTranslationUpdated(true);
+      setSynchronizedDraft({
+        foreignBody: cleanSuggestedReply,
+        chineseBody: confirmedChineseReply,
+        targetLanguage: targetLang,
+      });
     } catch (error) {
       setAiError(error instanceof Error ? error.message : '根据中文更新外文草稿失败，请稍后重试');
     } finally {
@@ -803,8 +829,8 @@ export function EmailComposer({
   };
 
   const saveToGmailDrafts = async () => {
-    if (mode === 'ai' && !translationUpdated) {
-      setAiError('请先确认或修改中文，并点击“确认中文并更新外文”，再保存 Gmail 草稿。');
+    if (mode === 'ai' && !bilingualDraftSynchronized) {
+      setAiError('中文、外文或回复语言已发生变化，请先点击“根据中文更新外文”，再保存 Gmail 草稿。');
       return;
     }
     setSavingDraft(true);
@@ -847,7 +873,7 @@ export function EmailComposer({
   const sendEmail = async () => {
     if (isEmailContentEmpty(replyContent)) return;
     if (mode === 'ai' && !translationUpdated) {
-      setAiError('请先确认或修改中文，并点击“确认中文并更新外文”，再发送邮件。');
+      setAiError('直接发送前，请先点击“修改中文”，再点击“根据中文更新外文”完成人工确认。');
       return;
     }
     if (!recipientEmail) {
@@ -1245,9 +1271,11 @@ export function EmailComposer({
                   >
                     {draftUsedAnalysis ? '当前草稿已结合画像' : '后台红人画像已完成'}
                   </Badge>
-                  <p className={`text-xs ${draftUsedAnalysis ? 'text-emerald-800' : 'text-amber-800'}`}>
+                  <p className={`text-xs ${draftUsedAnalysis && bilingualDraftSynchronized ? 'text-emerald-800' : 'text-amber-800'}`}>
                     {draftUsedAnalysis
-                      ? '仍需完成最终中文确认，系统不会自动发送。'
+                      ? bilingualDraftSynchronized
+                        ? '外文与中文已同步，可直接保存草稿；系统不会自动发送。'
+                        : '当前内容已修改；根据中文更新外文后可保存草稿。'
                       : '可以对比画像优化版；当前草稿不会被自动覆盖。'}
                   </p>
                 </div>
@@ -1297,7 +1325,7 @@ export function EmailComposer({
                   <h3 className="text-sm font-semibold text-blue-950">当前版与画像优化版</h3>
                   <Badge variant="outline" className="border-blue-200 bg-white font-normal text-blue-700">等待你选择</Badge>
                 </div>
-                <p className="mt-1 text-xs text-blue-800">先看中文差异；选择后还必须完成最终中文确认，才允许保存或发送。</p>
+                <p className="mt-1 text-xs text-blue-800">先看中文差异；选定版本后如未再修改，可以直接保存 Gmail 草稿。直接发送仍需人工确认。</p>
               </div>
               <div className="grid lg:grid-cols-2">
                 <DraftComparisonCard
@@ -1333,11 +1361,11 @@ export function EmailComposer({
                   </Badge>
                   <Badge
                     variant="outline"
-                    className={translationUpdated
+                    className={bilingualDraftSynchronized
                       ? 'border-emerald-200 bg-emerald-50 font-normal text-emerald-700'
                       : 'border-amber-200 bg-amber-50 font-normal text-amber-700'}
                   >
-                    {translationUpdated ? '已完成最终中文确认' : '待最终中文确认'}
+                    {bilingualDraftSynchronized ? '外文与中文已同步' : '待更新外文'}
                   </Badge>
                   {aiLoading && generationStage && (
                     <Badge variant="outline" className="border-blue-200 bg-blue-50 font-normal text-blue-700">
@@ -1393,7 +1421,6 @@ export function EmailComposer({
                     value={editedChineseReply}
                     onChange={(event) => {
                       setEditedChineseReply(event.target.value);
-                      setTranslationUpdated(false);
                     }}
                     placeholder="修改中文邮件正文..."
                     className="min-h-56 resize-y rounded-none border-0 bg-white px-4 py-3 text-sm leading-6 shadow-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-primary/20"
@@ -1424,7 +1451,7 @@ export function EmailComposer({
                         {translatingEditedReply
                           ? <Loader2 className="animate-spin" data-icon="inline-start" />
                           : <Languages data-icon="inline-start" />}
-                        {translatingEditedReply ? '正在翻译...' : '确认中文并更新外文'}
+                        {translatingEditedReply ? '正在翻译...' : '根据中文更新外文'}
                       </Button>
                     </div>
                   </div>
@@ -1432,10 +1459,10 @@ export function EmailComposer({
               ) : (
                 <div className="border-t border-gray-100 bg-gray-50">
                   <div className="flex items-center justify-between gap-3 border-b border-gray-100 px-4 py-2.5">
-                    <p className={`text-xs ${translationUpdated ? 'text-emerald-700' : 'text-amber-700'}`}>
-                      {translationUpdated
-                        ? '最终中文已确认，外文草稿已与这份中文同步。'
-                        : '最终步骤：请确认或修改中文，再根据中文更新外文。'}
+                    <p className={`text-xs ${bilingualDraftSynchronized ? 'text-emerald-700' : 'text-amber-700'}`}>
+                      {bilingualDraftSynchronized
+                        ? '当前外文与中文一致；满意时可以直接保存 Gmail 草稿。'
+                        : '内容已发生变化，请根据中文更新外文后再保存草稿。'}
                     </p>
                     <Button
                       type="button"
@@ -1446,11 +1473,10 @@ export function EmailComposer({
                       onClick={() => {
                         setEditedChineseReply(suggestion.translatedReply);
                         setTranslationEditing(true);
-                        setTranslationUpdated(false);
                         setAiError('');
                       }}
                     >
-                      {translationUpdated ? '再次修改中文' : '确认/修改中文'}
+                      修改中文
                     </Button>
                   </div>
                   <div className="whitespace-pre-wrap px-4 py-3 text-sm leading-6 text-gray-700">
@@ -1497,9 +1523,9 @@ export function EmailComposer({
                 <span className={`mr-1 text-xs ${recipientEmail ? 'text-gray-500' : 'text-red-600'}`}>
                   收件人：{recipientEmail || '保存草稿前需确认'}
                 </span>
-                {!translationUpdated && (
+                {!bilingualDraftSynchronized && (
                   <span className="mr-1 text-xs font-medium text-amber-700">
-                    请先完成最终中文确认
+                    请先根据中文更新外文
                   </span>
                 )}
                 <Button
@@ -1535,7 +1561,7 @@ export function EmailComposer({
                   {sending ? <Loader2 className="animate-spin" data-icon="inline-start" /> : <Send data-icon="inline-start" />}
                   直接发送
                 </Button>
-                <Button onClick={saveToGmailDrafts} disabled={!recipientEmail || !translationUpdated || aiLoading || optimizationLoading || Boolean(optimizedSuggestion) || translatingEditedReply || translationEditing || savingDraft || sending || isEmailContentEmpty(replyContent)}>
+                <Button onClick={saveToGmailDrafts} disabled={!recipientEmail || !bilingualDraftSynchronized || aiLoading || optimizationLoading || Boolean(optimizedSuggestion) || translatingEditedReply || translationEditing || savingDraft || sending || isEmailContentEmpty(replyContent)}>
                   {savingDraft ? <Loader2 className="animate-spin" data-icon="inline-start" /> : <Save data-icon="inline-start" />}
                   保存 Gmail 草稿
                 </Button>
@@ -1622,7 +1648,7 @@ function DraftComparisonCard({
       <div className="min-h-36 flex-1 rounded-md border border-gray-200 bg-gray-50 px-3 py-2.5">
         <p className="text-xs font-medium text-gray-500">中文对照</p>
         <p className="mt-1.5 whitespace-pre-wrap text-sm leading-6 text-gray-800">
-          {chineseText || '暂无中文对照，请在选择版本后进入最终中文确认。'}
+          {chineseText || '暂无中文对照，请先生成完整的中外文版本。'}
         </p>
       </div>
       {keyPoints.length > 0 && (
