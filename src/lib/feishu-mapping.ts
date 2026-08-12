@@ -450,6 +450,18 @@ export function compactFeishuFieldMapping(mapping: FeishuFieldMapping) {
   ) as FeishuFieldMapping;
 }
 
+export function areFeishuFieldMappingsEqual(
+  left: FeishuFieldMapping,
+  right: FeishuFieldMapping,
+) {
+  const keys = new Set([...Object.keys(left), ...Object.keys(right)] as FeishuFieldKey[]);
+  return [...keys].every((key) => left[key] === right[key]);
+}
+
+export function shouldSyncFeishuMappingDraft(hasUnsavedChanges: boolean) {
+  return !hasUnsavedChanges;
+}
+
 export function autoMapFeishuFields(
   fields: FeishuFieldInfo[],
   existingMapping: FeishuFieldMapping = {},

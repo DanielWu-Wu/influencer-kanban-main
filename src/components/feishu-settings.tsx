@@ -1,6 +1,6 @@
 'use client';
 
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import {
   CheckCircle2,
   ChevronDown,
@@ -30,10 +30,12 @@ import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@
 import { useSettings } from '@/lib/data';
 import {
   autoMapFeishuFields,
+  areFeishuFieldMappingsEqual,
   compactFeishuFieldMapping,
   FEISHU_FIELD_TARGETS,
   type FeishuFieldKey,
   type FeishuFieldMapping,
+  shouldSyncFeishuMappingDraft,
 } from '@/lib/feishu-mapping';
 
 type ConnectionState = {
@@ -55,6 +57,8 @@ type Inspection = {
 };
 
 type TableRole = 'resource' | 'development' | 'cooperation';
+
+const EMPTY_FEISHU_FIELD_MAPPING: FeishuFieldMapping = {};
 
 const ROLE_CONFIG: Record<TableRole, {
   title: string;
@@ -156,7 +160,12 @@ export function FeishuSettings({
   expanded: boolean;
   onToggle: () => void;
 }) {
-  const { settings, updateSettings, loading: settingsLoading } = useSettings();
+  const {
+    settings,
+    saveSettings,
+    loading: settingsLoading,
+    error: settingsError,
+  } = useSettings();
   const [connection, setConnection] = useState<ConnectionState>({
     loading: true,
     configured: false,
@@ -487,23 +496,27 @@ export function FeishuSettings({
           {message && <StatusBox tone="warning" text={message} />}
           {connection.error && <StatusBox tone="error" text={connection.error} />}
 
-          {!settingsLoading && (
+          {settingsError && (
+            <StatusBox tone="error" text={`云端设置读取失败：${settingsError} 字段映射没有被空配置替代，请刷新后重试。`} />
+          )}
+
+          {!settingsLoading && !settingsError && (
             <div className="grid gap-4 xl:grid-cols-2">
               <TableConfiguration
                 role="resource"
                 canInspect={connection.connected}
                 initialUrl={settings.feishuUrl || ''}
-                initialMapping={settings.feishuFieldMapping || {}}
-                onSaveUrl={(url) => updateSettings({ feishuUrl: url })}
-                onSave={(url, mapping) => updateSettings({ feishuUrl: url, feishuFieldMapping: mapping })}
+                initialMapping={settings.feishuFieldMapping ?? EMPTY_FEISHU_FIELD_MAPPING}
+                onSaveUrl={(url) => saveSettings({ feishuUrl: url })}
+                onSave={(url, mapping) => saveSettings({ feishuUrl: url, feishuFieldMapping: mapping })}
               />
               <TableConfiguration
                 role="development"
                 canInspect={connection.connected}
                 initialUrl={settings.feishuProspectingUrl || ''}
-                initialMapping={settings.feishuProspectingFieldMapping || {}}
-                onSaveUrl={(url) => updateSettings({ feishuProspectingUrl: url })}
-                onSave={(url, mapping) => updateSettings({
+                initialMapping={settings.feishuProspectingFieldMapping ?? EMPTY_FEISHU_FIELD_MAPPING}
+                onSaveUrl={(url) => saveSettings({ feishuProspectingUrl: url })}
+                onSave={(url, mapping) => saveSettings({
                   feishuProspectingUrl: url,
                   feishuProspectingFieldMapping: mapping,
                 })}
@@ -513,9 +526,9 @@ export function FeishuSettings({
                   role="cooperation"
                   canInspect={connection.connected}
                   initialUrl={settings.feishuCooperationUrl || ''}
-                  initialMapping={settings.feishuCooperationFieldMapping || {}}
-                  onSaveUrl={(url) => updateSettings({ feishuCooperationUrl: url })}
-                  onSave={(url, mapping) => updateSettings({
+                  initialMapping={settings.feishuCooperationFieldMapping ?? EMPTY_FEISHU_FIELD_MAPPING}
+                  onSaveUrl={(url) => saveSettings({ feishuCooperationUrl: url })}
+                  onSave={(url, mapping) => saveSettings({
                     feishuCooperationUrl: url,
                     feishuCooperationFieldMapping: mapping,
                   })}
@@ -541,16 +554,21 @@ function TableConfiguration({
   canInspect: boolean;
   initialUrl: string;
   initialMapping: FeishuFieldMapping;
-  onSaveUrl: (url: string) => void;
-  onSave: (url: string, mapping: FeishuFieldMapping) => void;
+  onSaveUrl: (url: string) => Promise<void>;
+  onSave: (url: string, mapping: FeishuFieldMapping) => Promise<void>;
 }) {
   const config = ROLE_CONFIG[role];
   const [url, setUrl] = useState(initialUrl);
   const [mapping, setMapping] = useState<FeishuFieldMapping>(initialMapping);
   const [inspection, setInspection] = useState<Inspection | null>(null);
   const [inspecting, setInspecting] = useState(false);
+  const [saving, setSaving] = useState(false);
   const [saved, setSaved] = useState(false);
+  const [hasUnsavedChanges, setHasUnsavedChanges] = useState(false);
   const [message, setMessage] = useState('');
+  const mappingRef = useRef<FeishuFieldMapping>(initialMapping);
+  const mappingDirtyRef = useRef(false);
+  const urlDirtyRef = useRef(false);
   const targets = useMemo(
     () => FEISHU_FIELD_TARGETS
       .filter((target) => config.mappingKeys.includes(target.key))
@@ -565,8 +583,24 @@ function TableConfiguration({
   );
   const mappedCount = targets.filter((target) => Boolean(mapping[target.key])).length;
 
-  useEffect(() => setUrl(initialUrl), [initialUrl]);
-  useEffect(() => setMapping(initialMapping), [initialMapping]);
+  useEffect(() => {
+    if (!urlDirtyRef.current) setUrl(initialUrl);
+  }, [initialUrl]);
+
+  useEffect(() => {
+    if (!shouldSyncFeishuMappingDraft(mappingDirtyRef.current)) return;
+    mappingRef.current = initialMapping;
+    setMapping(initialMapping);
+    setHasUnsavedChanges(false);
+  }, [initialMapping]);
+
+  const replaceMapping = (next: FeishuFieldMapping, dirty: boolean) => {
+    mappingRef.current = next;
+    mappingDirtyRef.current = dirty;
+    setMapping(next);
+    setHasUnsavedChanges(dirty);
+    setSaved(false);
+  };
 
   const inspect = async () => {
     if (!url.trim()) {
@@ -588,7 +622,6 @@ function TableConfiguration({
     }
     setInspecting(true);
     setMessage('');
-    setInspection(null);
     try {
       const response = await fetch('/api/feishu/inspect', {
         method: 'POST',
@@ -598,10 +631,20 @@ function TableConfiguration({
       const result = await response.json();
       if (!response.ok) throw new Error(result.error || '只读检查失败。');
       const nextInspection = result.data as Inspection;
+      if (!nextInspection?.selectedTable || !Array.isArray(nextInspection.fields)) {
+        throw new Error('飞书返回的子表信息不完整，请重新检查。');
+      }
+      if (nextInspection.fields.length === 0) {
+        throw new Error('没有读取到任何飞书字段，已保留当前映射。请检查子表网址和应用权限。');
+      }
+      const currentMapping = mappingRef.current;
+      const nextMapping = autoMapFeishuFields(nextInspection.fields, currentMapping);
+      if (Object.keys(currentMapping).length > 0 && Object.keys(nextMapping).length === 0) {
+        throw new Error('检查结果与当前映射完全不匹配，已保留当前映射。请确认网址是否指向了正确子表。');
+      }
       setInspection(nextInspection);
-      setMapping(autoMapFeishuFields(nextInspection.fields || [], initialMapping));
-      setSaved(false);
-      setMessage(`已识别子表“${nextInspection.selectedTable.name}”，当前没有修改任何飞书记录。`);
+      replaceMapping(nextMapping, !areFeishuFieldMappingsEqual(nextMapping, initialMapping));
+      setMessage(`已识别子表“${nextInspection.selectedTable.name}”，当前没有修改任何飞书记录。请确认映射后单独保存本表配置。`);
     } catch (error) {
       setMessage(error instanceof Error ? error.message : '只读检查失败。');
     } finally {
@@ -609,16 +652,25 @@ function TableConfiguration({
     }
   };
 
-  const save = () => {
+  const save = async () => {
     if (!inspection) {
       setMessage('请先执行只读检查，确认网址指向正确的子表。');
       return;
     }
     const compacted = compactFeishuFieldMapping(mapping);
-    onSave(url.trim(), compacted);
-    setMapping(compacted);
-    setSaved(true);
-    setMessage(`${config.title}配置已保存。`);
+    setSaving(true);
+    setSaved(false);
+    try {
+      await onSave(url.trim(), compacted);
+      replaceMapping(compacted, false);
+      urlDirtyRef.current = false;
+      setSaved(true);
+      setMessage(`${config.title}配置已保存到当前账号云端。`);
+    } catch (error) {
+      setMessage(error instanceof Error ? `保存失败：${error.message}` : '保存失败，请稍后重试。');
+    } finally {
+      setSaving(false);
+    }
   };
 
   return (
@@ -640,13 +692,19 @@ function TableConfiguration({
           value={url}
           onChange={(event) => {
             setUrl(event.target.value);
+            urlDirtyRef.current = true;
             setSaved(false);
           }}
-          onBlur={() => {
+          onBlur={async () => {
             const trimmed = url.trim();
-            if (trimmed) {
-              onSaveUrl(trimmed);
-              setMessage('网址已暂存。完成飞书授权后再执行只读检查。');
+            if (!trimmed || !urlDirtyRef.current) return;
+            try {
+              await onSaveUrl(trimmed);
+              urlDirtyRef.current = false;
+              setUrl(trimmed);
+              setMessage('网址已保存到当前账号云端。完成飞书授权后再执行只读检查。');
+            } catch (error) {
+              setMessage(error instanceof Error ? `网址保存失败：${error.message}` : '网址保存失败，请稍后重试。');
             }
           }}
           placeholder={config.placeholder}
@@ -690,15 +748,18 @@ function TableConfiguration({
                 <Wand2 className="h-4 w-4 text-blue-600" />
                 字段映射
               </div>
-              <p className="mt-1 text-xs text-muted-foreground">已映射 {mappedCount} 个字段，不需要在飞书新增字段。</p>
+              <p className="mt-1 text-xs text-muted-foreground">
+                已映射 {mappedCount} 个字段，不需要在飞书新增字段。
+                {hasUnsavedChanges ? ' 当前有未保存修改。' : ''}
+              </p>
             </div>
             <Button
               type="button"
               variant="ghost"
               size="sm"
               onClick={() => {
-                setMapping(autoMapFeishuFields(inspection.fields, mapping));
-                setSaved(false);
+                const nextMapping = autoMapFeishuFields(inspection.fields, mappingRef.current);
+                replaceMapping(nextMapping, !areFeishuFieldMappingsEqual(nextMapping, initialMapping));
               }}
             >
               <RefreshCw className="mr-1 h-4 w-4" />
@@ -715,8 +776,11 @@ function TableConfiguration({
                   <Select
                     value={mapping[target.key] || 'none'}
                     onValueChange={(value) => {
-                      setMapping((current) => ({ ...current, [target.key]: value === 'none' ? undefined : value }));
-                      setSaved(false);
+                      const nextMapping = {
+                        ...mappingRef.current,
+                        [target.key]: value === 'none' ? undefined : value,
+                      };
+                      replaceMapping(nextMapping, !areFeishuFieldMappingsEqual(nextMapping, initialMapping));
                     }}
                   >
                     <SelectTrigger
@@ -771,9 +835,13 @@ function TableConfiguration({
             </details>
           )}
 
-          <Button type="button" className="h-10 w-full gap-2" onClick={save}>
-            {saved ? <CheckCircle2 className="h-4 w-4" /> : <Save className="h-4 w-4" />}
-            {saved ? '配置已保存' : `保存${config.title}配置`}
+          <Button type="button" className="h-10 w-full gap-2" onClick={save} disabled={saving}>
+            {saving
+              ? <LoaderCircle className="h-4 w-4 animate-spin" />
+              : saved
+                ? <CheckCircle2 className="h-4 w-4" />
+                : <Save className="h-4 w-4" />}
+            {saving ? '正在保存…' : saved ? '配置已保存' : `保存${config.title}配置`}
           </Button>
         </div>
       )}

@@ -10,7 +10,12 @@ import type {
   AccountProfile,
 } from '@/lib/account-types';
 import { setAccountCacheScope } from '@/lib/account-cache-scope';
-import { classifyAccountFailure, shouldPreserveLastAccount } from '@/lib/account-load-state';
+import {
+  ACCOUNT_BACKGROUND_CHECK_INTERVAL_MS,
+  classifyAccountFailure,
+  shouldPreserveLastAccount,
+  shouldRunAccountBackgroundCheck,
+} from '@/lib/account-load-state';
 
 interface AuthContextValue {
   user: User | null;
@@ -106,6 +111,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   const [accountIssue, setAccountIssue] = useState<AccountIssue | null>(null);
   const [loading, setLoading] = useState(configured);
   const currentAccountId = useRef<string | null>(null);
+  const lastAccountCheckAt = useRef(0);
   const backgroundCheckInFlight = useRef(false);
 
   useEffect(() => {
@@ -113,6 +119,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   }, [account?.userId]);
 
   const applyAccountResult = useCallback((result: AccountLoadResult, expectedUserId: string) => {
+    lastAccountCheckAt.current = Date.now();
     if (result.status === 'success') {
       if (result.account.userId !== expectedUserId) {
         setAccount(null);
@@ -155,6 +162,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
         setAccount(null);
         setAccountIssue(null);
         currentAccountId.current = null;
+        lastAccountCheckAt.current = 0;
         setAccountCacheScope(null);
         setLoading(false);
         return;
@@ -171,6 +179,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
         setAccount(null);
         setAccountIssue(null);
         currentAccountId.current = null;
+        lastAccountCheckAt.current = 0;
         setAccountCacheScope(null);
         setLoading(false);
         void syncServerSession(null);
@@ -199,6 +208,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     if (!session) return;
     let active = true;
     const verifyAccount = () => {
+      if (!shouldRunAccountBackgroundCheck(lastAccountCheckAt.current)) return;
       if (backgroundCheckInFlight.current) return;
       backgroundCheckInFlight.current = true;
       void loadAccount(session)
@@ -210,7 +220,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
           backgroundCheckInFlight.current = false;
         });
     };
-    const interval = window.setInterval(verifyAccount, 60_000);
+    const interval = window.setInterval(verifyAccount, ACCOUNT_BACKGROUND_CHECK_INTERVAL_MS);
     window.addEventListener('focus', verifyAccount);
     return () => {
       active = false;
@@ -238,6 +248,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       setAccount(null);
       setAccountIssue(null);
       currentAccountId.current = null;
+      lastAccountCheckAt.current = 0;
       setAccountCacheScope(null);
     },
   }), [account, accountIssue, applyAccountResult, configured, loading, session, supabase]);

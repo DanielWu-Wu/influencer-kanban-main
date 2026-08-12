@@ -6,6 +6,7 @@ import { AuthProvider } from '@/components/auth-provider';
 import { RecordAssistantProvider } from '@/components/record-assistant-provider';
 import { UserDataProvider } from '@/components/user-data-provider';
 import { Toaster } from '@/components/ui/sonner';
+import { SettingsProvider } from '@/components/settings-provider';
 
 export const metadata: Metadata = {
   title: {
@@ -46,13 +47,15 @@ export default function RootLayout({
     <html lang="zh-CN" suppressHydrationWarning>
       <body className="antialiased">
         <AuthProvider>
-          <UserDataProvider>
-            <DelayedEmailProvider>
-              <FollowUpDraftProvider>
-                <RecordAssistantProvider>{children}</RecordAssistantProvider>
-              </FollowUpDraftProvider>
-            </DelayedEmailProvider>
-          </UserDataProvider>
+          <SettingsProvider>
+            <UserDataProvider>
+              <DelayedEmailProvider>
+                <FollowUpDraftProvider>
+                  <RecordAssistantProvider>{children}</RecordAssistantProvider>
+                </FollowUpDraftProvider>
+              </DelayedEmailProvider>
+            </UserDataProvider>
+          </SettingsProvider>
           <Toaster richColors position="top-center" />
         </AuthProvider>
       </body>

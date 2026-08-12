@@ -1,11 +1,26 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import {
+  ACCOUNT_BACKGROUND_CHECK_INTERVAL_MS,
   classifyAccountFailure,
   classifyAuthVerificationError,
   isTransientAccountStatus,
   shouldPreserveLastAccount,
+  shouldRunAccountBackgroundCheck,
 } from '../src/lib/account-load-state';
+
+test('账号后台检查每 30 分钟最多执行一次', () => {
+  const lastCheckedAt = 1_000;
+  assert.equal(ACCOUNT_BACKGROUND_CHECK_INTERVAL_MS, 30 * 60 * 1000);
+  assert.equal(
+    shouldRunAccountBackgroundCheck(lastCheckedAt, lastCheckedAt + ACCOUNT_BACKGROUND_CHECK_INTERVAL_MS - 1),
+    false,
+  );
+  assert.equal(
+    shouldRunAccountBackgroundCheck(lastCheckedAt, lastCheckedAt + ACCOUNT_BACKGROUND_CHECK_INTERVAL_MS),
+    true,
+  );
+});
 
 test('账号失败状态区分明确权限拒绝和临时服务异常', () => {
   assert.equal(classifyAccountFailure(401), 'invalid');

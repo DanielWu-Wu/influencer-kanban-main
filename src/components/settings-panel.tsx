@@ -48,7 +48,7 @@ type VerifiedModelConfig = {
 };
 
 export function SettingsPanel() {
-  const { settings, updateSettings, loading: settingsLoading } = useSettings();
+  const { settings, saveSettings, loading: settingsLoading } = useSettings();
   const { auth: gmailAuth, disconnect: disconnectGmail } = useGmailAuth();
   const [brandName, setBrandName] = useState(settings.brandName || '');
   const [senderName, setSenderName] = useState(settings.senderName || '');
@@ -171,6 +171,7 @@ export function SettingsPanel() {
   };
 
   const handleSaveAll = async () => {
+    if (settingsLoading) return;
     const hasAnyModelConfig = Boolean(
       customApiUrl.trim()
       || customModelName.trim()
@@ -218,21 +219,29 @@ export function SettingsPanel() {
       ? verifiedModelConfig
       : null;
 
-    updateSettings({
-      brandName,
-      senderName,
-      modelProvider,
-      aiProviderPreset,
-      customApiUrl,
-      customApiKey: undefined,
-      customApiKeyConfigured:
-        settings.customApiKeyConfigured ||
-        (modelProvider === 'custom' && (apiKeyWasReplaced || Boolean(customApiKey))),
-      customModelName,
-      customApiVerifiedAt: verifiedCurrentConfig?.verifiedAt || '',
-      customApiVerifiedUrl: verifiedCurrentConfig?.apiUrl || '',
-      customApiVerifiedModel: verifiedCurrentConfig?.modelName || '',
-    });
+    try {
+      await saveSettings({
+        brandName,
+        senderName,
+        modelProvider,
+        aiProviderPreset,
+        customApiUrl,
+        customApiKey: undefined,
+        customApiKeyConfigured:
+          settings.customApiKeyConfigured ||
+          (modelProvider === 'custom' && (apiKeyWasReplaced || Boolean(customApiKey))),
+        customModelName,
+        customApiVerifiedAt: verifiedCurrentConfig?.verifiedAt || '',
+        customApiVerifiedUrl: verifiedCurrentConfig?.apiUrl || '',
+        customApiVerifiedModel: verifiedCurrentConfig?.modelName || '',
+      });
+    } catch (error) {
+      setModelTestResult({
+        success: false,
+        message: error instanceof Error ? `基础设置保存失败：${error.message}` : '基础设置保存失败，请稍后重试。',
+      });
+      return;
+    }
     if (verifiedCurrentConfig) {
       setModelTestResult({ success: true, message: '连接已验证，配置已经保存。' });
     }
@@ -320,16 +329,21 @@ export function SettingsPanel() {
           <p className="mt-0.5 text-sm text-muted-foreground">管理产品资料、集成连接、品牌信息和模型配置</p>
         </div>
         <div className="flex items-center gap-2">
-          <Button onClick={handleSaveAll} size="sm" className="h-10 gap-1.5 rounded-lg shadow-apple">
+          <Button
+            onClick={handleSaveAll}
+            size="sm"
+            className="h-10 gap-1.5 rounded-lg shadow-apple"
+            disabled={settingsLoading}
+          >
             {saved ? (
               <>
                 <CheckCircle2 className="w-4 h-4" />
-                已保存
+                基础设置已保存
               </>
             ) : (
               <>
                 <Save className="w-4 h-4" />
-                保存全部
+                {settingsLoading ? '正在读取设置…' : '保存基础设置'}
               </>
             )}
           </Button>

@@ -1,6 +1,6 @@
 'use client';
 
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import { useRouter } from 'next/navigation';
 import { Button } from '@/components/ui/button';
 import { Sheet, SheetContent } from '@/components/ui/sheet';
@@ -52,6 +52,10 @@ import { useDailyGmailTodos } from '@/lib/use-daily-gmail-todos';
 import { useCooperationCalendarEvents } from '@/lib/use-cooperation-calendar-events';
 import { AdminAccountsPanel } from '@/components/admin-accounts-panel';
 import { scopedLocalStorageKey } from '@/lib/account-cache-scope';
+import {
+  clearDashboardNavigationIntent,
+  getDashboardNavigationIntent,
+} from '@/lib/dashboard-navigation';
 
 type View = 'kanban' | 'list' | 'email' | 'reminders' | 'settings' | 'accounts' | 'todo' | 'calendar' | 'prospecting' | 'gmail' | 'prompts' | 'draft-prompts';
 
@@ -132,6 +136,7 @@ export default function DashboardPage() {
   const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
   const [accountRetrying, setAccountRetrying] = useState(false);
+  const navigationIntentHandledRef = useRef(false);
 
   useEffect(() => {
     if (!authLoading && configured && !user) {
@@ -158,23 +163,24 @@ export default function DashboardPage() {
     }
     if (!authLoading && account?.mustChangePassword) {
       router.replace('/change-password');
-      return;
-    }
-    const params = new URLSearchParams(window.location.search);
-    if (
-      params.get('view') === 'gmail' ||
-      params.get('gmail_connected') ||
-      params.get('auth_error')
-    ) {
-      setCurrentView('gmail');
-    } else if (
-      params.get('view') === 'settings' ||
-      params.get('feishu_connected') ||
-      params.get('feishu_error')
-    ) {
-      setCurrentView('settings');
     }
   }, [account, accountIssue, authLoading, configured, router, signOut, user]);
+
+  useEffect(() => {
+    if (navigationIntentHandledRef.current || authLoading) return;
+    if (configured && (!user || !account || account.status !== 'active' || account.mustChangePassword)) return;
+    navigationIntentHandledRef.current = true;
+    const intent = getDashboardNavigationIntent(window.location.search);
+    if (intent) setCurrentView(intent);
+  }, [account, authLoading, configured, user]);
+
+  const changeView = useCallback((nextView: View) => {
+    const cleanUrl = clearDashboardNavigationIntent(window.location.href);
+    if (cleanUrl !== `${window.location.pathname}${window.location.search}${window.location.hash}`) {
+      window.history.replaceState(window.history.state, '', cleanUrl);
+    }
+    setCurrentView(nextView);
+  }, []);
 
   useEffect(() => {
     if (currentView === 'gmail') setGmailHasMounted(true);
@@ -204,15 +210,15 @@ export default function DashboardPage() {
   });
   const handleOpenCooperationProject = useCallback((projectId: string) => {
     setOpenCooperationProjectId(projectId);
-    setCurrentView('kanban');
-  }, []);
+    changeView('kanban');
+  }, [changeView]);
   const handleOpenGmailThread = useCallback((threadId: string) => {
     setGmailThreadOpenRequest((current) => ({
       threadId,
       requestId: (current?.requestId || 0) + 1,
     }));
-    setCurrentView('gmail');
-  }, []);
+    changeView('gmail');
+  }, [changeView]);
   const handleOpenCooperationProjectHandled = useCallback(() => {
     setOpenCooperationProjectId(undefined);
   }, []);
@@ -326,7 +332,7 @@ export default function DashboardPage() {
                 aria-label={compact ? item.label : undefined}
                 data-active={isActive}
                 onClick={() => {
-                  setCurrentView(item.id as View);
+                  changeView(item.id as View);
                   setMobileMenuOpen(false);
                 }}
                 className={`app-nav-item flex h-10 w-full cursor-pointer items-center rounded-lg text-sm font-medium active:scale-[0.985] focus-visible:ring-2 focus-visible:ring-ring/40 motion-reduce:transition-none motion-reduce:active:scale-100 ${compact ? 'justify-center px-0' : 'gap-3 px-3'}`}
@@ -393,7 +399,7 @@ export default function DashboardPage() {
           <div className="flex items-center gap-2 md:gap-3">
             {stats.todayTodos > 0 && (
               <button
-                onClick={() => setCurrentView('todo')}
+                onClick={() => changeView('todo')}
                 className="glass-control hidden h-9 cursor-pointer items-center gap-2 rounded-lg px-3 text-sm font-medium text-primary transition-[background-color,box-shadow,transform] duration-200 ease-out hover:bg-white/88 hover:shadow-sm active:scale-[0.985] motion-reduce:transition-none motion-reduce:active:scale-100 md:flex"
               >
                 <CheckSquare className="w-4 h-4" />
@@ -402,7 +408,7 @@ export default function DashboardPage() {
             )}
             {stats.upcoming > 0 && (
               <button
-                onClick={() => setCurrentView('reminders')}
+                onClick={() => changeView('reminders')}
                 className="glass-control hidden h-9 cursor-pointer items-center gap-2 rounded-lg px-3 text-sm font-medium text-amber-700 transition-[background-color,box-shadow,transform] duration-200 ease-out hover:bg-white/88 hover:shadow-sm active:scale-[0.985] motion-reduce:transition-none motion-reduce:active:scale-100 md:flex"
               >
                 <Bell className="w-4 h-4" />
@@ -527,7 +533,7 @@ export default function DashboardPage() {
             <div className={currentView === 'kanban' ? 'min-h-0 flex-1' : 'hidden'}>
               <CooperationProjectsPage
                 active={currentView === 'kanban'}
-                onOpenSettings={() => setCurrentView('settings')}
+                onOpenSettings={() => changeView('settings')}
                 openProjectId={openCooperationProjectId}
                 onOpenProjectHandled={handleOpenCooperationProjectHandled}
               />
@@ -573,7 +579,7 @@ export default function DashboardPage() {
                   </div>
                   <h2 className="text-xl font-semibold mb-2">{label.feishuEmptyTitle}</h2>
                   <p className="text-muted-foreground mb-6 max-w-sm">{label.feishuEmptyDesc}</p>
-                  <Button onClick={() => setCurrentView('settings')}>
+                  <Button onClick={() => changeView('settings')}>
                     <Settings className="w-4 h-4 mr-2" />
                     {label.goSettings}
                   </Button>

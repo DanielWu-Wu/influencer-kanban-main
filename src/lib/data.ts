@@ -1,6 +1,14 @@
 'use client';
 
-import { useState, useEffect, useCallback, useMemo, useRef } from 'react';
+import {
+  createContext,
+  useCallback,
+  useContext,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+} from 'react';
 import {
   Influencer,
   EmailTemplate,
@@ -246,34 +254,40 @@ async function syncSettingsToCloud(settings: AppSettings) {
   return next;
 }
 
-export function useSettings() {
+export type SettingsContextValue = {
+  settings: AppSettings;
+  updateSettings: (updates: Partial<AppSettings>) => void;
+  saveSettings: (updates: Partial<AppSettings>) => Promise<void>;
+  loading: boolean;
+  error: string | null;
+};
+
+export const SettingsContext = createContext<SettingsContextValue | null>(null);
+
+export function useSettingsProviderValue() {
   const [settings, setSettings] = useState<AppSettings>({});
   const [loading, setLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
   const settingsRef = useRef<AppSettings>({});
+  const settingsReadyRef = useRef(false);
 
   useEffect(() => {
-    const handleCustom = (event: Event) => {
-      const next = (event as CustomEvent<AppSettings>).detail;
-      settingsRef.current = next;
-      setSettings(next);
-    };
-
-    window.addEventListener('settings-updated', handleCustom);
+    let active = true;
 
     const loadCloudSettings = async () => {
       const supabase = getSupabaseBrowserClient();
       if (!supabase) {
-        setLoading(false);
+        if (active) setLoading(false);
         return;
       }
 
       const { data: authData } = await supabase.auth.getUser();
       if (!authData.user) {
-        setLoading(false);
+        if (active) setLoading(false);
         return;
       }
 
-      const [{ data: cloudRow }, secretStatus, youtubeSecretStatus] = await Promise.all([
+      const [settingsResult, secretStatus, youtubeSecretStatus] = await Promise.all([
         supabase
           .from('app_settings')
           .select('data')
@@ -286,34 +300,48 @@ export function useSettings() {
           .then((response) => response.ok ? response.json() : null)
           .catch(() => null),
       ]);
+      if (settingsResult.error) {
+        throw new Error(settingsResult.error.message || '云端设置读取失败。');
+      }
 
       const cloudSettings =
-        cloudRow?.data && typeof cloudRow.data === 'object'
-          ? cloudRow.data as AppSettings
+        settingsResult.data?.data && typeof settingsResult.data.data === 'object'
+          ? settingsResult.data.data as AppSettings
           : null;
       const nextSettings = {
         ...(cloudSettings || {}),
         customApiKeyConfigured: Boolean(secretStatus?.configured),
         youtubeApiKeyConfigured: Boolean(youtubeSecretStatus?.configured),
       };
+      if (!active) return;
       settingsRef.current = nextSettings;
+      settingsReadyRef.current = true;
+      setError(null);
       setSettings(nextSettings);
       setLoading(false);
     };
 
-    void loadCloudSettings();
+    void loadCloudSettings().catch((loadError) => {
+      if (!active) return;
+      console.error('云端设置读取失败:', loadError);
+      setError(loadError instanceof Error ? loadError.message : '云端设置读取失败。');
+      setLoading(false);
+    });
     return () => {
-      window.removeEventListener('settings-updated', handleCustom);
+      active = false;
     };
   }, []);
 
   const publishSettings = useCallback((next: AppSettings) => {
     settingsRef.current = next;
     setSettings(next);
-    window.dispatchEvent(new CustomEvent('settings-updated', { detail: next }));
   }, []);
 
   const updateSettings = useCallback((updates: Partial<AppSettings>) => {
+    if (!settingsReadyRef.current) {
+      console.error('云端设置尚未读取完成，本次设置未保存。');
+      return;
+    }
     const next = { ...settingsRef.current, ...updates };
     publishSettings(next);
     void syncSettingsToCloud(next).catch((saveError) => {
@@ -322,6 +350,9 @@ export function useSettings() {
   }, [publishSettings]);
 
   const saveSettings = useCallback(async (updates: Partial<AppSettings>) => {
+    if (!settingsReadyRef.current) {
+      throw new Error('云端设置尚未读取完成，请稍后重试。');
+    }
     const previous = settingsRef.current;
     const next = { ...previous, ...updates };
     publishSettings(next);
@@ -340,7 +371,21 @@ export function useSettings() {
     }
   }, [publishSettings]);
 
-  return { settings, updateSettings, saveSettings, loading };
+  const value = useMemo<SettingsContextValue>(() => ({
+    settings,
+    updateSettings,
+    saveSettings,
+    loading,
+    error,
+  }), [error, loading, saveSettings, settings, updateSettings]);
+
+  return value;
+}
+
+export function useSettings() {
+  const context = useContext(SettingsContext);
+  if (!context) throw new Error('useSettings 必须在 SettingsProvider 中使用。');
+  return context;
 }
 
 export function useInfluencers() {

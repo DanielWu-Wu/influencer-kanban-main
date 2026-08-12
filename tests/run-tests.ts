@@ -23,3 +23,5 @@ import './follow-up-draft-workflow.test';
 import './ai-provider-config.test';
 import './ai-chinese-translation.test';
 import './feishu-app-credentials.test';
+import './dashboard-navigation.test';
+import './feishu-mapping-draft.test';
