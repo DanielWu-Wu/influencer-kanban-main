@@ -148,7 +148,7 @@ export function GmailReplyTargetBar({
         </Popover>
         <Button type="button" variant="ghost" size="sm" onClick={onChooseMessage}>
           <Pencil data-icon="inline-start" />
-          更换邮件
+          更换回复依据
         </Button>
       </div>
     </div>

@@ -1,9 +1,11 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import {
+  buildGmailReplyReferences,
   buildGmailReplySubject,
   collectGmailThreadParticipants,
   getDefaultGmailReplyMessage,
+  resolveGmailReplyAnchorState,
   resolveGmailReplyTarget,
 } from '../src/lib/gmail-reply-target';
 import { scopeGmailAIMessagesToReplyTarget } from '../src/lib/gmail-ai-reply';
@@ -121,6 +123,35 @@ test('默认选中最新非系统邮件，但系统通知仍可被用户显式�
   assert.equal(resolveGmailReplyTarget({ thread, messageId: '6', ownEmail: 'me@example.com' })?.messageId, '6');
 });
 
+test('人工选择的回复依据在同一线程普通刷新后保持不变', () => {
+  const thread = gmailThread([gmailMessage('5'), gmailMessage('6')]);
+  assert.deepEqual(resolveGmailReplyAnchorState({
+    thread,
+    currentMessageId: '5',
+    defaultMessageId: '6',
+    manuallySelected: true,
+    scopeChanged: false,
+  }), { messageId: '5', manuallySelected: true });
+});
+
+test('切换线程或所选邮件不存在时恢复默认回复依据', () => {
+  const thread = gmailThread([gmailMessage('7'), gmailMessage('8')]);
+  assert.deepEqual(resolveGmailReplyAnchorState({
+    thread,
+    currentMessageId: '7',
+    defaultMessageId: '8',
+    manuallySelected: true,
+    scopeChanged: true,
+  }), { messageId: '8', manuallySelected: false });
+  assert.deepEqual(resolveGmailReplyAnchorState({
+    thread,
+    currentMessageId: 'missing',
+    defaultMessageId: '8',
+    manuallySelected: true,
+    scopeChanged: false,
+  }), { messageId: '8', manuallySelected: false });
+});
+
 test('参与者汇总覆盖 From、To、Cc、Bcc 并标明可靠角色', () => {
   const thread = gmailThread([
     gmailMessage('7', {
@@ -162,4 +193,27 @@ test('AI 上下文保留所选内部转发并排除该节点之后的邮件', ()
     ownEmail: 'me@example.com',
   });
   assert.equal(target ? buildGmailReplySubject(target) : '', 'Re: 合作沟通');
+});
+
+test('回复头信息严格取自所选邮件，而不是线程中的最新邮件', () => {
+  const selected = gmailMessage('11', {
+    references: '<root@example.com> <previous@example.com>',
+    rfcMessageId: '<selected@example.com>',
+  });
+  const latest = gmailMessage('12', {
+    references: '<latest-root@example.com>',
+    rfcMessageId: '<latest@example.com>',
+  });
+  const target = resolveGmailReplyTarget({
+    thread: gmailThread([selected, latest]),
+    messageId: selected.id,
+    ownEmail: 'me@example.com',
+  });
+
+  assert.equal(target?.threadId, selected.threadId);
+  assert.equal(target?.message.rfcMessageId, '<selected@example.com>');
+  assert.equal(
+    target ? buildGmailReplyReferences(target) : '',
+    '<root@example.com> <previous@example.com> <selected@example.com>',
+  );
 });

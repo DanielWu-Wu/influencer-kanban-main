@@ -30,6 +30,11 @@ export type GmailThreadParticipant = GmailAddress & {
   headers: Array<'from' | 'to' | 'cc' | 'bcc' | 'reply-to'>;
 };
 
+export type GmailReplyAnchorState = {
+  messageId: string;
+  manuallySelected: boolean;
+};
+
 function normalizeEmail(value?: string) {
   return String(value || '').trim().replace(/^mailto:/i, '').toLowerCase();
 }
@@ -97,6 +102,28 @@ export function getDefaultGmailReplyMessage(thread: GmailThread) {
     .reverse()
     .find((message) => !isIgnoredGmailThreadSender(message.from))
     || chronological.at(-1);
+}
+
+export function resolveGmailReplyAnchorState({
+  thread,
+  currentMessageId,
+  defaultMessageId,
+  manuallySelected,
+  scopeChanged,
+}: {
+  thread: Pick<GmailThread, 'messages'>;
+  currentMessageId: string;
+  defaultMessageId: string;
+  manuallySelected: boolean;
+  scopeChanged: boolean;
+}): GmailReplyAnchorState {
+  const currentMessageExists = Boolean(
+    currentMessageId && thread.messages.some((message) => message.id === currentMessageId),
+  );
+  if (!scopeChanged && manuallySelected && currentMessageExists) {
+    return { messageId: currentMessageId, manuallySelected: true };
+  }
+  return { messageId: defaultMessageId, manuallySelected: false };
 }
 
 export function resolveGmailReplyTarget({

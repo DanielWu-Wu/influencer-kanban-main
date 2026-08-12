@@ -1,6 +1,6 @@
 'use client';
 
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
 import { ScrollArea } from '@/components/ui/scroll-area';
@@ -31,6 +31,7 @@ import {
   collectGmailThreadParticipants,
   formatGmailRecipientSummary,
   getDefaultGmailReplyMessage,
+  resolveGmailReplyAnchorState,
   resolveGmailReplyTarget,
 } from '@/lib/gmail-reply-target';
 import { outreachLanguageLabel } from '@/lib/outreach-languages';
@@ -221,6 +222,7 @@ export function EmailDetail({
   const [selectedReplyMessageId, setSelectedReplyMessageId] = useState(
     () => getDefaultGmailReplyMessage(thread)?.id || '',
   );
+  const replyAnchorManuallySelectedRef = useRef(false);
   const [recipientOverrides, setRecipientOverrides] = useState<Record<string, string>>({});
   const [savedReplyDraft, setSavedReplyDraft] = useState('');
   const [changingReadStateId, setChangingReadStateId] = useState<string | null>(null);
@@ -233,16 +235,33 @@ export function EmailDetail({
   } | null>(null);
   const { addTranslation, getTranslation } = useEmailTranslations();
   const { auth, connect } = useGmailAuth();
+  const replyAnchorScopeRef = useRef(`${auth?.email || ''}:${thread.id}`);
   const defaultReplyMessageId = useMemo(
     () => getDefaultGmailReplyMessage(thread)?.id || '',
     [thread],
   );
+  const replyAnchorScope = `${auth?.email || ''}:${thread.id}`;
 
   useEffect(() => {
-    setSelectedReplyMessageId(defaultReplyMessageId);
-    setRecipientOverrides({});
-    setComposerState('closed');
-  }, [auth?.email, defaultReplyMessageId, thread.id]);
+    const scopeChanged = replyAnchorScopeRef.current !== replyAnchorScope;
+    replyAnchorScopeRef.current = replyAnchorScope;
+    const nextAnchor = resolveGmailReplyAnchorState({
+      thread,
+      currentMessageId: selectedReplyMessageId,
+      defaultMessageId: defaultReplyMessageId,
+      manuallySelected: replyAnchorManuallySelectedRef.current,
+      scopeChanged,
+    });
+    replyAnchorManuallySelectedRef.current = nextAnchor.manuallySelected;
+    setSelectedReplyMessageId((current) => (
+      current === nextAnchor.messageId ? current : nextAnchor.messageId
+    ));
+    if (scopeChanged) {
+      setRecipientOverrides({});
+      setSavedReplyDraft('');
+      setComposerState('closed');
+    }
+  }, [defaultReplyMessageId, replyAnchorScope, selectedReplyMessageId, thread]);
 
   const toggleMessage = (messageId: string) => {
     const newExpanded = new Set(expandedMessages);
@@ -398,9 +417,30 @@ export function EmailDetail({
   const newestDisplayMessageId = displayMessages[0]?.id || '';
   const creatorYouTubeChannelUrl = getDirectYouTubeChannelUrl(creatorProfile);
 
-  const openReplyForMessage = (message: GmailMessage, mode: 'compose' | 'ai') => {
+  const selectReplyAnchor = (message: GmailMessage) => {
+    if (message.id === selectedReplyMessageId) return;
+    if (composerState !== 'closed') {
+      const confirmed = window.confirm(
+        '切换回复依据会关闭当前起草面板，其中尚未保存的内容可能丢失。确定继续吗？',
+      );
+      if (!confirmed) return;
+    }
+    replyAnchorManuallySelectedRef.current = true;
     setSelectedReplyMessageId(message.id);
     setExpandedMessages((current) => new Set(current).add(message.id));
+    setComposerState('closed');
+  };
+
+  const chooseAnotherReplyAnchor = () => {
+    const confirmed = window.confirm(
+      '返回选择回复依据会关闭当前起草面板，其中尚未保存的内容可能丢失。确定继续吗？',
+    );
+    if (confirmed) setComposerState('closed');
+  };
+
+  const openReplyComposer = (mode: 'compose' | 'template' | 'ai') => {
+    if (!replyTarget) return;
+    replyAnchorManuallySelectedRef.current = true;
     setReplyMode(mode);
     setComposerState('expanded');
   };
@@ -1166,30 +1206,6 @@ export function EmailDetail({
           </div>
         </div>
         <div className="flex items-center gap-1">
-          <Button
-            variant="ghost"
-            size="icon"
-            className="h-9 w-9 rounded-lg hover:bg-white/70"
-            title="AI 辅助回复"
-            onClick={() => {
-              setReplyMode('ai');
-              setComposerState('expanded');
-            }}
-          >
-            <Sparkles className="w-4 h-4 text-primary" />
-          </Button>
-          <Button
-            variant="ghost"
-            size="icon"
-            className="h-9 w-9 rounded-lg hover:bg-white/70"
-            title="回复当前选中的邮件"
-            onClick={() => {
-              setReplyMode('compose');
-              setComposerState('expanded');
-            }}
-          >
-            <Reply className="w-4 h-4" />
-          </Button>
           <Button variant="ghost" size="icon" className="h-9 w-9 rounded-lg hover:bg-white/70">
             <MoreHorizontal className="w-4 h-4" />
           </Button>
@@ -1587,21 +1603,19 @@ export function EmailDetail({
                       <div className="flex items-center gap-2 pt-2">
                         <Button
                           size="sm"
-                          variant="outline"
-                          className="h-8 rounded-lg bg-white/75"
-                          onClick={() => openReplyForMessage(message, 'compose')}
+                          variant={isReplyTarget ? 'secondary' : 'outline'}
+                          className={isReplyTarget
+                            ? 'h-8 rounded-lg border-primary/20 bg-primary/10 text-primary'
+                            : 'h-8 rounded-lg bg-white/75'}
+                          disabled={isReplyTarget}
+                          aria-pressed={isReplyTarget}
+                          onClick={(event) => {
+                            event.stopPropagation();
+                            selectReplyAnchor(message);
+                          }}
                         >
                           <CornerUpLeft data-icon="inline-start" />
-                          {message.labels.includes('SENT') ? '基于此邮件继续起草' : '回复此邮件'}
-                        </Button>
-                        <Button
-                          size="sm"
-                          variant="outline"
-                          className="h-8 rounded-lg border-primary/25 bg-primary/5 text-primary"
-                          onClick={() => openReplyForMessage(message, 'ai')}
-                        >
-                          <Sparkles data-icon="inline-start" />
-                          {message.labels.includes('SENT') ? 'AI 继续起草' : 'AI 回复此邮件'}
+                          {isReplyTarget ? '已选为回复依据' : '回复此邮件'}
                         </Button>
                         <Button 
                           size="sm" 
@@ -1662,7 +1676,7 @@ export function EmailDetail({
             target={replyTarget}
             ownEmail={auth?.email}
             onRecipientChange={updateReplyRecipient}
-            onChooseMessage={() => setComposerState('closed')}
+            onChooseMessage={chooseAnotherReplyAnchor}
           />
         ) : null}
         {composerState === 'closed' ? (
@@ -1670,10 +1684,7 @@ export function EmailDetail({
             <Button
               variant="outline" 
               className="h-10 flex-1 rounded-lg bg-white/80"
-              onClick={() => {
-                setReplyMode('compose');
-                setComposerState('expanded');
-              }}
+              onClick={() => openReplyComposer('compose')}
             >
               <Reply className="w-4 h-4 mr-2" />
               回复
@@ -1681,20 +1692,14 @@ export function EmailDetail({
             <Button
               variant="outline"
               className="h-10 flex-1 rounded-lg border-primary/25 bg-primary/5 text-primary hover:bg-primary/10"
-              onClick={() => {
-                setReplyMode('template');
-                setComposerState('expanded');
-              }}
+              onClick={() => openReplyComposer('template')}
             >
               <FileText className="w-4 h-4 mr-2" />
               AI 模板起草
             </Button>
             <Button
               className="h-10 flex-1 rounded-lg shadow-apple"
-              onClick={() => {
-                setReplyMode('ai');
-                setComposerState('expanded');
-              }}
+              onClick={() => openReplyComposer('ai')}
             >
               <Sparkles className="w-4 h-4 mr-2" />
               AI 辅助回复
