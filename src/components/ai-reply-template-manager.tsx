@@ -13,7 +13,6 @@ import {
 } from '@/components/ui/dialog';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
-import { ScrollArea } from '@/components/ui/scroll-area';
 import {
   Select,
   SelectContent,
@@ -141,8 +140,8 @@ export function AIReplyTemplateManager({
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="flex max-h-[86dvh] max-w-3xl flex-col overflow-hidden">
-        <DialogHeader>
+      <DialogContent className="flex max-h-[calc(100dvh-2rem)] max-w-3xl flex-col overflow-hidden">
+        <DialogHeader className="shrink-0 pr-6">
           <DialogTitle>管理 AI 回复模板</DialogTitle>
           <DialogDescription>
             内置模板不可直接修改。点击编辑图标可创建个人版本后调整，个人模板仅保存在当前账号。
@@ -150,7 +149,10 @@ export function AIReplyTemplateManager({
         </DialogHeader>
 
         {isEditing ? (
-          <ScrollArea className="min-h-0 flex-1 pr-3">
+          <div
+            data-testid="ai-template-scroll-body"
+            className="min-h-0 flex-1 overflow-y-auto overscroll-contain pr-3"
+          >
             <div className="grid gap-4 py-1">
               <div className="grid gap-2">
                 <Label htmlFor="ai-template-name">模板名称</Label>
@@ -219,9 +221,12 @@ export function AIReplyTemplateManager({
               </div>
               {error && <p className="text-sm text-destructive">{error}</p>}
             </div>
-          </ScrollArea>
+          </div>
         ) : (
-          <ScrollArea className="min-h-0 flex-1 pr-3">
+          <div
+            data-testid="ai-template-scroll-body"
+            className="min-h-0 flex-1 overflow-y-auto overscroll-contain pr-3"
+          >
             <div className="grid gap-2">
               {templates.map((template) => {
                 const builtIn = isBuiltInAIReplyTemplate(template.id);
@@ -262,10 +267,10 @@ export function AIReplyTemplateManager({
                 );
               })}
             </div>
-          </ScrollArea>
+          </div>
         )}
 
-        <DialogFooter>
+        <DialogFooter className="shrink-0 border-t border-border/70 pt-4">
           {isEditing ? (
             <>
               <Button variant="outline" onClick={() => setEditingId(null)}>返回列表</Button>
