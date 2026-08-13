@@ -74,7 +74,7 @@ const label = {
   emailTemplates: '\u90ae\u4ef6\u6a21\u677f',
   reminders: '\u8ddf\u8fdb\u63d0\u9192',
   settings: '\u8bbe\u7f6e',
-  prompts: 'AI \u63d0\u793a\u8bcd',
+  prompts: 'AI \u7cfb\u7edf\u529f\u80fd\u63d0\u793a\u8bcd',
   draftPrompts: 'AI \u8d77\u8349\u90ae\u4ef6\u63d0\u793a\u8bcd',
   accounts: '\u8d26\u53f7\u7ba1\u7406',
   addInfluencer: '\u6dfb\u52a0\u7ea2\u4eba',
