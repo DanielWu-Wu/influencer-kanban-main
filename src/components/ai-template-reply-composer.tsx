@@ -61,6 +61,11 @@ import {
   buildGmailReplySubject,
   type GmailReplyTarget,
 } from '@/lib/gmail-reply-target';
+import {
+  isGmailBilingualDraftForeignEdited,
+  type GmailBilingualDraftSnapshot,
+  type GmailTemplateDraftResult,
+} from '@/lib/gmail-bilingual-draft';
 import { getAIReplyTemplates, type AIReplyTemplate } from '@/lib/ai-reply-templates';
 import { useEmailDrafts, useEmailTemplates, useGmailAuth, useSettings } from '@/lib/data';
 import type { GmailThread } from '@/lib/types';
@@ -69,14 +74,7 @@ import { RichEmailEditor } from './rich-email-editor';
 
 type ReplyTone = 'friendly' | 'formal' | 'casual';
 
-type TemplateSuggestion = {
-  suggestedReply: string;
-  translatedReply: string;
-  tone: ReplyTone;
-  keyPoints: string[];
-  missingInfo: string[];
-  riskNotes: string[];
-};
+type TemplateSuggestion = GmailTemplateDraftResult;
 
 const LANGUAGE_OPTIONS = [
   ['en', '英语'], ['es', '西班牙语'], ['nl', '荷兰语'], ['de', '德语'],
@@ -142,6 +140,7 @@ export function AITemplateReplyComposer({
   const [replyContent, setReplyContent] = useState('');
   const [suggestion, setSuggestion] = useState<TemplateSuggestion | null>(null);
   const [editedChineseReply, setEditedChineseReply] = useState('');
+  const [synchronizedDraft, setSynchronizedDraft] = useState<GmailBilingualDraftSnapshot | null>(null);
   const [chineseDirty, setChineseDirty] = useState(false);
   const [translatingChinese, setTranslatingChinese] = useState(false);
   const [translationUpdated, setTranslationUpdated] = useState(false);
@@ -154,6 +153,7 @@ export function AITemplateReplyComposer({
   const [translationOpen, setTranslationOpen] = useState(true);
   const [managerOpen, setManagerOpen] = useState(false);
   const [factEditorOpen, setFactEditorOpen] = useState(false);
+  const factEditorTextareaRef = useRef<HTMLTextAreaElement | null>(null);
   const generationRef = useRef<AbortController | null>(null);
   const chineseTranslationRef = useRef<AbortController | null>(null);
 
@@ -163,6 +163,10 @@ export function AITemplateReplyComposer({
   const languageName = LANGUAGE_OPTIONS.find(([code]) => code === targetLang)?.[1] || targetLang;
   const targetLanguageChanged = Boolean(suggestion && syncedTargetLang && syncedTargetLang !== targetLang);
   const translationOutOfSync = chineseDirty || targetLanguageChanged;
+  const foreignManuallyEdited = isGmailBilingualDraftForeignEdited({
+    snapshot: synchronizedDraft,
+    foreignBody: replyContent,
+  });
 
   useEffect(() => {
     const detected = detectEmailLanguage(externalMessage?.body || '');
@@ -173,6 +177,15 @@ export function AITemplateReplyComposer({
   useEffect(() => {
     if (selectedTemplate) setReplyTone(selectedTemplate.defaultTone);
   }, [selectedTemplate]);
+
+  useEffect(() => {
+    if (!factEditorOpen) return;
+    const editor = factEditorTextareaRef.current;
+    if (!editor) return;
+    editor.focus();
+    const end = editor.value.length;
+    editor.setSelectionRange(end, end);
+  }, [factEditorOpen]);
 
   useEffect(() => () => {
     generationRef.current?.abort();
@@ -259,6 +272,7 @@ export function AITemplateReplyComposer({
     const previousChineseDirty = chineseDirty;
     const previousTranslationUpdated = translationUpdated;
     const previousSyncedTargetLang = syncedTargetLang;
+    const previousSynchronizedDraft = synchronizedDraft;
     setLoading(true);
     setTranslatingChinese(false);
     setDraftSaved(false);
@@ -270,7 +284,7 @@ export function AITemplateReplyComposer({
       let finalResult: TemplateSuggestion | null = null;
       let streamError = '';
       let streamedBody = '';
-      setStage('正在按模板起草邮件');
+      setStage('正在生成外文邮件');
       try {
         const response = await fetch('/api/ai/gmail-reply-stream', {
           method: 'POST',
@@ -313,7 +327,7 @@ export function AITemplateReplyComposer({
       } catch (streamFailure) {
         if (controller.signal.aborted) return;
         console.warn('[AI template reply stream fallback]', streamFailure);
-        setStage('流式生成不可用，正在使用兼容模式');
+        setStage('正在生成外文邮件');
         const response = await fetch('/api/ai', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
@@ -333,12 +347,14 @@ export function AITemplateReplyComposer({
       setSuggestion({
         ...finalResult,
         suggestedReply: cleanReply,
-        keyPoints: finalResult.keyPoints || [],
-        missingInfo: finalResult.missingInfo || [],
-        riskNotes: finalResult.riskNotes || [],
       });
       setReplyContent(cleanReply);
       setEditedChineseReply(finalResult.translatedReply || '');
+      setSynchronizedDraft({
+        foreignBody: cleanReply,
+        chineseBody: finalResult.translatedReply || '',
+        targetLanguage: targetLang,
+      });
       setChineseDirty(false);
       setTranslationUpdated(false);
       setSyncedTargetLang(targetLang);
@@ -351,6 +367,7 @@ export function AITemplateReplyComposer({
       setChineseDirty(previousChineseDirty);
       setTranslationUpdated(previousTranslationUpdated);
       setSyncedTargetLang(previousSyncedTargetLang);
+      setSynchronizedDraft(previousSynchronizedDraft);
       setError(generationError instanceof Error ? generationError.message : 'AI 生成失败，请稍后重试。');
     } finally {
       if (generationRef.current === controller) generationRef.current = null;
@@ -362,6 +379,7 @@ export function AITemplateReplyComposer({
   const updateDraftFromChinese = async () => {
     const confirmedChineseReply = editedChineseReply.trim();
     if (!confirmedChineseReply || !suggestion || !translationOutOfSync) return;
+    if (foreignManuallyEdited && !window.confirm('根据中文更新外文会覆盖当前手动调整的外文，是否继续？')) return;
     chineseTranslationRef.current?.abort();
     const controller = new AbortController();
     chineseTranslationRef.current = controller;
@@ -406,11 +424,13 @@ export function AITemplateReplyComposer({
         ...current,
         suggestedReply: translatedReply,
         translatedReply: confirmedChineseReply,
-        keyPoints: [],
-        missingInfo: [],
-        riskNotes: [],
       } : current);
       setEditedChineseReply(confirmedChineseReply);
+      setSynchronizedDraft({
+        foreignBody: translatedReply,
+        chineseBody: confirmedChineseReply,
+        targetLanguage: targetLang,
+      });
       setChineseDirty(false);
       setTranslationUpdated(true);
       setSyncedTargetLang(targetLang);
@@ -513,6 +533,7 @@ export function AITemplateReplyComposer({
                   setSuggestion(null);
                   setReplyContent('');
                   setEditedChineseReply('');
+                  setSynchronizedDraft(null);
                   setChineseDirty(false);
                   setTranslationUpdated(false);
                   setSyncedTargetLang('');
@@ -541,22 +562,25 @@ export function AITemplateReplyComposer({
             <div className="rounded-xl border p-4">
               <p className="text-sm font-semibold">2. 用自己的话补充事实</p>
               <p className="mb-3 mt-1 text-xs text-muted-foreground">先快速记录；内容较多时打开专注编辑，减少周围信息干扰。</p>
-              <button
-                type="button"
-                aria-label="打开专注编辑器"
-                onClick={() => setFactEditorOpen(true)}
-                className="group block w-full rounded-xl border border-input bg-white p-3 text-left shadow-inner outline-none transition-[border-color,box-shadow] duration-150 ease-out hover:border-primary/55 focus-visible:border-primary focus-visible:ring-3 focus-visible:ring-primary/10"
-              >
-                <span className={`line-clamp-4 min-h-28 whitespace-pre-wrap text-sm leading-6 ${userIdeas ? 'text-foreground' : 'text-muted-foreground'}`}>
-                  {userIdeas || '点击打开大编辑器，把事情像聊天一样写下来。AI 会帮你整理成正式邮件。'}
-                </span>
-                <span className="mt-2 flex items-center justify-between border-t pt-2 text-xs">
-                  <span className="text-muted-foreground">{userIdeas.length} 字</span>
-                  <span className="flex items-center gap-1.5 font-medium text-primary">
-                    <Maximize2 className="size-3.5" />打开大编辑器
-                  </span>
-                </span>
-              </button>
+              <Textarea
+                aria-label="邮件事实"
+                value={userIdeas}
+                onChange={(event) => setUserIdeas(event.target.value)}
+                placeholder="例如：产品今天已经发出，请他收到后告诉我，并确认大概什么时候可以拍摄。"
+                className="h-28 min-h-28 max-h-28 resize-none overflow-y-auto px-3 py-3 text-sm leading-6 shadow-inner"
+              />
+              <div className="mt-2 flex items-center justify-between gap-3">
+                <span className="text-xs text-muted-foreground">{userIdeas.length} 字</span>
+                <Button
+                  type="button"
+                  variant="ghost"
+                  size="sm"
+                  className="h-9 px-2.5 text-primary hover:text-primary"
+                  onClick={() => setFactEditorOpen(true)}
+                >
+                  <Maximize2 className="size-3.5" />打开大编辑器
+                </Button>
+              </div>
               <div className="mt-3 grid grid-cols-2 gap-2">
                 <Select
                   value={targetLang}
@@ -610,14 +634,13 @@ export function AITemplateReplyComposer({
               <div className="flex min-h-64 flex-col items-center justify-center rounded-xl border border-dashed bg-slate-50/45 px-6 text-center">
                 <Sparkles className="mb-3 size-7 text-primary/55" />
                 <p className="text-sm font-medium">生成后，标准邮件会出现在这里</p>
-                <p className="mt-1 max-w-sm text-xs leading-5 text-muted-foreground">同时给出中文对照、缺失信息和发送前风险，方便你人工确认。</p>
+                <p className="mt-1 max-w-sm text-xs leading-5 text-muted-foreground">AI 会先生成外文邮件，再提供可编辑的中文对照供你确认。</p>
               </div>
             ) : (
               <RichEmailEditor
                 value={replyContent}
                 onChange={(value) => {
                   setReplyContent(value);
-                  setTranslationUpdated(false);
                   setDraftSaved(false);
                 }}
                 placeholder="AI 邮件草稿"
@@ -625,35 +648,6 @@ export function AITemplateReplyComposer({
               />
             )}
 
-            {suggestion?.keyPoints.length ? (
-              <div className="rounded-xl border bg-white p-3">
-                <p className="mb-2 text-xs font-medium text-muted-foreground">本次回复已包含</p>
-                <div className="flex flex-wrap gap-1.5">
-                  {suggestion.keyPoints.map((item) => (
-                    <Badge key={item} variant="secondary" className="font-normal">{item}</Badge>
-                  ))}
-                </div>
-              </div>
-            ) : null}
-
-            {suggestion?.missingInfo.length ? (
-              <Alert className="border-amber-200 bg-amber-50/80 text-amber-950">
-                <AlertTriangle />
-                <AlertTitle>建议补充的信息</AlertTitle>
-                <AlertDescription>
-                  {suggestion.missingInfo.map((item) => <p key={item}>• {item}</p>)}
-                </AlertDescription>
-              </Alert>
-            ) : null}
-            {suggestion?.riskNotes.length ? (
-              <Alert className="border-blue-200 bg-blue-50/70 text-blue-950">
-                <AlertTriangle />
-                <AlertTitle>发送前请确认</AlertTitle>
-                <AlertDescription>
-                  {suggestion.riskNotes.map((item) => <p key={item}>• {item}</p>)}
-                </AlertDescription>
-              </Alert>
-            ) : null}
             {suggestion?.translatedReply && (
               <Collapsible open={translationOpen} onOpenChange={setTranslationOpen}>
                 <div className="rounded-xl border bg-slate-50/60">
@@ -673,11 +667,19 @@ export function AITemplateReplyComposer({
                           variant="outline"
                           className={translationOutOfSync
                             ? 'shrink-0 border-amber-200 bg-amber-50 text-amber-700'
+                            : foreignManuallyEdited
+                              ? 'shrink-0 border-blue-200 bg-blue-50 text-blue-700'
                             : translationUpdated
                               ? 'shrink-0 border-emerald-200 bg-emerald-50 text-emerald-700'
                               : 'shrink-0'}
                         >
-                          {translationOutOfSync ? '待更新外文' : translationUpdated ? '外文已同步' : '中文对照'}
+                          {translationOutOfSync
+                            ? '待更新外文'
+                            : foreignManuallyEdited
+                              ? '外文已手动调整'
+                              : translationUpdated
+                                ? '外文已同步'
+                                : '中文对照'}
                         </Badge>
                       </div>
                       <Textarea
@@ -698,9 +700,11 @@ export function AITemplateReplyComposer({
                             ? `目标语言已改为${languageName}；请更新外文后再保存 Gmail 草稿。`
                             : chineseDirty
                               ? '中文已修改；更新外文成功前不能保存 Gmail 草稿。'
-                            : translationUpdated
-                              ? `上方外文已按这份中文更新为${languageName}。`
-                              : '修改中文后，再由 AI 忠实翻译，不会重新决定商务内容。'}
+                              : foreignManuallyEdited
+                                ? '外文已手动调整，中文对照可能未同步；可以直接保存 Gmail 草稿。'
+                                : translationUpdated
+                                  ? `上方外文已按这份中文更新为${languageName}。`
+                                  : '请重点检查中文；无误可直接保存，修改后再由 AI 忠实更新外文。'}
                         </p>
                         <Button
                           type="button"
@@ -758,7 +762,7 @@ export function AITemplateReplyComposer({
           </DialogHeader>
           <div className="min-h-0 flex-1">
             <Textarea
-              autoFocus
+              ref={factEditorTextareaRef}
               aria-label="邮件事实"
               value={userIdeas}
               onChange={(event) => setUserIdeas(event.target.value)}

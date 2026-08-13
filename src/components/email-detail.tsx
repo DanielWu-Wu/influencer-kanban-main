@@ -10,7 +10,7 @@ import { useEmailTranslations, useGmailAuth, useSettings } from '@/lib/data';
 import { 
   ArrowLeft, Reply, MoreHorizontal, Globe, Languages,
   Copy, Sparkles, ChevronDown, Loader2,
-  Paperclip, Download, Forward, Mail, MailOpen,
+  Paperclip, Download, Forward, Mail, MailOpen, ImageOff,
   Database, Save, CheckCircle2, XCircle,
   ExternalLink, Maximize2, X,
   FileText,
@@ -24,6 +24,11 @@ import { YouTubeChannelAvatar } from './youtube-channel-avatar';
 import { textToEmailHtml } from '@/lib/email-content';
 import { detectEmailLanguage } from '@/lib/email-language';
 import { repairTextEncoding, splitEmailForTranslation } from '@/lib/email-text';
+import {
+  sanitizeEmailHtmlForDisplay,
+  shouldBlockRemoteEmailContent,
+  type EmailHtmlDisplaySanitizationResult,
+} from '@/lib/email-remote-content';
 import { extractMappedFeishuChannelUrl } from '@/lib/feishu-field-value';
 import type { FeishuFieldKey, FeishuFieldMapping } from '@/lib/feishu-mapping';
 import { getGmailThreadContact } from '@/lib/gmail-thread-contact';
@@ -235,6 +240,11 @@ export function EmailDetail({
   } | null>(null);
   const { addTranslation, getTranslation } = useEmailTranslations();
   const { auth, connect } = useGmailAuth();
+  const remoteContentPermissionScope = `${auth?.email || ''}:${thread.id}`;
+  const [remoteContentPermission, setRemoteContentPermission] = useState<{
+    scope: string;
+    messageIds: Set<string>;
+  }>(() => ({ scope: remoteContentPermissionScope, messageIds: new Set() }));
   const replyAnchorScopeRef = useRef(`${auth?.email || ''}:${thread.id}`);
   const defaultReplyMessageId = useMemo(
     () => getDefaultGmailReplyMessage(thread)?.id || '',
@@ -392,6 +402,25 @@ export function EmailDetail({
   const { settings } = useSettings();
   const { appendLog } = useRecordAssistant();
   const displayMessages = useMemo(() => sortMessagesNewestFirst(thread.messages), [thread.messages]);
+  const sanitizedDisplayHtmlByMessageId = useMemo(() => {
+    const sanitized = new Map<string, EmailHtmlDisplaySanitizationResult>();
+    displayMessages.forEach((message) => {
+      const html = message.htmlBody ? repairTextEncoding(message.htmlBody) : '';
+      sanitized.set(
+        message.id,
+        html
+          ? sanitizeEmailHtmlForDisplay(html, {
+              blockRemoteContent: shouldBlockRemoteEmailContent(
+                message.labels,
+                remoteContentPermission.scope === remoteContentPermissionScope
+                  && remoteContentPermission.messageIds.has(message.id),
+              ),
+            })
+          : { html: '', blockedRemoteResourceCount: 0 },
+      );
+    });
+    return sanitized;
+  }, [displayMessages, remoteContentPermission, remoteContentPermissionScope]);
   const replyTarget = useMemo(() => resolveGmailReplyTarget({
     thread,
     messageId: selectedReplyMessageId,
@@ -1072,7 +1101,7 @@ export function EmailDetail({
         ? originalSubject
         : `Fwd: ${originalSubject}`;
       const originalBody = message.htmlBody
-        ? sanitizeEmailHtml(message.htmlBody)
+        ? sanitizeForwardedEmailHtml(message.htmlBody)
         : textToEmailHtml(message.body);
       const forwardedHeader = [
         '<br><br>',
@@ -1104,7 +1133,7 @@ export function EmailDetail({
     }
   };
 
-  const sanitizeEmailHtml = (html: string) => {
+  const sanitizeForwardedEmailHtml = (html: string) => {
     if (typeof window === 'undefined') return '';
 
     const documentNode = new DOMParser().parseFromString(html, 'text/html');
@@ -1410,6 +1439,8 @@ export function EmailDetail({
             );
             const displayBody = repairTextEncoding(message.body);
             const displayHtmlBody = message.htmlBody ? repairTextEncoding(message.htmlBody) : '';
+            const sanitizedDisplayHtml = sanitizedDisplayHtmlByMessageId.get(message.id)
+              || { html: '', blockedRemoteResourceCount: 0 };
             const sourceLanguage = messageLanguageLabels.get(message.id) || '语言未知';
             const isCreatorSender = creatorProfile
               ? normalizeEmail(sender.email) === normalizeEmail(creatorProfile.email)
@@ -1578,10 +1609,38 @@ export function EmailDetail({
                           )}
                         </div>
                       ) : displayHtmlBody ? (
-                        <div
-                          className="email-html-content max-w-full overflow-hidden rounded-lg border border-border/55 bg-white p-4 text-sm leading-relaxed shadow-sm"
-                          dangerouslySetInnerHTML={{ __html: sanitizeEmailHtml(displayHtmlBody) }}
-                        />
+                        <div className="space-y-2">
+                          {sanitizedDisplayHtml.blockedRemoteResourceCount > 0 ? (
+                            <div className="flex flex-col gap-3 rounded-lg border border-amber-200 bg-amber-50/90 px-3 py-2.5 text-amber-900 sm:flex-row sm:items-center sm:justify-between">
+                              <p className="flex items-start gap-2 text-xs leading-5">
+                                <ImageOff className="mt-0.5 h-4 w-4 shrink-0" />
+                                <span>为避免把你在看板中的查看计为对方打开，已阻止这封已发送邮件的远程图片。</span>
+                              </p>
+                              <Button
+                                type="button"
+                                size="sm"
+                                variant="outline"
+                                className="h-8 shrink-0 border-amber-300 bg-white/85 px-3 text-xs text-amber-900 hover:bg-white"
+                                onClick={() => setRemoteContentPermission((current) => {
+                                  const nextMessageIds = current.scope === remoteContentPermissionScope
+                                    ? new Set(current.messageIds)
+                                    : new Set<string>();
+                                  nextMessageIds.add(message.id);
+                                  return {
+                                    scope: remoteContentPermissionScope,
+                                    messageIds: nextMessageIds,
+                                  };
+                                })}
+                              >
+                                显示远程图片（可能触发邮件追踪）
+                              </Button>
+                            </div>
+                          ) : null}
+                          <div
+                            className="email-html-content max-w-full overflow-hidden rounded-lg border border-border/55 bg-white p-4 text-sm leading-relaxed shadow-sm"
+                            dangerouslySetInnerHTML={{ __html: sanitizedDisplayHtml.html }}
+                          />
+                        </div>
                       ) : (
                         <div className="prose prose-sm max-w-none">
                           <pre className="max-w-full whitespace-pre-wrap break-words rounded-lg border border-border/55 bg-white p-4 font-sans text-sm leading-relaxed">

@@ -8,6 +8,7 @@ import './email-language.test';
 import './gmail-ai-reply.test';
 import './gmail-reply-target.test';
 import './gmail-bilingual-draft.test';
+import './email-remote-content.test';
 import './daily-gmail-todos.test';
 import './outreach-follow-up-sync.test';
 import './local-date.test';

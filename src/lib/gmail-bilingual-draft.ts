@@ -4,6 +4,33 @@ export type GmailBilingualDraftSnapshot = {
   targetLanguage: string;
 };
 
+export type GmailTemplateDraftTone = 'friendly' | 'formal' | 'casual';
+
+export type GmailTemplateDraftResult = {
+  suggestedReply: string;
+  translatedReply: string;
+  tone: GmailTemplateDraftTone;
+};
+
+export function buildGmailTemplateDraftResult({
+  suggestedReply,
+  translatedReply,
+  tone,
+}: {
+  suggestedReply: unknown;
+  translatedReply: unknown;
+  tone: unknown;
+}): GmailTemplateDraftResult {
+  const normalizedTone: GmailTemplateDraftTone = tone === 'formal' || tone === 'casual'
+    ? tone
+    : 'friendly';
+  return {
+    suggestedReply: String(suggestedReply || '').trim(),
+    translatedReply: String(translatedReply || '').trim(),
+    tone: normalizedTone,
+  };
+}
+
 function normalizeDraftText(value: string) {
   return value.trim();
 }

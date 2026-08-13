@@ -10,6 +10,7 @@ import {
   selectRelevantGmailAIDraftMessages,
   type GmailAIHistoryMessage,
 } from '@/lib/gmail-ai-reply';
+import { buildGmailTemplateDraftResult } from '@/lib/gmail-bilingual-draft';
 import { getRequestUser } from '@/lib/supabase/server';
 import { getUserSecret } from '@/lib/user-private-storage';
 
@@ -261,7 +262,10 @@ ${userIdeas}
 目标语言代码：${targetLang}
 目标语气代码：${replyTone}`;
 
-        send('stage', { stage: 'streaming_body', label: '正在生成回复正文' });
+        send('stage', {
+          stage: 'streaming_body',
+          label: templateReply ? '正在生成外文邮件' : '正在生成回复正文',
+        });
         const streamedReply = await streamOpenAICompatibleApi(
           [
             { role: 'system', content: bodySystemPrompt },
@@ -279,33 +283,43 @@ ${userIdeas}
           .trim();
         if (!suggestedReply) throw new Error('AI 没有返回可用的回复正文。');
 
-        send('stage', { stage: 'finalizing', label: templateReply ? '正在检查缺失信息和风险' : '正在补充中文对照和回复要点' });
+        send('stage', {
+          stage: 'finalizing',
+          label: templateReply ? '正在生成中文对照' : '正在补充中文对照和回复要点',
+        });
         const metadataStartedAt = performance.now();
         let streamedMetadata = '';
         let visibleTranslation = '';
-        const metadataText = await streamOpenAICompatibleApi(
-          [
-            {
-              role: 'system',
-              content: `你是严谨的商务邮件翻译与整理助手。请把外语邮件完整、准确地翻译为简体中文，并提炼已经落实的回复要点。
+        const metadataSystemPrompt = templateReply
+          ? `你是严谨的商务邮件翻译助手。请把外语邮件完整、准确地翻译为简体中文。
+
+translatedReply 的强制规则：
+1. 必须是外文邮件正文逐段对应的完整简体中文译文，不能遗漏正文内容。
+2. 禁止直接返回、复制或改写外文原文；除人名、品牌名、型号、邮箱和链接外，不得保留完整外文句子。
+3. translatedReply 字段值只能包含中文对照正文，不能包含解释、标签或 Markdown。
+只返回严格 JSON，不要添加 Markdown 或解释：
+{
+  "translatedReply": "完整中文对照"
+}`
+          : `你是严谨的商务邮件翻译与整理助手。请把外语邮件完整、准确地翻译为简体中文，并提炼已经落实的回复要点。
 
 translatedReply 的强制规则：
 1. 必须是外文邮件正文逐段对应的完整简体中文译文，不能遗漏正文内容。
 2. 禁止直接返回、复制或改写外文原文；除人名、品牌名、型号、邮箱和链接外，不得保留完整外文句子。
 3. translatedReply 必须作为 JSON 的第一个字段输出，字段值只能包含中文对照正文，不能包含解释、标签或 Markdown。
-4. keyPoints、missingInfo 和 riskNotes 也必须使用简体中文。${replyTemplate ? `
-同时根据以下模板核对原始输入中缺少的关键信息，以及草稿里仍需人工确认的事实风险。
-建议核对的信息：${replyTemplate.requiredInfo.join('；') || '无'}
-模板规则：${replyTemplate.rules.join('；')}
-只把真正缺失且影响邮件准确性的内容列入 missingInfo；没有则返回空数组。
-只把需要人工确认的金额、日期、物流、承诺或合作条件列入 riskNotes；没有则返回空数组。` : ''}
+4. keyPoints、missingInfo 和 riskNotes 也必须使用简体中文。
 只返回严格 JSON，不要添加 Markdown 或解释：
 {
   "translatedReply": "完整中文对照",
   "keyPoints": ["本次回复落实的要点"],
   "missingInfo": ["缺失但建议补充的信息"],
   "riskNotes": ["发送前应人工确认的事实风险"]
-}`,
+}`;
+        const metadataText = await streamOpenAICompatibleApi(
+          [
+            {
+              role: 'system',
+              content: metadataSystemPrompt,
             },
             {
               role: 'user',
@@ -314,7 +328,7 @@ translatedReply 的强制规则：
 ${suggestedReply}`,
             },
           ],
-          getModelOptions(body, 0.25, 'gmail_reply_metadata'),
+          getModelOptions(body, 0.25, templateReply ? 'gmail_reply_translation' : 'gmail_reply_metadata'),
           (delta) => {
             streamedMetadata += delta;
             const partial = extractStreamingJsonString(streamedMetadata, 'translatedReply');
@@ -351,14 +365,16 @@ ${suggestedReply}`,
           secretMs,
           routeTotalMs: Math.round(performance.now() - requestStartedAt),
         });
-        send('final', {
-          suggestedReply,
-          translatedReply,
-          tone: replyTone,
-          keyPoints: safeStringArray(metadata.keyPoints),
-          missingInfo: safeStringArray(metadata.missingInfo),
-          riskNotes: safeStringArray(metadata.riskNotes),
-        });
+        send('final', templateReply
+          ? buildGmailTemplateDraftResult({ suggestedReply, translatedReply, tone: replyTone })
+          : {
+            suggestedReply,
+            translatedReply,
+            tone: replyTone,
+            keyPoints: safeStringArray(metadata.keyPoints),
+            missingInfo: safeStringArray(metadata.missingInfo),
+            riskNotes: safeStringArray(metadata.riskNotes),
+          });
         controller.close();
       } catch (error) {
         send('error', {

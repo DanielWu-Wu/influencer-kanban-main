@@ -1,6 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import {
+  buildGmailTemplateDraftResult,
   isGmailBilingualDraftForeignEdited,
   isGmailBilingualDraftTranslationCurrent,
 } from '../src/lib/gmail-bilingual-draft';
@@ -54,4 +55,22 @@ test('只调整正文首尾空白不会被误判为人工润色', () => {
     snapshot,
     foreignBody: `  ${snapshot.foreignBody}\n`,
   }), false);
+});
+
+test('AI 模板起草结果只保留外文、中文对照和语气', () => {
+  const legacyResult = {
+    suggestedReply: '  Hello creator  ',
+    translatedReply: '  你好，创作者  ',
+    tone: 'formal',
+    keyPoints: ['不应返回'],
+    missingInfo: ['不应返回'],
+    riskNotes: ['不应返回'],
+  };
+  const result = buildGmailTemplateDraftResult(legacyResult);
+
+  assert.deepEqual(result, {
+    suggestedReply: 'Hello creator',
+    translatedReply: '你好，创作者',
+    tone: 'formal',
+  });
 });

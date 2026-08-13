@@ -15,6 +15,7 @@ import {
   type GmailAIHistoryMessage,
 } from '@/lib/gmail-ai-reply';
 import { validateChineseTranslation } from '@/lib/ai-chinese-translation';
+import { buildGmailTemplateDraftResult } from '@/lib/gmail-bilingual-draft';
 import { normalizeAIReplyTemplate } from '@/lib/ai-reply-templates';
 import { formatCooperationNoticeDate } from '@/lib/cooperation-projects';
 import { sanitizeOutreachEmailBody } from '@/lib/outreach-draft-sanitizer';
@@ -1110,10 +1111,7 @@ ${replyTemplate.rules.map((rule, index) => `${index + 1}. ${rule}`).join('\n')}
 {
   "suggestedReply": "使用目标语言撰写的不含签名的完整邮件正文",
   "translatedReply": "必须完整翻译为简体中文，禁止复制或返回外文原文",
-  "tone": "friendly",
-  "keyPoints": ["本次回复落实的要点"],
-  "missingInfo": ["缺失但建议补充的信息"],
-  "riskNotes": ["发送前应人工确认的事实风险"]
+  "tone": "friendly"
 }`,
         body.draftPrompt,
         DEFAULT_DRAFT_PROMPT,
@@ -1144,14 +1142,11 @@ ${userIdeas}
       }
       return NextResponse.json({
         success: true,
-        data: {
-          ...result,
+        data: buildGmailTemplateDraftResult({
           suggestedReply,
           translatedReply,
-          keyPoints: safeArray(result.keyPoints).map(String).filter(Boolean),
-          missingInfo: safeArray(result.missingInfo).map(String).filter(Boolean),
-          riskNotes: safeArray(result.riskNotes).map(String).filter(Boolean),
-        },
+          tone: replyTone,
+        }),
       });
     }
 
