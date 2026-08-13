@@ -1,6 +1,9 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { isGmailBilingualDraftSynchronized } from '../src/lib/gmail-bilingual-draft';
+import {
+  isGmailBilingualDraftForeignEdited,
+  isGmailBilingualDraftTranslationCurrent,
+} from '../src/lib/gmail-bilingual-draft';
 
 const snapshot = {
   foreignBody: '<p>Hello creator</p>',
@@ -9,40 +12,46 @@ const snapshot = {
 };
 
 test('AI 同时生成的外文和中文可直接视为同步草稿', () => {
-  assert.equal(isGmailBilingualDraftSynchronized({
+  assert.equal(isGmailBilingualDraftTranslationCurrent({
     snapshot,
-    foreignBody: snapshot.foreignBody,
     chineseBody: snapshot.chineseBody,
     targetLanguage: snapshot.targetLanguage,
   }), true);
 });
 
-test('修改中文、外文或目标语言都会让草稿进入待同步状态', () => {
-  assert.equal(isGmailBilingualDraftSynchronized({
+test('修改中文或目标语言会让翻译依据进入待更新状态', () => {
+  assert.equal(isGmailBilingualDraftTranslationCurrent({
     snapshot,
-    foreignBody: snapshot.foreignBody,
     chineseBody: '你好，创作者！',
     targetLanguage: snapshot.targetLanguage,
   }), false);
-  assert.equal(isGmailBilingualDraftSynchronized({
+  assert.equal(isGmailBilingualDraftTranslationCurrent({
     snapshot,
-    foreignBody: '<p>Hello creator!</p>',
-    chineseBody: snapshot.chineseBody,
-    targetLanguage: snapshot.targetLanguage,
-  }), false);
-  assert.equal(isGmailBilingualDraftSynchronized({
-    snapshot,
-    foreignBody: snapshot.foreignBody,
     chineseBody: snapshot.chineseBody,
     targetLanguage: 'es',
   }), false);
 });
 
-test('只打开中文编辑器或修改后恢复原文不会制造虚假的未同步状态', () => {
-  assert.equal(isGmailBilingualDraftSynchronized({
+test('外文人工润色不会让中文翻译依据失效', () => {
+  assert.equal(isGmailBilingualDraftTranslationCurrent({
     snapshot,
-    foreignBody: `  ${snapshot.foreignBody}\n`,
+    chineseBody: snapshot.chineseBody,
+    targetLanguage: snapshot.targetLanguage,
+  }), true);
+  assert.equal(isGmailBilingualDraftForeignEdited({
+    snapshot,
+    foreignBody: '<p>Hello creator 😊</p>',
+  }), true);
+});
+
+test('只调整正文首尾空白不会被误判为人工润色', () => {
+  assert.equal(isGmailBilingualDraftTranslationCurrent({
+    snapshot,
     chineseBody: `\n${snapshot.chineseBody}  `,
     targetLanguage: snapshot.targetLanguage,
   }), true);
+  assert.equal(isGmailBilingualDraftForeignEdited({
+    snapshot,
+    foreignBody: `  ${snapshot.foreignBody}\n`,
+  }), false);
 });

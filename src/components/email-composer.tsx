@@ -48,7 +48,8 @@ import {
   type GmailReplyTarget,
 } from '@/lib/gmail-reply-target';
 import {
-  isGmailBilingualDraftSynchronized,
+  isGmailBilingualDraftForeignEdited,
+  isGmailBilingualDraftTranslationCurrent,
   type GmailBilingualDraftSnapshot,
 } from '@/lib/gmail-bilingual-draft';
 import { GmailThread } from '@/lib/types';
@@ -218,11 +219,14 @@ export function EmailComposer({
   const externalMessage = replyTarget?.message;
   const recipientEmail = replyTarget?.recipientEmail || '';
   const targetContextKey = `${thread.id}:${replyTarget?.messageId || ''}`;
-  const bilingualDraftSynchronized = isGmailBilingualDraftSynchronized({
+  const bilingualDraftTranslationCurrent = isGmailBilingualDraftTranslationCurrent({
     snapshot: synchronizedDraft,
-    foreignBody: replyContent,
     chineseBody: editedChineseReply,
     targetLanguage: targetLang,
+  });
+  const bilingualDraftForeignEdited = isGmailBilingualDraftForeignEdited({
+    snapshot: synchronizedDraft,
+    foreignBody: replyContent,
   });
 
   useEffect(() => {
@@ -741,6 +745,7 @@ export function EmailComposer({
   const updateDraftFromChinese = async () => {
     const confirmedChineseReply = editedChineseReply.trim();
     if (!confirmedChineseReply || !suggestion) return;
+    if (bilingualDraftForeignEdited && !window.confirm('根据中文重新翻译会覆盖当前手动调整的外文，是否继续？')) return;
     setTranslatingEditedReply(true);
     setAiError('');
     setTranslationUpdated(false);
@@ -829,8 +834,8 @@ export function EmailComposer({
   };
 
   const saveToGmailDrafts = async () => {
-    if (mode === 'ai' && !bilingualDraftSynchronized) {
-      setAiError('中文、外文或回复语言已发生变化，请先点击“根据中文更新外文”，再保存 Gmail 草稿。');
+    if (mode === 'ai' && !bilingualDraftTranslationCurrent) {
+      setAiError('中文或回复语言已发生变化，请先点击“根据中文更新外文”，再保存 Gmail 草稿。');
       return;
     }
     setSavingDraft(true);
@@ -1271,11 +1276,13 @@ export function EmailComposer({
                   >
                     {draftUsedAnalysis ? '当前草稿已结合画像' : '后台红人画像已完成'}
                   </Badge>
-                  <p className={`text-xs ${draftUsedAnalysis && bilingualDraftSynchronized ? 'text-emerald-800' : 'text-amber-800'}`}>
+                  <p className={`text-xs ${draftUsedAnalysis && bilingualDraftTranslationCurrent ? 'text-emerald-800' : 'text-amber-800'}`}>
                     {draftUsedAnalysis
-                      ? bilingualDraftSynchronized
-                        ? '外文与中文已同步，可直接保存草稿；系统不会自动发送。'
-                        : '当前内容已修改；根据中文更新外文后可保存草稿。'
+                      ? bilingualDraftTranslationCurrent
+                        ? bilingualDraftForeignEdited
+                          ? '外文已手动调整，可直接保存草稿；系统不会自动发送。'
+                          : '中文依据已同步，可直接保存草稿；系统不会自动发送。'
+                        : '中文或回复语言已修改；根据中文更新外文后可保存草稿。'
                       : '可以对比画像优化版；当前草稿不会被自动覆盖。'}
                   </p>
                 </div>
@@ -1361,11 +1368,17 @@ export function EmailComposer({
                   </Badge>
                   <Badge
                     variant="outline"
-                    className={bilingualDraftSynchronized
-                      ? 'border-emerald-200 bg-emerald-50 font-normal text-emerald-700'
-                      : 'border-amber-200 bg-amber-50 font-normal text-amber-700'}
+                    className={!bilingualDraftTranslationCurrent
+                      ? 'border-amber-200 bg-amber-50 font-normal text-amber-700'
+                      : bilingualDraftForeignEdited
+                        ? 'border-blue-200 bg-blue-50 font-normal text-blue-700'
+                        : 'border-emerald-200 bg-emerald-50 font-normal text-emerald-700'}
                   >
-                    {bilingualDraftSynchronized ? '外文与中文已同步' : '待更新外文'}
+                    {!bilingualDraftTranslationCurrent
+                      ? '待更新外文'
+                      : bilingualDraftForeignEdited
+                        ? '外文已手动调整'
+                        : '中文依据已同步'}
                   </Badge>
                   {aiLoading && generationStage && (
                     <Badge variant="outline" className="border-blue-200 bg-blue-50 font-normal text-blue-700">
@@ -1459,10 +1472,12 @@ export function EmailComposer({
               ) : (
                 <div className="border-t border-gray-100 bg-gray-50">
                   <div className="flex items-center justify-between gap-3 border-b border-gray-100 px-4 py-2.5">
-                    <p className={`text-xs ${bilingualDraftSynchronized ? 'text-emerald-700' : 'text-amber-700'}`}>
-                      {bilingualDraftSynchronized
-                        ? '当前外文与中文一致；满意时可以直接保存 Gmail 草稿。'
-                        : '内容已发生变化，请根据中文更新外文后再保存草稿。'}
+                    <p className={`text-xs ${bilingualDraftTranslationCurrent ? 'text-emerald-700' : 'text-amber-700'}`}>
+                      {bilingualDraftTranslationCurrent
+                        ? bilingualDraftForeignEdited
+                          ? '外文已手动调整，中文依据未变化，可以直接保存 Gmail 草稿。'
+                          : '中文依据已同步；满意时可以直接保存 Gmail 草稿。'
+                        : '中文或回复语言已发生变化，请根据中文更新外文后再保存草稿。'}
                     </p>
                     <Button
                       type="button"
@@ -1523,7 +1538,7 @@ export function EmailComposer({
                 <span className={`mr-1 text-xs ${recipientEmail ? 'text-gray-500' : 'text-red-600'}`}>
                   收件人：{recipientEmail || '保存草稿前需确认'}
                 </span>
-                {!bilingualDraftSynchronized && (
+                {!bilingualDraftTranslationCurrent && (
                   <span className="mr-1 text-xs font-medium text-amber-700">
                     请先根据中文更新外文
                   </span>
@@ -1561,7 +1576,7 @@ export function EmailComposer({
                   {sending ? <Loader2 className="animate-spin" data-icon="inline-start" /> : <Send data-icon="inline-start" />}
                   直接发送
                 </Button>
-                <Button onClick={saveToGmailDrafts} disabled={!recipientEmail || !bilingualDraftSynchronized || aiLoading || optimizationLoading || Boolean(optimizedSuggestion) || translatingEditedReply || translationEditing || savingDraft || sending || isEmailContentEmpty(replyContent)}>
+                <Button onClick={saveToGmailDrafts} disabled={!recipientEmail || !bilingualDraftTranslationCurrent || aiLoading || optimizationLoading || Boolean(optimizedSuggestion) || translatingEditedReply || translationEditing || savingDraft || sending || isEmailContentEmpty(replyContent)}>
                   {savingDraft ? <Loader2 className="animate-spin" data-icon="inline-start" /> : <Save data-icon="inline-start" />}
                   保存 Gmail 草稿
                 </Button>

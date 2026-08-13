@@ -8,19 +8,27 @@ function normalizeDraftText(value: string) {
   return value.trim();
 }
 
-export function isGmailBilingualDraftSynchronized({
+export function isGmailBilingualDraftTranslationCurrent({
   snapshot,
-  foreignBody,
   chineseBody,
   targetLanguage,
 }: {
   snapshot: GmailBilingualDraftSnapshot | null;
-  foreignBody: string;
   chineseBody: string;
   targetLanguage: string;
 }) {
   if (!snapshot) return false;
-  return normalizeDraftText(snapshot.foreignBody) === normalizeDraftText(foreignBody)
-    && normalizeDraftText(snapshot.chineseBody) === normalizeDraftText(chineseBody)
+  return normalizeDraftText(snapshot.chineseBody) === normalizeDraftText(chineseBody)
     && snapshot.targetLanguage === targetLanguage;
+}
+
+export function isGmailBilingualDraftForeignEdited({
+  snapshot,
+  foreignBody,
+}: {
+  snapshot: GmailBilingualDraftSnapshot | null;
+  foreignBody: string;
+}) {
+  if (!snapshot) return false;
+  return normalizeDraftText(snapshot.foreignBody) !== normalizeDraftText(foreignBody);
 }
