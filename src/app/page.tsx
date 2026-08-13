@@ -10,7 +10,6 @@ import {
   Users,
   Bell,
   Settings,
-  Plus,
   CalendarDays,
   CheckSquare,
   ExternalLink,
@@ -37,8 +36,6 @@ import {
   useGmailThreads,
 } from '@/lib/data';
 import PromptManager from '@/components/prompt-manager';
-import { Influencer } from '@/lib/types';
-import { InfluencerForm } from '@/components/influencer-form';
 import { CooperationProjectsPage } from '@/components/cooperation-projects-page';
 import { EmailTemplateManager } from '@/components/email-template-manager';
 import { ReminderPanel } from '@/components/reminder-panel';
@@ -77,14 +74,11 @@ const label = {
   prompts: 'AI \u7cfb\u7edf\u529f\u80fd\u63d0\u793a\u8bcd',
   draftPrompts: 'AI \u8d77\u8349\u90ae\u4ef6\u63d0\u793a\u8bcd',
   accounts: '\u8d26\u53f7\u7ba1\u7406',
-  addInfluencer: '\u6dfb\u52a0\u7ea2\u4eba',
   search: '\u641c\u7d22\u9891\u9053\u540d\u79f0\u6216\u90ae\u7bb1...',
   allCountries: '\u5168\u90e8\u56fd\u5bb6',
-  influencers: '\u7ea2\u4eba',
-  published: '\u5df2\u53d1\u5e03',
   followUps: '\u8ddf\u8fdb',
   feishuTitle: '\u98de\u4e66\u591a\u7ef4\u8868\u683c',
-  feishuDesc: '\u76f4\u63a5\u5728\u770b\u677f\u4e2d\u7ba1\u7406\u7ea2\u4eba\u6570\u636e',
+  feishuDesc: '\u76f4\u63a5\u5728\u591a\u7ef4\u8868\u683c\u4e2d\u6dfb\u52a0\u548c\u7ba1\u7406\u7ea2\u4eba\u6570\u636e',
   openNewWindow: '\u65b0\u7a97\u53e3',
   feishuEmptyTitle: '\u8fde\u63a5\u98de\u4e66\u591a\u7ef4\u8868\u683c',
   feishuEmptyDesc: '\u5728\u8bbe\u7f6e\u4e2d\u586b\u5165\u98de\u4e66\u8868\u683c\u94fe\u63a5\uff0c\u5c31\u53ef\u4ee5\u5728\u8fd9\u91cc\u67e5\u770b\u5916\u90e8\u6570\u636e\u3002',
@@ -131,8 +125,6 @@ export default function DashboardPage() {
   const [cooperationHasMounted, setCooperationHasMounted] = useState(false);
   const [influencerListHasMounted, setInfluencerListHasMounted] = useState(false);
   const [openCooperationProjectId, setOpenCooperationProjectId] = useState<string>();
-  const [showAddDialog, setShowAddDialog] = useState(false);
-  const [editingInfluencer, setEditingInfluencer] = useState<Influencer | null>(null);
   const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
   const [accountRetrying, setAccountRetrying] = useState(false);
@@ -192,7 +184,7 @@ export default function DashboardPage() {
     setSidebarCollapsed(window.localStorage.getItem(scopedLocalStorageKey(SIDEBAR_COLLAPSED_STORAGE_KEY)) === 'true');
   }, []);
 
-  const { influencers, addInfluencer, updateInfluencer } = useInfluencers();
+  const { influencers } = useInfluencers();
   const { templates } = useEmailTemplates();
   const { reminders, pendingReminders, addReminder, completeReminder, skipReminder } = useReminders();
   const { todos, addTodo, updateTodo, toggleTodo, deleteTodo } = useTodos();
@@ -224,10 +216,6 @@ export default function DashboardPage() {
   }, []);
 
   const stats = {
-    total: influencers.length,
-    pending: influencers.filter((item) => item.status === 'pending').length,
-    inProgress: influencers.filter((item) => ['contacted', 'interested', 'negotiating'].includes(item.status)).length,
-    published: influencers.filter((item) => item.status === 'published').length,
     upcoming: pendingReminders.length,
     todayTodos: todos.filter((todo) => todo.status !== 'completed').length
       + dailyGmail.items.filter((item) => !item.completed).length,
@@ -286,16 +274,6 @@ export default function DashboardPage() {
     );
   }
 
-  const handleAddInfluencer = (data: Omit<Influencer, 'id' | 'createdAt' | 'updatedAt'>) => {
-    addInfluencer(data);
-  };
-
-  const handleUpdateInfluencer = (data: Omit<Influencer, 'id' | 'createdAt' | 'updatedAt'>) => {
-    if (!editingInfluencer) return;
-    updateInfluencer(editingInfluencer.id, data);
-    setEditingInfluencer(null);
-  };
-
   const toggleSidebar = () => {
     setSidebarCollapsed((collapsed) => {
       const nextCollapsed = !collapsed;
@@ -318,11 +296,9 @@ export default function DashboardPage() {
                 ? stats.todayTodos
                 : item.id === 'reminders'
                   ? stats.upcoming
-                  : item.id === 'list'
-                    ? stats.total
-                    : item.id === 'gmail'
-                      ? unreadCount
-                      : 0;
+                  : item.id === 'gmail'
+                    ? unreadCount
+                    : 0;
 
             return (
               <button
@@ -415,15 +391,6 @@ export default function DashboardPage() {
                 {stats.upcoming} {label.followUps}
               </button>
             )}
-            <div className="glass-control hidden h-9 items-center gap-3 rounded-lg px-3 text-sm text-muted-foreground lg:flex">
-              <span className="font-medium text-foreground">
-                {stats.total} {label.influencers}
-              </span>
-              <span className="h-4 w-px bg-border" />
-              <span className="font-medium text-emerald-700">
-                {stats.published} {label.published}
-              </span>
-            </div>
             <div className="hidden h-9 items-center gap-2 border-l border-border/70 pl-3 md:flex">
               <span className="max-w-40 truncate text-xs text-muted-foreground">
                 {user?.email}
@@ -440,10 +407,6 @@ export default function DashboardPage() {
                 <LogOut className="h-4 w-4" />
               </Button>
             </div>
-            <Button size="sm" onClick={() => setShowAddDialog(true)} className="h-9 rounded-lg shadow-apple">
-              <Plus className="w-4 h-4 mr-1" />
-              <span className="hidden sm:inline">{label.addInfluencer}</span>
-            </Button>
           </div>
         </div>
       </header>
@@ -687,17 +650,6 @@ export default function DashboardPage() {
           )}
         </main>
       </div>
-
-      <InfluencerForm
-        open={showAddDialog || editingInfluencer !== null}
-        onClose={() => {
-          setShowAddDialog(false);
-          setEditingInfluencer(null);
-        }}
-        onSubmit={editingInfluencer ? handleUpdateInfluencer : handleAddInfluencer}
-        initialData={editingInfluencer || undefined}
-        mode={editingInfluencer ? 'edit' : 'create'}
-      />
     </div>
   );
 }
