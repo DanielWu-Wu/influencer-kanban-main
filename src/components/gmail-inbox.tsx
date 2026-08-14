@@ -30,6 +30,14 @@ import {
   getGmailThreadContact,
   isIgnoredGmailThreadSender,
 } from '@/lib/gmail-thread-contact';
+import {
+  clearGmailInboxCache,
+  createGmailInboxCacheKey,
+  isGmailInboxCacheFresh,
+  isGmailInboxCacheKeyCurrent,
+  readGmailInboxCache,
+  writeGmailInboxCache,
+} from '@/lib/gmail-inbox-cache';
 import { loadGmailAIContactHistory } from '@/lib/gmail-ai-reply';
 import { collectGmailThreadParticipants, resolveGmailReplyTarget } from '@/lib/gmail-reply-target';
 import {
@@ -51,6 +59,7 @@ import {
   type ChannelAvatarState,
 } from '@/lib/youtube-channel-avatar';
 import { YouTubeChannelAvatar } from './youtube-channel-avatar';
+import { GMAIL_AUTH_CACHE_RESET_EVENT } from './gmail-auth-provider';
 import { ACCOUNT_SCOPE_CHANGED_EVENT, getAccountCacheScope } from '@/lib/account-cache-scope';
 
 const GMAIL_PAGE_SIZE = 50;
@@ -96,10 +105,13 @@ function gmailThreadCacheKey(threadId: string, scope = getAccountCacheScope()) {
 }
 
 if (typeof window !== 'undefined') {
-  window.addEventListener(ACCOUNT_SCOPE_CHANGED_EVENT, () => {
+  const clearGmailCaches = () => {
     gmailThreadDetailCache.clear();
     gmailThreadDetailRequests.clear();
-  });
+    clearGmailInboxCache();
+  };
+  window.addEventListener(ACCOUNT_SCOPE_CHANGED_EVENT, clearGmailCaches);
+  window.addEventListener(GMAIL_AUTH_CACHE_RESET_EVENT, clearGmailCaches);
 }
 
 const MAILBOX_LABELS: Record<GmailMailbox, string> = {
@@ -202,13 +214,6 @@ function isGmailAuthError(status: number, details: unknown) {
     'access token',
     'autherror',
   ].some((keyword) => message.toLowerCase().includes(keyword));
-}
-
-function readableGmailAuthError(message?: string) {
-  if (message?.includes('尚未连接 Gmail')) {
-    return 'Gmail 连接记录不完整，请到“设置 > Gmail 邮件”断开后重新连接。';
-  }
-  return message || 'Gmail 授权已过期，请重新连接。';
 }
 
 function hasThreadLabel(thread: GmailThread, label: string): boolean {
@@ -646,7 +651,15 @@ export function GmailInbox({
   avatarOnly = false,
   openThreadRequest,
 }: GmailInboxProps) {
-  const { auth, connect, disconnect } = useGmailAuth();
+  const {
+    auth,
+    status: authStatus,
+    loading: authLoading,
+    error: gmailAuthError,
+    disconnect,
+    refreshSession,
+    getAccessToken,
+  } = useGmailAuth();
   const { settings } = useSettings();
   const latestFetchIdRef = useRef(0);
   const activeFetchKeyRef = useRef<string | null>(null);
@@ -658,6 +671,7 @@ export function GmailInbox({
   const handledOpenThreadRequestRef = useRef(0);
   const handleOpenThreadRef = useRef<(thread: GmailThread) => Promise<void>>(async () => undefined);
   const accountCacheScopeRef = useRef(getAccountCacheScope());
+  const currentInboxCacheKeyRef = useRef<string | null>(null);
   const threadPrefetchTimerRef = useRef<number | null>(null);
   const manuallyPreservedUnreadThreadIdsRef = useRef<Set<string>>(new Set());
   const [threads, setThreads] = useState<GmailThread[]>([]);
@@ -691,6 +705,16 @@ export function GmailInbox({
   const [nextPageToken, setNextPageToken] = useState<string | null>(null);
   const [lastSyncedAt, setLastSyncedAt] = useState<string | null>(null);
   const [normalUnreadCount, setNormalUnreadCount] = useState<number | null>(null);
+  const [displayedInboxCacheKey, setDisplayedInboxCacheKey] = useState<string | null>(null);
+  const inboxCacheKey = auth?.isConnected
+    ? createGmailInboxCacheKey({
+        accountScope: accountCacheScopeRef.current,
+        gmailEmail: auth.email,
+        viewKey: paginationKey,
+        pageIndex,
+      })
+    : null;
+  currentInboxCacheKeyRef.current = inboxCacheKey;
 
   useEffect(() => {
     threadsRef.current = threads;
@@ -731,10 +755,53 @@ export function GmailInbox({
     setActivePaginationKey(paginationKey);
     setPageTokens(['']);
     setPageIndex(0);
-    setNextPageToken(null);
-    setThreads([]);
-    setNormalUnreadCount(null);
+    setError(null);
   }, [paginationKey]);
+
+  useEffect(() => {
+    if (!inboxCacheKey || activePaginationKey !== paginationKey) return;
+    const cached = readGmailInboxCache(inboxCacheKey);
+    if (!cached) {
+      setDisplayedInboxCacheKey(inboxCacheKey);
+      setNextPageToken(null);
+      setThreads([]);
+      setLastSyncedAt(null);
+      setNormalUnreadCount(null);
+      setLoading(false);
+      return;
+    }
+
+    setDisplayedInboxCacheKey(inboxCacheKey);
+    setThreads(cached.threads);
+    setNextPageToken(cached.nextPageToken);
+    setLastSyncedAt(cached.lastSyncedAt);
+    setNormalUnreadCount(cached.normalUnreadCount);
+    setLoading(false);
+  }, [activePaginationKey, inboxCacheKey, paginationKey]);
+
+  useEffect(() => {
+    if (
+      !isGmailInboxCacheKeyCurrent(displayedInboxCacheKey, inboxCacheKey)
+      || activePaginationKey !== paginationKey
+      || !lastSyncedAt
+    ) return;
+    writeGmailInboxCache(displayedInboxCacheKey, {
+      threads,
+      nextPageToken,
+      normalUnreadCount,
+      lastSyncedAt,
+      fetchedAt: Date.parse(lastSyncedAt),
+    });
+  }, [
+    activePaginationKey,
+    displayedInboxCacheKey,
+    inboxCacheKey,
+    lastSyncedAt,
+    nextPageToken,
+    normalUnreadCount,
+    paginationKey,
+    threads,
+  ]);
 
   useEffect(() => {
     if (!updatedThread) return;
@@ -776,11 +843,9 @@ export function GmailInbox({
 
     if (gmailConnected) {
       setAuthProcessing(true);
-      fetch('/api/auth/session')
-        .then((response) => response.json())
-        .then((result) => {
-          if (result.success && result.data?.accessToken) connect(result.data);
-          else setError(result.error || '\u65e0\u6cd5\u4fdd\u5b58 Gmail \u6388\u6743\u4fe1\u606f\u3002');
+      refreshSession()
+        .then((nextAuth) => {
+          if (!nextAuth?.accessToken) setError('\u65e0\u6cd5\u4fdd\u5b58 Gmail \u6388\u6743\u4fe1\u606f\u3002');
         })
         .catch((caughtError: Error) => setError(`Gmail \u8fde\u63a5\u5931\u8d25\uff1a${caughtError.message}`))
         .finally(() => {
@@ -788,40 +853,22 @@ export function GmailInbox({
           window.history.replaceState({}, '', window.location.pathname);
         });
     }
-  }, [connect]);
-
-  const getAccessToken = useCallback(async (options: { force?: boolean } = {}) => {
-    if (!auth?.isConnected) throw new Error('请重新连接 Gmail。');
-    if (!options.force && auth.accessToken && auth.expiresAt && auth.expiresAt > Date.now() + 60_000) {
-      return auth.accessToken;
-    }
-
-    const response = await fetch(options.force ? '/api/auth/refresh?force=1' : '/api/auth/refresh', {
-      method: 'POST',
-    });
-    const result = await response.json();
-    if (!response.ok || !result.data?.accessToken) {
-      throw new Error(readableGmailAuthError(result.error));
-    }
-
-    connect({
-      ...auth,
-      isConnected: true,
-      email: result.data.email || auth.email,
-      accessToken: result.data.accessToken,
-      expiresAt: result.data.expiresAt,
-    });
-    return result.data.accessToken as string;
-  }, [auth, connect]);
+  }, [refreshSession]);
 
   const fetchThreads = useCallback(async () => {
     if (!auth?.accessToken) return;
     if (activePaginationKey !== paginationKey) return;
-    const fetchKey = `${paginationKey}:${pageIndex}`;
+    const requestCacheKey = inboxCacheKey;
+    if (!requestCacheKey) return;
+    const fetchKey = requestCacheKey;
     if (activeFetchKeyRef.current === fetchKey) return;
     activeFetchKeyRef.current = fetchKey;
     const fetchId = latestFetchIdRef.current + 1;
     latestFetchIdRef.current = fetchId;
+    const isCurrentRequest = () => (
+      fetchId === latestFetchIdRef.current
+      && isGmailInboxCacheKeyCurrent(requestCacheKey, currentInboxCacheKeyRef.current)
+    );
     setLoading(true);
     setError(null);
 
@@ -864,7 +911,7 @@ export function GmailInbox({
         ),
         unreadCountRequest,
       ]);
-      if (fetchId !== latestFetchIdRef.current) return;
+      if (!isCurrentRequest()) return;
 
       if (!listResponse.ok) {
         const result = await listResponse.json().catch(() => ({}));
@@ -890,11 +937,9 @@ export function GmailInbox({
                   .catch(() => null)
               : Promise.resolve(null),
           ]);
-          if (fetchId !== latestFetchIdRef.current) return;
+          if (!isCurrentRequest()) return;
         }
       }
-
-      if (unreadCount !== null) setNormalUnreadCount(unreadCount);
 
       if (!listResponse.ok) {
         const result = await listResponse.json().catch(() => ({}));
@@ -902,11 +947,13 @@ export function GmailInbox({
       }
 
       const listResult = await listResponse.json() as GmailThreadListResult;
-      if (fetchId !== latestFetchIdRef.current) return;
+      if (!isCurrentRequest()) return;
       const threadRefs = listResult.threads || [];
-      setNextPageToken(listResult.nextPageToken || null);
       if (threadRefs.length === 0) {
+        setDisplayedInboxCacheKey(requestCacheKey);
+        setNextPageToken(listResult.nextPageToken || null);
         setThreads([]);
+        if (unreadCount !== null) setNormalUnreadCount(unreadCount);
         setLastSyncedAt(new Date().toISOString());
         return;
       }
@@ -928,7 +975,7 @@ export function GmailInbox({
             }
           }),
         );
-        if (fetchId !== latestFetchIdRef.current) return;
+        if (!isCurrentRequest()) return;
 
         const parsedBatch = await Promise.all(
           batchResults
@@ -938,22 +985,25 @@ export function GmailInbox({
         const visibleBatch = isGlobalSearch
           ? parsedBatch
           : parsedBatch.filter((thread) => shouldShowThreadInMailbox(thread, mailbox, category));
-        if (fetchId !== latestFetchIdRef.current) return;
+        if (!isCurrentRequest()) return;
         nextThreads.push(...visibleBatch);
       }
+      setDisplayedInboxCacheKey(requestCacheKey);
+      setNextPageToken(listResult.nextPageToken || null);
       setThreads(isGlobalSearch
         ? [...nextThreads].sort((left, right) => getDateTimestamp(right.lastMessageDate) - getDateTimestamp(left.lastMessageDate))
         : sortThreadsByLatest(nextThreads, mailbox));
+      if (unreadCount !== null) setNormalUnreadCount(unreadCount);
       setLastSyncedAt(new Date().toISOString());
     } catch (caughtError) {
-      if (fetchId === latestFetchIdRef.current) {
+      if (isCurrentRequest()) {
         setError((caughtError as Error).message);
       }
     } finally {
       if (activeFetchKeyRef.current === fetchKey) {
         activeFetchKeyRef.current = null;
       }
-      if (fetchId === latestFetchIdRef.current) {
+      if (isCurrentRequest()) {
         setLoading(false);
       }
     }
@@ -964,6 +1014,7 @@ export function GmailInbox({
     gmailSearchQuery,
     getAccessToken,
     isGlobalSearch,
+    inboxCacheKey,
     mailbox,
     pageIndex,
     pageTokens,
@@ -971,8 +1022,10 @@ export function GmailInbox({
   ]);
 
   useEffect(() => {
-    if (auth?.isConnected && auth.accessToken) fetchThreads();
-  }, [auth?.isConnected, auth?.accessToken, fetchThreads, refreshKey]);
+    if (!auth?.isConnected || !auth.accessToken) return;
+    const cached = inboxCacheKey ? readGmailInboxCache(inboxCacheKey) : null;
+    if (!cached || !isGmailInboxCacheFresh(cached)) void fetchThreads();
+  }, [auth?.isConnected, auth?.accessToken, fetchThreads, inboxCacheKey, refreshKey]);
 
   useEffect(() => {
     const becameActive = active && !wasActiveRef.current;
@@ -1551,12 +1604,29 @@ export function GmailInbox({
   const formatSyncTime = (dateString: string) =>
     new Date(dateString).toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit' });
   const unreadBadgeCount = normalUnreadCount ?? threads.filter((thread) => thread.hasUnread).length;
+  const visibleError = error || gmailAuthError;
 
-  if (authProcessing) {
+  if (authProcessing || authLoading) {
     return (
       <div className="flex h-full flex-col items-center justify-center p-6 text-center">
         <Loader2 className="mb-4 h-8 w-8 animate-spin text-primary" />
-        <h3 className="mb-2 text-lg font-semibold">{'\u6b63\u5728\u8fde\u63a5 Gmail...'}</h3>
+        <h3 className="mb-2 text-lg font-semibold">正在恢复 Gmail 登录状态…</h3>
+        <p className="text-sm text-muted-foreground">已有授权不会因为页面切换而失效。</p>
+      </div>
+    );
+  }
+
+  if (authStatus === 'error' && !auth?.isConnected) {
+    return (
+      <div className="flex h-full flex-col items-center justify-center p-6 text-center">
+        <AlertCircle className="mb-4 h-9 w-9 text-amber-500" />
+        <h3 className="mb-2 text-lg font-semibold">暂时无法检查 Gmail 状态</h3>
+        <p className="mb-4 max-w-sm text-sm text-muted-foreground">
+          {gmailAuthError || '网络或账号服务暂时不可用，系统不会把这次失败当作退出登录。'}
+        </p>
+        <Button variant="outline" onClick={() => void refreshSession().catch(() => undefined)}>
+          重新检查
+        </Button>
       </div>
     );
   }
@@ -1571,7 +1641,7 @@ export function GmailInbox({
         <p className="mb-4 max-w-xs text-sm text-muted-foreground">
           {'\u5b8c\u6210 Google \u6388\u6743\u540e\uff0c\u5373\u53ef\u5728\u5de5\u4f5c\u53f0\u5185\u7ba1\u7406\u90ae\u4ef6\u3002'}
         </p>
-        {error && <p className="mb-4 text-sm text-destructive">{error}</p>}
+        {visibleError && <p className="mb-4 text-sm text-destructive">{visibleError}</p>}
         <Button onClick={() => { window.location.href = '/api/auth/google'; }}>
           {'\u8fde\u63a5 Gmail'}
         </Button>
@@ -1687,15 +1757,29 @@ export function GmailInbox({
         </div>
       )}
 
+      {visibleError && threads.length > 0 && (
+        <div className="flex shrink-0 items-center justify-between gap-3 border-b border-amber-200/80 bg-amber-50/90 px-3 py-2 text-xs text-amber-800">
+          <span className="truncate">同步暂时失败，继续显示上次邮件：{visibleError}</span>
+          <Button
+            variant="ghost"
+            size="sm"
+            className="h-6 shrink-0 px-2 text-xs text-amber-900 hover:bg-amber-100"
+            onClick={() => void fetchThreads()}
+          >
+            重试
+          </Button>
+        </div>
+      )}
+
       <ScrollArea className="min-h-0 flex-1">
         {(loading && threads.length === 0) || searchInputPending ? (
           <div className="flex justify-center py-12">
             <Loader2 className="h-6 w-6 animate-spin text-muted-foreground" />
           </div>
-        ) : error ? (
+        ) : visibleError && threads.length === 0 ? (
           <div className="p-6 text-center">
             <AlertCircle className="mx-auto mb-2 h-8 w-8 text-destructive" />
-            <p className="text-sm text-destructive">{error}</p>
+            <p className="text-sm text-destructive">{visibleError}</p>
             <Button variant="outline" size="sm" className="mt-3" onClick={fetchThreads}>
               {'\u91cd\u8bd5'}
             </Button>

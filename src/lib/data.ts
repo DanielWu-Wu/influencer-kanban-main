@@ -17,7 +17,6 @@ import {
   Collaboration,
   TodoItem,
   CalendarEvent,
-  GmailAuth,
   GmailSettings,
   GmailThread,
   EmailTranslation,
@@ -860,34 +859,7 @@ export function useCalendarEvents() {
   return { events, loading, addEvent, updateEvent, deleteEvent, getEventsByDate, getEventsByMonth };
 }
 
-export function useGmailAuth() {
-  const [auth, setAuth] = useState<GmailAuth | null>(null);
-  const [loading, setLoading] = useState(true);
-
-  useEffect(() => {
-    fetch('/api/auth/session', { cache: 'no-store' })
-      .then(async (response) => {
-        if (!response.ok) return;
-        const result = await response.json();
-        if (result.success && result.data) {
-          setAuth(result.data);
-        }
-      })
-      .finally(() => setLoading(false));
-  }, []);
-
-  const saveAuth = useCallback((newAuth: GmailAuth | null) => {
-    setAuth(newAuth);
-  }, []);
-
-  const connect = useCallback((authData: GmailAuth) => saveAuth(authData), [saveAuth]);
-  const disconnect = useCallback(() => {
-    saveAuth(null);
-    void fetch('/api/auth/session', { method: 'DELETE' });
-  }, [saveAuth]);
-
-  return { auth, loading, connect, disconnect };
-}
+export { useGmailAuth } from '@/components/gmail-auth-provider';
 
 export function useGmailSettings() {
   const defaultSettings: GmailSettings = {
