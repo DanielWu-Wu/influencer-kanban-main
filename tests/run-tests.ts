@@ -27,3 +27,4 @@ import './ai-chinese-translation.test';
 import './feishu-app-credentials.test';
 import './dashboard-navigation.test';
 import './feishu-mapping-draft.test';
+import './gmail-pane-layout.test';

@@ -79,6 +79,7 @@ interface GmailInboxProps {
   category: GmailCategory;
   refreshKey?: number;
   compact?: boolean;
+  avatarOnly?: boolean;
   openThreadRequest?: { threadId: string; requestId: number };
 }
 
@@ -642,6 +643,7 @@ export function GmailInbox({
   category,
   refreshKey = 0,
   compact = true,
+  avatarOnly = false,
   openThreadRequest,
 }: GmailInboxProps) {
   const { auth, connect, disconnect } = useGmailAuth();
@@ -1579,6 +1581,7 @@ export function GmailInbox({
 
   return (
     <div className="flex h-full min-h-0 flex-col overflow-hidden">
+      {!avatarOnly && (
       <div className="material-toolbar flex shrink-0 items-center justify-between border-b border-border/55 px-4 py-3">
         <div className="flex min-w-0 flex-col">
           <div className="flex min-w-0 items-center gap-2">
@@ -1633,7 +1636,9 @@ export function GmailInbox({
           </Button>
         </div>
       </div>
+      )}
 
+      {!avatarOnly && (
       <div className="material-toolbar shrink-0 border-b border-border/55 px-3 py-2">
         <div className="relative">
           <Search className="absolute left-3 top-2.5 h-4 w-4 text-muted-foreground" />
@@ -1660,8 +1665,9 @@ export function GmailInbox({
           </Button>
         )}
       </div>
+      )}
 
-      {mailbox === 'inbox' && !hasSearchInput && (
+      {!avatarOnly && mailbox === 'inbox' && !hasSearchInput && (
         <div className="material-toolbar grid shrink-0 grid-cols-3 border-b border-border/55">
           {CATEGORY_TABS.map(({ id, label, icon: Icon }) => (
             <button
@@ -1728,7 +1734,11 @@ export function GmailInbox({
                 role="button"
                 tabIndex={0}
                 aria-busy={threadOpening}
-                className={`glass-list-row group cursor-pointer border-b border-border/45 px-3 py-2.5 outline-none transition-[background-color,box-shadow] duration-200 ease-out hover:bg-white/82 active:bg-white/90 focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring/40 motion-reduce:transition-none ${
+                aria-label={avatarOnly ? `${sender}：${displaySubject || '(无主题)'}` : undefined}
+                title={avatarOnly ? `${sender}\n${displaySubject || '(无主题)'}` : undefined}
+                className={`glass-list-row group cursor-pointer border-b border-border/45 py-2.5 outline-none transition-[background-color,box-shadow] duration-200 ease-out hover:bg-white/82 active:bg-white/90 focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring/40 motion-reduce:transition-none ${
+                  avatarOnly ? 'px-2' : 'px-3'
+                } ${
                   selectedThreadId === thread.id ? 'bg-primary/[0.07] shadow-[inset_2px_0_0_var(--primary)]' : ''
                 } ${thread.hasUnread ? 'bg-primary/[0.055]' : ''} ${threadOpening ? 'cursor-wait bg-white/85' : ''}`}
                 onClick={() => handleOpenThread(thread)}
@@ -1737,9 +1747,36 @@ export function GmailInbox({
                 onFocus={() => prefetchThread(thread)}
                 onBlur={cancelThreadPrefetch}
                 onKeyDown={(event) => {
-                  if (event.key === 'Enter') handleOpenThread(thread);
+                  if (event.key === 'Enter' || event.key === ' ') {
+                    event.preventDefault();
+                    handleOpenThread(thread);
+                  }
                 }}
               >
+                {avatarOnly ? (
+                  <div className="relative flex w-full justify-center">
+                    <div className="relative">
+                      <YouTubeChannelAvatar
+                        avatar={avatar}
+                        fallback={sender}
+                        label={avatar.title || sender}
+                        size="sm"
+                        clickable={false}
+                      />
+                      {thread.hasUnread && (
+                        <span
+                          className="absolute -right-0.5 -top-0.5 h-2.5 w-2.5 rounded-full border-2 border-white bg-primary"
+                          aria-label="未读"
+                        />
+                      )}
+                      {threadOpening && (
+                        <span className="absolute inset-0 flex items-center justify-center rounded-full bg-white/65">
+                          <Loader2 className="h-4 w-4 animate-spin text-primary" />
+                        </span>
+                      )}
+                    </div>
+                  </div>
+                ) : (
                 <div className={`flex gap-2 ${compact ? 'items-start' : 'items-center'}`}>
                   <Button
                     variant="ghost"
@@ -1853,12 +1890,14 @@ export function GmailInbox({
                     )}
                   </Button>
                 </div>
+                )}
               </div>
             );
           })
         )}
       </ScrollArea>
 
+      {!avatarOnly && (
       <div className="flex shrink-0 items-center justify-between gap-2 border-t border-white/55 bg-white/55 px-3 py-2 text-xs text-muted-foreground backdrop-blur">
         <Button
           variant="outline"
@@ -1886,7 +1925,9 @@ export function GmailInbox({
           <ChevronRight className="h-3.5 w-3.5" />
         </Button>
       </div>
+      )}
 
+      {!avatarOnly && (
       <div className="flex shrink-0 items-center justify-between border-t border-white/55 bg-white/45 px-3 py-2 text-xs text-muted-foreground">
         <span className="truncate">{auth.email || 'Gmail'}</span>
         <Button
@@ -1899,6 +1940,7 @@ export function GmailInbox({
           {'\u65ad\u5f00'}
         </Button>
       </div>
+      )}
     </div>
   );
 }
