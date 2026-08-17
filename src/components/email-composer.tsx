@@ -68,6 +68,7 @@ interface EmailComposerProps {
   initialMessage?: string;
   onDraftSaved?: (content: string) => void;
   autoRetryRequest?: { taskId: string; retryInput?: unknown };
+  avatarUrl?: string;
 }
 
 type CollaborationAnalysis = {
@@ -176,6 +177,7 @@ export function EmailComposer({
   initialMessage,
   onDraftSaved,
   autoRetryRequest,
+  avatarUrl,
 }: EmailComposerProps) {
   const { addSuggestion } = useEmailAISuggestions();
   const { addDraft } = useEmailDrafts();
@@ -183,7 +185,7 @@ export function EmailComposer({
   const { settings, loading: settingsLoading } = useSettings();
   const { scheduleEmail } = useDelayedEmailSender();
   const { captureEvent } = useRecordAssistant();
-  const { enqueueTask, getLatestTaskByKey } = useEmailGenerationTasks();
+  const { enqueueTask, getLatestTaskByKey, updateTaskAvatarByKey } = useEmailGenerationTasks();
   const [replyContent, setReplyContent] = useState(initialMessage || '');
   const [userIdeas, setUserIdeas] = useState('');
   const [analysis, setAnalysis] = useState<CollaborationAnalysis | null>(null);
@@ -221,7 +223,6 @@ export function EmailComposer({
   const optimizationRunRef = useRef(0);
   const appliedGenerationTaskRef = useRef('');
   const targetLangLockedRef = useRef(false);
-  const replyContentManuallyEditedRef = useRef(false);
   const handledAutoRetryTaskRef = useRef('');
   const targetContextKeyRef = useRef('');
 
@@ -239,6 +240,10 @@ export function EmailComposer({
     messageId: replyTarget?.messageId,
   });
   const generationTask = getLatestTaskByKey(generationTaskKey);
+
+  useEffect(() => {
+    if (avatarUrl) updateTaskAvatarByKey(generationTaskKey, avatarUrl);
+  }, [avatarUrl, generationTaskKey, updateTaskAvatarByKey]);
   const bilingualDraftTranslationCurrent = isGmailBilingualDraftTranslationCurrent({
     snapshot: synchronizedDraft,
     chineseBody: editedChineseReply,
@@ -365,12 +370,24 @@ export function EmailComposer({
 
   useEffect(() => {
     if (!generationTask) return;
+    const rollback = generationTask.rollbackResult as {
+      suggestion?: AISuggestion | null;
+      replyContent?: string;
+      editedChineseReply?: string;
+      translationUpdated?: boolean;
+      synchronizedDraft?: GmailBilingualDraftSnapshot | null;
+      draftUsedAnalysis?: boolean;
+      generatedLangName?: string;
+    } | undefined;
+    const replacingExistingDraft = Boolean(
+      rollback?.replyContent?.trim() || rollback?.editedChineseReply?.trim(),
+    );
     if (generationTask.status === 'queued' || generationTask.status === 'running') {
       setAiLoading(true);
       setAiError('');
       setGenerationStage(generationTask.stage);
       const partial = generationTask.partialResult as AISuggestion | undefined;
-      if (partial?.suggestedReply) {
+      if (!replacingExistingDraft && partial?.suggestedReply) {
         setReplyContent(partial.suggestedReply);
         setSuggestion(partial);
         if (partial.translatedReply) {
@@ -400,24 +417,19 @@ export function EmailComposer({
         }
         if (retryInput?.replyTone) setReplyTone(retryInput.replyTone);
       }
-      const rollback = generationTask.rollbackResult as {
-        suggestion?: AISuggestion | null;
-        replyContent?: string;
-      } | undefined;
-      if (!replyContentManuallyEditedRef.current && !initialMessage?.trim()) {
-        setSuggestion(rollback?.suggestion || null);
-        setReplyContent(rollback?.replyContent || '');
-      }
+      setSuggestion(rollback?.suggestion || null);
+      setReplyContent(rollback?.replyContent || '');
+      setEditedChineseReply(rollback?.editedChineseReply || '');
+      setTranslationUpdated(Boolean(rollback?.translationUpdated));
+      setSynchronizedDraft(rollback?.synchronizedDraft || null);
+      setDraftUsedAnalysis(Boolean(rollback?.draftUsedAnalysis));
+      setGeneratedLangName(rollback?.generatedLangName || '');
       setAiError(generationTask.error || '任务已中断，请重新点击生成。');
       return;
     }
     if (generationTask.status !== 'completed') return;
     const result = generationTask.result as GmailAIReplyTaskResult | undefined;
     if (!result?.suggestion?.suggestedReply) return;
-    if (replyContentManuallyEditedRef.current || initialMessage?.trim()) {
-      setAiError('生成结果已保存在邮件生成进度中；当前人工编辑内容未被覆盖。');
-      return;
-    }
     const completedSuggestion = result.suggestion;
     targetLangLockedRef.current = true;
     setTargetLang(result.targetLang);
@@ -436,7 +448,7 @@ export function EmailComposer({
     setDraftUsedAnalysis(result.usedAnalysis);
     setGeneratedLangName(result.targetLangName);
     setAiError('');
-  }, [generationTask, initialMessage]);
+  }, [generationTask]);
 
   const translateDraftToChinese = async (
     text: string,
@@ -526,6 +538,14 @@ export function EmailComposer({
     targetLangLockedRef.current = true;
     const previousSuggestion = suggestion;
     const previousReplyContent = replyContent;
+    const previousEditedChineseReply = editedChineseReply;
+    const previousTranslationUpdated = translationUpdated;
+    const previousSynchronizedDraft = synchronizedDraft;
+    const previousDraftUsedAnalysis = draftUsedAnalysis;
+    const previousGeneratedLangName = generatedLangName;
+    const replacingExistingDraft = Boolean(
+      previousReplyContent.trim() || previousEditedChineseReply.trim(),
+    );
     const senderLabel = String(externalMessage?.from || recipientEmail || '邮件联系人')
       .replace(/<[^>]+>.*$/, '')
       .replace(/^"|"$/g, '')
@@ -535,6 +555,7 @@ export function EmailComposer({
       kind: 'gmail_ai_reply',
       title: senderLabel,
       description: 'AI 辅助回复',
+      avatarUrl,
       navigation: {
         view: 'gmail',
         threadId: thread.id,
@@ -545,6 +566,11 @@ export function EmailComposer({
       rollbackResult: {
         suggestion: previousSuggestion,
         replyContent: previousReplyContent,
+        editedChineseReply: previousEditedChineseReply,
+        translationUpdated: previousTranslationUpdated,
+        synchronizedDraft: previousSynchronizedDraft,
+        draftUsedAnalysis: previousDraftUsedAnalysis,
+        generatedLangName: previousGeneratedLangName,
       },
       retryInput: {
         userIdeas: userIdeas.trim(),
@@ -581,13 +607,15 @@ export function EmailComposer({
         streamUiTimeout = undefined;
         lastUiUpdateAt = performance.now();
         const visibleBody = pendingBody;
-        setReplyContent(visibleBody);
-        setSuggestion({
-          suggestedReply: visibleBody,
-          translatedReply: pendingTranslation,
-          tone: replyTone,
-          keyPoints: [],
-        });
+        if (!replacingExistingDraft) {
+          setReplyContent(visibleBody);
+          setSuggestion({
+            suggestedReply: visibleBody,
+            translatedReply: pendingTranslation,
+            tone: replyTone,
+            keyPoints: [],
+          });
+        }
         report('正在生成回复正文', {
           suggestedReply: visibleBody,
           translatedReply: pendingTranslation,
@@ -666,7 +694,7 @@ export function EmailComposer({
             if (!text) return;
             streamedTranslation += text;
             pendingTranslation = streamedTranslation;
-            setTranslationExpanded(true);
+            if (!replacingExistingDraft) setTranslationExpanded(true);
             queueStreamUiFlush();
             return;
           }
@@ -719,7 +747,7 @@ export function EmailComposer({
               controller.signal,
               (partialTranslation) => {
                 pendingTranslation = partialTranslation;
-                setTranslationExpanded(true);
+                if (!replacingExistingDraft) setTranslationExpanded(true);
                 queueStreamUiFlush();
               },
             );
@@ -800,10 +828,11 @@ export function EmailComposer({
       if (controller.signal.aborted || runId !== generationRunRef.current) return;
       setSuggestion(previousSuggestion);
       setReplyContent(previousReplyContent);
-      if (previousSuggestion) {
-        setEditedChineseReply(previousSuggestion.translatedReply);
-        setGeneratedLangName(targetLangName);
-      }
+      setEditedChineseReply(previousEditedChineseReply);
+      setTranslationUpdated(previousTranslationUpdated);
+      setSynchronizedDraft(previousSynchronizedDraft);
+      setDraftUsedAnalysis(previousDraftUsedAnalysis);
+      setGeneratedLangName(previousGeneratedLangName);
       setAiError(error instanceof Error ? error.message : 'AI 生成失败，请稍后重试');
       throw error;
     } finally {
@@ -1572,7 +1601,6 @@ export function EmailComposer({
             <RichEmailEditor
               value={replyContent}
               onChange={(value) => {
-                replyContentManuallyEditedRef.current = true;
                 setReplyContent(value);
                 setTranslationUpdated(false);
               }}

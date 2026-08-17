@@ -24,9 +24,11 @@ import {
   markInterruptedEmailGenerationTasks,
   normalizeEmailGenerationConcurrency,
   readEmailGenerationTaskSnapshot,
+  replaceEmailGenerationTaskForKey,
   pruneExpiredEmailGenerationTasks,
   serializeEmailGenerationTasks,
   selectStartableEmailTaskIds,
+  updateEmailGenerationTaskAvatar,
   type EmailGenerationTask,
   type EmailGenerationTaskKind,
   type EmailGenerationTaskNavigation,
@@ -60,6 +62,7 @@ interface EmailGenerationTaskContextValue {
   retryTask: (taskId: string) => void;
   openTask: (taskId: string) => void;
   getLatestTaskByKey: (key: string) => EmailGenerationTask | undefined;
+  updateTaskAvatarByKey: (key: string, avatarUrl: string) => void;
 }
 
 type TaskRunner = EnqueueEmailGenerationTaskInput['run'];
@@ -285,7 +288,10 @@ export function EmailGenerationTaskProvider({ children }: { children: ReactNode 
       retryInput: input.retryInput,
     };
     runnersRef.current.set(id, input.run);
-    replaceTasks((current) => [...pruneExpiredEmailGenerationTasks(current), task]);
+    replaceTasks((current) => replaceEmailGenerationTaskForKey(
+      pruneExpiredEmailGenerationTasks(current),
+      task,
+    ));
     window.queueMicrotask(drainQueue);
     return id;
   }, [accountUserId, drainQueue, gmailEmail, replaceTasks]);
@@ -337,6 +343,16 @@ export function EmailGenerationTaskProvider({ children }: { children: ReactNode 
       .reverse()
       .find((task) => task.key === key && task.status !== 'cancelled');
   }, []);
+
+  const updateTaskAvatarByKey = useCallback((key: string, avatarUrl: string) => {
+    const normalizedAvatarUrl = avatarUrl.trim();
+    if (!key || !normalizedAvatarUrl) return;
+    const hasTarget = tasksRef.current.some((task) => (
+      task.key === key && task.avatarUrl !== normalizedAvatarUrl
+    ));
+    if (!hasTarget) return;
+    replaceTasks((current) => updateEmailGenerationTaskAvatar(current, key, normalizedAvatarUrl));
+  }, [replaceTasks]);
 
   const setConcurrency = useCallback((value: number) => {
     const normalized = normalizeEmailGenerationConcurrency(value);
@@ -429,6 +445,7 @@ export function EmailGenerationTaskProvider({ children }: { children: ReactNode 
     retryTask,
     openTask,
     getLatestTaskByKey,
+    updateTaskAvatarByKey,
   }), [
     cancelTask,
     concurrency,
@@ -438,6 +455,7 @@ export function EmailGenerationTaskProvider({ children }: { children: ReactNode 
     retryTask,
     setConcurrency,
     tasks,
+    updateTaskAvatarByKey,
   ]);
 
   return (

@@ -226,7 +226,6 @@ export function RichEmailEditor({
           }}
           onKeyUp={saveSelection}
           onMouseUp={saveSelection}
-          onBlur={emitChange}
         />
       </div>
 

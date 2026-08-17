@@ -200,6 +200,33 @@ export function pruneExpiredEmailGenerationTasks(
   });
 }
 
+export function replaceEmailGenerationTaskForKey(
+  tasks: EmailGenerationTask[],
+  nextTask: EmailGenerationTask,
+) {
+  return [
+    ...tasks.filter((task) => task.key !== nextTask.key),
+    nextTask,
+  ];
+}
+
+export function updateEmailGenerationTaskAvatar(
+  tasks: EmailGenerationTask[],
+  key: string,
+  avatarUrl: string,
+) {
+  const normalizedAvatarUrl = avatarUrl.trim();
+  if (!key || !normalizedAvatarUrl) return tasks;
+
+  let changed = false;
+  const updated = tasks.map((task) => {
+    if (task.key !== key || task.avatarUrl === normalizedAvatarUrl) return task;
+    changed = true;
+    return { ...task, avatarUrl: normalizedAvatarUrl };
+  });
+  return changed ? updated : tasks;
+}
+
 export function buildGmailEmailGenerationTaskKey(input: {
   kind: 'gmail_ai_reply' | 'gmail_template_reply';
   threadId: string;

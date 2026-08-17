@@ -9,6 +9,17 @@ export const APP_RELEASE_LAST_SEEN_STORAGE_KEY = 'influencer-board-last-seen-rel
 
 export const APP_RELEASES: readonly AppRelease[] = [
   {
+    version: '1.1.2',
+    releasedAt: '2026-08-17',
+    title: '邮件回复体验优化',
+    highlights: [
+      '“重新生成”会重新起草邮件，并直接覆盖为最新版本',
+      '“根据中文更新外文”只更新外文邮件，不影响中文内容',
+      '邮件生成进度新增红人频道头像，查找任务更加直观',
+      '优化生成任务的保存与恢复体验',
+    ],
+  },
+  {
     version: '1.1.1',
     releasedAt: '2026-08-17',
     title: '用户使用体验优化',

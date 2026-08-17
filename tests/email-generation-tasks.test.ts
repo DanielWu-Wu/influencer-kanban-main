@@ -9,8 +9,10 @@ import {
   normalizeEmailGenerationConcurrency,
   pruneExpiredEmailGenerationTasks,
   readEmailGenerationTaskSnapshot,
+  replaceEmailGenerationTaskForKey,
   serializeEmailGenerationTasks,
   selectStartableEmailTaskIds,
+  updateEmailGenerationTaskAvatar,
   type EmailGenerationTask,
 } from '../src/lib/email-generation-tasks';
 
@@ -80,11 +82,40 @@ test('已结束任务保留 24 小时，运行中任务不会被过期清理', (
   );
 });
 
+test('同一封邮件重新生成时只保留最新任务', () => {
+  const previous = { ...task('previous', 'completed', 1), key: 'same-reply' };
+  const unrelated = { ...task('unrelated', 'completed', 2), key: 'another-reply' };
+  const latest = { ...task('latest', 'queued', 3), key: 'same-reply' };
+
+  assert.deepEqual(
+    replaceEmailGenerationTaskForKey([previous, unrelated], latest).map((item) => item.id),
+    ['unrelated', 'latest'],
+  );
+});
+
+test('任务头像只更新同一任务键，并保留其他任务', () => {
+  const target = { ...task('target', 'completed', 1), key: 'same-reply' };
+  const unrelated = { ...task('unrelated', 'completed', 2), key: 'another-reply' };
+  const updated = updateEmailGenerationTaskAvatar(
+    [target, unrelated],
+    'same-reply',
+    ' https://yt3.ggpht.com/avatar.jpg ',
+  );
+
+  assert.equal(updated[0].avatarUrl, 'https://yt3.ggpht.com/avatar.jpg');
+  assert.equal(updated[1].avatarUrl, undefined);
+  assert.strictEqual(
+    updateEmailGenerationTaskAvatar(updated, 'same-reply', ' '),
+    updated,
+  );
+});
+
 test('云端快照只保留可恢复字段，并能恢复已完成结果', () => {
   const original = {
     ...task('completed', 'completed', 1),
     completedAt: 2,
     result: { suggestion: { suggestedReply: 'Hello' } },
+    avatarUrl: 'https://yt3.ggpht.com/avatar.jpg',
     rollbackResult: { replyContent: '之前内容' },
     retryInput: { userIdeas: '礼貌确认发布时间', targetLang: 'en' },
   };
@@ -96,6 +127,7 @@ test('云端快照只保留可恢复字段，并能恢复已完成结果', () =>
   assert.deepEqual(restored.result, original.result);
   assert.deepEqual(restored.rollbackResult, original.rollbackResult);
   assert.deepEqual(restored.retryInput, original.retryInput);
+  assert.equal(restored.avatarUrl, original.avatarUrl);
 });
 
 test('重新打开页面会把排队中和运行中的任务标记为中断，不会自动重跑', () => {

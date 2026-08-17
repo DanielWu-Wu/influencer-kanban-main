@@ -125,6 +125,7 @@ export function AITemplateReplyComposer({
   onClose,
   onDraftSaved,
   autoRetryRequest,
+  avatarUrl,
 }: {
   thread: GmailThread;
   replyTarget: GmailReplyTarget | null;
@@ -132,12 +133,13 @@ export function AITemplateReplyComposer({
   onClose: () => void;
   onDraftSaved?: (content: string) => void;
   autoRetryRequest?: { taskId: string; retryInput?: unknown };
+  avatarUrl?: string;
 }) {
   const { templates, addTemplate, updateTemplate, deleteTemplate } = useEmailTemplates();
   const { addDraft } = useEmailDrafts();
   const { auth, connect } = useGmailAuth();
   const { settings, loading: settingsLoading } = useSettings();
-  const { enqueueTask, getLatestTaskByKey } = useEmailGenerationTasks();
+  const { enqueueTask, getLatestTaskByKey, updateTaskAvatarByKey } = useEmailGenerationTasks();
   const aiTemplates = useMemo(() => getAIReplyTemplates(templates), [templates]);
   const [selectedTemplateId, setSelectedTemplateId] = useState('ai-reply-logistics');
   const selectedTemplate = useMemo(
@@ -166,7 +168,6 @@ export function AITemplateReplyComposer({
   const factEditorTextareaRef = useRef<HTMLTextAreaElement | null>(null);
   const appliedGenerationTaskRef = useRef('');
   const chineseTranslationRef = useRef<AbortController | null>(null);
-  const replyContentManuallyEditedRef = useRef(false);
   const restoringTaskSettingsRef = useRef(false);
   const handledAutoRetryTaskRef = useRef('');
 
@@ -186,6 +187,10 @@ export function AITemplateReplyComposer({
     messageId: replyTarget?.messageId,
   });
   const generationTask = getLatestTaskByKey(generationTaskKey);
+
+  useEffect(() => {
+    if (avatarUrl) updateTaskAvatarByKey(generationTaskKey, avatarUrl);
+  }, [avatarUrl, generationTaskKey, updateTaskAvatarByKey]);
 
   useEffect(() => {
     const detected = detectEmailLanguage(externalMessage?.body || '');
@@ -217,12 +222,24 @@ export function AITemplateReplyComposer({
 
   useEffect(() => {
     if (!generationTask) return;
+    const rollback = generationTask.rollbackResult as {
+      replyContent?: string;
+      suggestion?: TemplateSuggestion | null;
+      editedChineseReply?: string;
+      chineseDirty?: boolean;
+      translationUpdated?: boolean;
+      syncedTargetLang?: string;
+      synchronizedDraft?: GmailBilingualDraftSnapshot | null;
+    } | undefined;
+    const replacingExistingDraft = Boolean(
+      rollback?.replyContent?.trim() || rollback?.editedChineseReply?.trim(),
+    );
     if (generationTask.status === 'queued' || generationTask.status === 'running') {
       setLoading(true);
       setError('');
       setStage(generationTask.stage);
       const partial = generationTask.partialResult as TemplateSuggestion | undefined;
-      if (partial?.suggestedReply) setReplyContent(partial.suggestedReply);
+      if (!replacingExistingDraft && partial?.suggestedReply) setReplyContent(partial.suggestedReply);
       return;
     }
     if (appliedGenerationTaskRef.current === generationTask.id) return;
@@ -246,34 +263,19 @@ export function AITemplateReplyComposer({
         if (retryInput?.targetLang) setTargetLang(retryInput.targetLang);
         if (retryInput?.replyTone) setReplyTone(retryInput.replyTone);
       }
-      const rollback = generationTask.rollbackResult as {
-        replyContent?: string;
-        suggestion?: TemplateSuggestion | null;
-        editedChineseReply?: string;
-        chineseDirty?: boolean;
-        translationUpdated?: boolean;
-        syncedTargetLang?: string;
-        synchronizedDraft?: GmailBilingualDraftSnapshot | null;
-      } | undefined;
-      if (!replyContentManuallyEditedRef.current) {
-        setReplyContent(rollback?.replyContent || '');
-        setSuggestion(rollback?.suggestion || null);
-        setEditedChineseReply(rollback?.editedChineseReply || '');
-        setChineseDirty(Boolean(rollback?.chineseDirty));
-        setTranslationUpdated(Boolean(rollback?.translationUpdated));
-        setSyncedTargetLang(rollback?.syncedTargetLang || '');
-        setSynchronizedDraft(rollback?.synchronizedDraft || null);
-      }
+      setReplyContent(rollback?.replyContent || '');
+      setSuggestion(rollback?.suggestion || null);
+      setEditedChineseReply(rollback?.editedChineseReply || '');
+      setChineseDirty(Boolean(rollback?.chineseDirty));
+      setTranslationUpdated(Boolean(rollback?.translationUpdated));
+      setSyncedTargetLang(rollback?.syncedTargetLang || '');
+      setSynchronizedDraft(rollback?.synchronizedDraft || null);
       setError(generationTask.error || '任务已中断，请重新点击生成。');
       return;
     }
     if (generationTask.status !== 'completed') return;
     const result = generationTask.result as GmailTemplateReplyTaskResult | undefined;
     if (!result?.suggestion?.suggestedReply) return;
-    if (replyContentManuallyEditedRef.current) {
-      setError('生成结果已保存在邮件生成进度中；当前人工编辑内容未被覆盖。');
-      return;
-    }
     setTargetLang(result.targetLang);
     setSuggestion(result.suggestion);
     setReplyContent(result.suggestion.suggestedReply);
@@ -369,6 +371,7 @@ export function AITemplateReplyComposer({
     const previousTranslationUpdated = translationUpdated;
     const previousSyncedTargetLang = syncedTargetLang;
     const previousSynchronizedDraft = synchronizedDraft;
+    const replacingExistingDraft = Boolean(previousContent.trim() || previousChineseReply.trim());
     const senderLabel = String(externalMessage?.from || recipientEmail || '邮件联系人')
       .replace(/<[^>]+>.*$/, '')
       .replace(/^"|"$/g, '')
@@ -378,6 +381,7 @@ export function AITemplateReplyComposer({
       kind: 'gmail_template_reply',
       title: senderLabel,
       description: 'AI 模板回复',
+      avatarUrl,
       navigation: {
         view: 'gmail',
         threadId: thread.id,
@@ -442,7 +446,7 @@ export function AITemplateReplyComposer({
           }
           if (eventName === 'delta') {
             streamedBody += String(event.text || '');
-            setReplyContent(streamedBody);
+            if (!replacingExistingDraft) setReplyContent(streamedBody);
             report('正在生成外文邮件', {
               suggestedReply: streamedBody,
               translatedReply: '',
@@ -821,7 +825,6 @@ export function AITemplateReplyComposer({
               <RichEmailEditor
                 value={replyContent}
                 onChange={(value) => {
-                  replyContentManuallyEditedRef.current = true;
                   setReplyContent(value);
                   setDraftSaved(false);
                 }}

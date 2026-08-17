@@ -54,6 +54,7 @@ import {
   type ChannelAvatarState,
 } from '@/lib/youtube-channel-avatar';
 import { useRecordAssistant } from './record-assistant-provider';
+import { useEmailGenerationTasks } from './email-generation-task-provider';
 import { GmailReplyTargetBar } from './gmail-reply-target-bar';
 import type { GmailThreadOpenRequest } from './gmail-page';
 
@@ -405,6 +406,10 @@ export function EmailDetail({
   const [profileActionLogs, setProfileActionLogs] = useState<RecordAssistantLog[]>([]);
   const { settings } = useSettings();
   const { appendLog } = useRecordAssistant();
+  const {
+    tasks: emailGenerationTasks,
+    updateTaskAvatarByKey,
+  } = useEmailGenerationTasks();
   const displayMessages = useMemo(() => sortMessagesNewestFirst(thread.messages), [thread.messages]);
   const sanitizedDisplayHtmlByMessageId = useMemo(() => {
     const sanitized = new Map<string, EmailHtmlDisplaySanitizationResult>();
@@ -449,6 +454,17 @@ export function EmailDetail({
   ), [displayMessages]);
   const newestDisplayMessageId = displayMessages[0]?.id || '';
   const creatorYouTubeChannelUrl = getDirectYouTubeChannelUrl(creatorProfile);
+  const creatorChannelAvatarUrl = channelAvatar.status === 'ready'
+    ? channelAvatar.avatarUrl
+    : undefined;
+
+  useEffect(() => {
+    if (!creatorChannelAvatarUrl) return;
+    emailGenerationTasks.forEach((task) => {
+      if (task.navigation.view !== 'gmail' || task.navigation.threadId !== thread.id) return;
+      updateTaskAvatarByKey(task.key, creatorChannelAvatarUrl);
+    });
+  }, [creatorChannelAvatarUrl, emailGenerationTasks, thread.id, updateTaskAvatarByKey]);
 
   const selectReplyAnchor = (message: GmailMessage) => {
     if (message.id === selectedReplyMessageId) return;
@@ -1826,6 +1842,7 @@ export function EmailDetail({
                   key={`template-${thread.id}-${replyTarget?.messageId || 'default'}`}
                   thread={thread}
                   replyTarget={replyTarget}
+                  avatarUrl={creatorChannelAvatarUrl}
                   onMinimize={() => setComposerState('minimized')}
                   onClose={() => setComposerState('closed')}
                   onDraftSaved={setSavedReplyDraft}
@@ -1839,6 +1856,7 @@ export function EmailDetail({
                   thread={thread}
                   replyTarget={replyTarget}
                   mode={replyMode}
+                  avatarUrl={creatorChannelAvatarUrl}
                   onMinimize={replyMode === 'ai' ? () => setComposerState('minimized') : undefined}
                   onClose={() => setComposerState('closed')}
                   initialMessage={replyMode === 'compose' ? savedReplyDraft : undefined}
