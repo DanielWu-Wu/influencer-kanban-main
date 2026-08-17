@@ -17,6 +17,7 @@ import { GmailSignatureSettings } from './gmail-signature-settings';
 import { NewEmailComposer } from './new-email-composer';
 import {
   clampGmailThreadListWidth,
+  getGmailThreadListDoubleClickWidth,
   getGmailThreadListMaxWidth,
   GMAIL_THREAD_LIST_DEFAULT_WIDTH,
   GMAIL_THREAD_LIST_MAX_WIDTH,
@@ -189,8 +190,11 @@ export function GmailPage({
     finishThreadListResize(event.pointerId);
   };
 
-  const resetThreadListWidth = () => {
-    applyThreadListWidth(GMAIL_THREAD_LIST_DEFAULT_WIDTH, { persist: true, syncState: true });
+  const toggleThreadListWidth = () => {
+    applyThreadListWidth(
+      getGmailThreadListDoubleClickWidth(threadListWidthRef.current),
+      { persist: true, syncState: true },
+    );
   };
 
   const handleResizeKeyDown = (event: ReactKeyboardEvent<HTMLDivElement>) => {
@@ -397,13 +401,13 @@ export function GmailPage({
         <div
           ref={resizeHandleRef}
           role="separator"
-          aria-label="调整邮件线程列表宽度，双击恢复默认宽度"
+          aria-label="调整邮件线程列表宽度，双击收缩，再次双击恢复默认宽度"
           aria-orientation="vertical"
           aria-valuemin={GMAIL_THREAD_LIST_MIN_WIDTH}
           aria-valuemax={threadListMaxWidth}
           aria-valuenow={threadListWidth}
           tabIndex={0}
-          title="拖动调整邮件列表宽度；双击恢复默认宽度"
+          title="拖动调整邮件列表宽度；双击收缩，再次双击恢复默认宽度"
           data-testid="gmail-thread-list-resize-handle"
           className={`group relative z-20 -mx-1 hidden w-2 shrink-0 cursor-col-resize items-stretch justify-center outline-none lg:flex ${
             resizingThreadList ? 'bg-primary/10' : ''
@@ -412,7 +416,7 @@ export function GmailPage({
           onPointerMove={handleResizePointerMove}
           onPointerUp={handleResizePointerEnd}
           onPointerCancel={handleResizePointerEnd}
-          onDoubleClick={resetThreadListWidth}
+          onDoubleClick={toggleThreadListWidth}
           onKeyDown={handleResizeKeyDown}
         >
           <span className="w-px bg-border/70 transition-colors duration-150 group-hover:bg-primary/70 group-focus-visible:w-0.5 group-focus-visible:bg-primary motion-reduce:transition-none" />

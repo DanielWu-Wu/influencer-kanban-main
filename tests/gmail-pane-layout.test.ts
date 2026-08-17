@@ -2,6 +2,7 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 import {
   clampGmailThreadListWidth,
+  getGmailThreadListDoubleClickWidth,
   getGmailThreadListMaxWidth,
   GMAIL_THREAD_LIST_DEFAULT_WIDTH,
   GMAIL_THREAD_LIST_MIN_WIDTH,
@@ -25,4 +26,18 @@ test('Gmail 线程列表宽度存储异常时回到默认宽度', () => {
   assert.equal(parseStoredGmailThreadListWidth('512'), 512);
   assert.equal(parseStoredGmailThreadListWidth('not-a-number'), GMAIL_THREAD_LIST_DEFAULT_WIDTH);
   assert.equal(parseStoredGmailThreadListWidth(null), GMAIL_THREAD_LIST_DEFAULT_WIDTH);
+});
+
+test('Gmail 线程列表双击在最小宽度和默认宽度之间切换', () => {
+  assert.equal(
+    getGmailThreadListDoubleClickWidth(GMAIL_THREAD_LIST_DEFAULT_WIDTH),
+    GMAIL_THREAD_LIST_MIN_WIDTH,
+  );
+  assert.equal(getGmailThreadListDoubleClickWidth(512), GMAIL_THREAD_LIST_MIN_WIDTH);
+  assert.equal(getGmailThreadListDoubleClickWidth(9_999), GMAIL_THREAD_LIST_MIN_WIDTH);
+  assert.equal(
+    getGmailThreadListDoubleClickWidth(GMAIL_THREAD_LIST_MIN_WIDTH),
+    GMAIL_THREAD_LIST_DEFAULT_WIDTH,
+  );
+  assert.equal(getGmailThreadListDoubleClickWidth(-1), GMAIL_THREAD_LIST_DEFAULT_WIDTH);
 });

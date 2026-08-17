@@ -33,6 +33,12 @@ export function parseStoredGmailThreadListWidth(value: string | null) {
   return Number.isFinite(parsed) ? parsed : GMAIL_THREAD_LIST_DEFAULT_WIDTH;
 }
 
+export function getGmailThreadListDoubleClickWidth(width: number) {
+  return width <= GMAIL_THREAD_LIST_MIN_WIDTH
+    ? GMAIL_THREAD_LIST_DEFAULT_WIDTH
+    : GMAIL_THREAD_LIST_MIN_WIDTH;
+}
+
 export function isGmailThreadListAvatarOnly(width: number) {
   return width < GMAIL_THREAD_LIST_AVATAR_ONLY_WIDTH;
 }
