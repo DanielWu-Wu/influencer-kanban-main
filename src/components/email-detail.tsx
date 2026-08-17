@@ -55,6 +55,7 @@ import {
 } from '@/lib/youtube-channel-avatar';
 import { useRecordAssistant } from './record-assistant-provider';
 import { GmailReplyTargetBar } from './gmail-reply-target-bar';
+import type { GmailThreadOpenRequest } from './gmail-page';
 
 interface EmailDetailProps {
   thread: GmailThread;
@@ -62,6 +63,7 @@ interface EmailDetailProps {
   loadError?: string;
   onBack: () => void;
   onThreadUpdated?: (thread: GmailThread) => void;
+  openComposerRequest?: GmailThreadOpenRequest;
 }
 
 type FeishuCreatorProfile = {
@@ -217,6 +219,7 @@ export function EmailDetail({
   loadError,
   onBack,
   onThreadUpdated,
+  openComposerRequest,
 }: EmailDetailProps) {
   const [expandedMessages, setExpandedMessages] = useState<Set<string>>(() => {
     const newestMessage = sortMessagesNewestFirst(thread.messages)[0];
@@ -228,6 +231,7 @@ export function EmailDetail({
     () => getDefaultGmailReplyMessage(thread)?.id || '',
   );
   const replyAnchorManuallySelectedRef = useRef(false);
+  const handledOpenComposerRequestRef = useRef(0);
   const [recipientOverrides, setRecipientOverrides] = useState<Record<string, string>>({});
   const [savedReplyDraft, setSavedReplyDraft] = useState('');
   const [changingReadStateId, setChangingReadStateId] = useState<string | null>(null);
@@ -473,6 +477,21 @@ export function EmailDetail({
     setReplyMode(mode);
     setComposerState('expanded');
   };
+
+  useEffect(() => {
+    if (
+      !openComposerRequest?.composerMode
+      || handledOpenComposerRequestRef.current === openComposerRequest.requestId
+    ) return;
+    handledOpenComposerRequestRef.current = openComposerRequest.requestId;
+    if (openComposerRequest.messageId) {
+      replyAnchorManuallySelectedRef.current = true;
+      setSelectedReplyMessageId(openComposerRequest.messageId);
+      setExpandedMessages((current) => new Set(current).add(openComposerRequest.messageId!));
+    }
+    setReplyMode(openComposerRequest.composerMode);
+    setComposerState('expanded');
+  }, [openComposerRequest]);
 
   const updateReplyRecipient = (email: string) => {
     if (!replyTarget) return;

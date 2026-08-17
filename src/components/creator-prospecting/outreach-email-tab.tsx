@@ -69,6 +69,7 @@ type Props = {
   onSaveDraft: (prospect: Prospect) => void;
   onBack: (prospect: Prospect) => void;
   onSkip: (prospect: Prospect) => void;
+  openProspectRequest?: { prospectId: string; requestId: number };
 };
 
 function prospectLanguageLabel(prospect: Prospect) {
@@ -306,6 +307,7 @@ export function OutreachEmailTab({
   onSaveDraft,
   onBack,
   onSkip,
+  openProspectRequest,
 }: Props) {
   const [query, setQuery] = useState('');
   const [editingIds, setEditingIds] = useState<string[]>([]);
@@ -317,6 +319,7 @@ export function OutreachEmailTab({
   const translationTimersRef = useRef(new Map<string, number>());
   const translationVersionsRef = useRef(new Map<string, number>());
   const mountedRef = useRef(true);
+  const handledOpenRequestRef = useRef(0);
   const prospectIdsKey = prospects.map((prospect) => prospect.id).join('\u0000');
   const filtered = useMemo(() => {
     const normalized = query.trim().toLowerCase();
@@ -339,6 +342,20 @@ export function OutreachEmailTab({
       return [prospectIds[0]];
     });
   }, [prospectIdsKey]);
+
+  useEffect(() => {
+    if (
+      !openProspectRequest
+      || handledOpenRequestRef.current === openProspectRequest.requestId
+    ) return;
+    handledOpenRequestRef.current = openProspectRequest.requestId;
+    setQuery('');
+    setExpandedIds((current) => Array.from(new Set([...current, openProspectRequest.prospectId])));
+    window.requestAnimationFrame(() => {
+      document.getElementById(`outreach-email-${openProspectRequest.prospectId}`)
+        ?.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+    });
+  }, [openProspectRequest]);
 
   useEffect(() => {
     mountedRef.current = true;
@@ -450,6 +467,7 @@ export function OutreachEmailTab({
           return (
             <article
               key={prospect.id}
+              id={`outreach-email-${prospect.id}`}
               className={`overflow-hidden rounded-lg border bg-white/70 transition-colors ${
                 isExpanded ? 'border-primary/35' : 'border-border/70 hover:border-primary/25'
               }`}
@@ -638,8 +656,8 @@ export function OutreachEmailTab({
                             <p className="mt-1 max-w-md text-sm text-muted-foreground">
                               {prospect.generationError || prospect.error || '智能助手会结合频道资料、产品、合作形式和你的合作想法起草邮件。'}
                             </p>
-                            <Button className="mt-4" onClick={() => onGenerate(prospect)} disabled={generatingId === prospect.id}>
-                              {generatingId === prospect.id ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <Sparkles className="mr-2 h-4 w-4" />}
+                            <Button className="mt-4" onClick={() => onGenerate(prospect)} disabled={isGenerating}>
+                              {isGenerating ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <Sparkles className="mr-2 h-4 w-4" />}
                               {prospect.outreachGenerationStage === 'error' ? '重新生成' : '生成开发信'}
                             </Button>
                           </div>
@@ -655,7 +673,7 @@ export function OutreachEmailTab({
                                 variant="outline"
                                 className="h-7 px-2 text-xs"
                                 onClick={() => onRegeneratePart(prospect, 'subject')}
-                                disabled={generatingId === prospect.id || isRegeneratingSubject || isRegeneratingBody}
+                                disabled={isGenerating || isRegeneratingSubject || isRegeneratingBody}
                               >
                                 {isRegeneratingSubject ? <Loader2 className="mr-1 h-3.5 w-3.5 animate-spin" /> : <RefreshCw className="mr-1 h-3.5 w-3.5" />}
                                 重新生成
@@ -721,7 +739,7 @@ export function OutreachEmailTab({
                             emailSignature={emailSignature}
                             isEditing={isEditing}
                             isRegeneratingBody={isRegeneratingBody}
-                            regenerateDisabled={generatingId === prospect.id || isRegeneratingSubject || isRegeneratingBody}
+                            regenerateDisabled={isGenerating || isRegeneratingSubject || isRegeneratingBody}
                             onPatch={onPatch}
                             onEditingChange={(editing) => setEditingIds((current) => (
                               editing
@@ -777,8 +795,8 @@ export function OutreachEmailTab({
                   <footer className="flex flex-wrap items-center gap-2 border-t px-4 py-3">
                     {hasDraft && (
                       <>
-                        <Button variant="outline" onClick={() => onGenerate(prospect)} disabled={generatingId === prospect.id}>
-                          {generatingId === prospect.id ? <Loader2 className="mr-1 h-4 w-4 animate-spin" /> : <RefreshCw className="mr-1 h-4 w-4" />}
+                        <Button variant="outline" onClick={() => onGenerate(prospect)} disabled={isGenerating}>
+                          {isGenerating ? <Loader2 className="mr-1 h-4 w-4 animate-spin" /> : <RefreshCw className="mr-1 h-4 w-4" />}
                           重新生成
                         </Button>
                         <Button

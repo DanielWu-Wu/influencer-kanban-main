@@ -47,6 +47,9 @@ const GMAIL_THREAD_LIST_WIDTH_STORAGE_KEY = 'gmail-thread-list-width-v1';
 export type GmailThreadOpenRequest = {
   threadId: string;
   requestId: number;
+  taskId?: string;
+  messageId?: string;
+  composerMode?: 'ai' | 'template';
 };
 
 export function GmailPage({
@@ -437,6 +440,9 @@ export function GmailPage({
               : undefined}
             onBack={handleCloseThread}
             onThreadUpdated={setSelectedThread}
+            openComposerRequest={openThreadRequest?.threadId === selectedThread.id
+              ? openThreadRequest
+              : undefined}
           />
         ) : (
           <div className="flex flex-1 flex-col items-center justify-center p-6 text-center">

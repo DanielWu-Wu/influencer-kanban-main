@@ -29,3 +29,5 @@ import './dashboard-navigation.test';
 import './feishu-mapping-draft.test';
 import './gmail-pane-layout.test';
 import './gmail-inbox-cache.test';
+import './email-generation-tasks.test';
+import './app-release.test';

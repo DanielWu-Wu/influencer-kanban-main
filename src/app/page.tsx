@@ -43,7 +43,10 @@ import { SettingsPanel } from '@/components/settings-panel';
 import { TodoBoard } from '@/components/todo-board';
 import { WorkCalendar } from '@/components/work-calendar';
 import { GmailPage, type GmailThreadOpenRequest } from '@/components/gmail-page';
-import { CreatorProspectingPage } from '@/components/creator-prospecting-page';
+import {
+  CreatorProspectingPage,
+  type CreatorProspectingOpenRequest,
+} from '@/components/creator-prospecting-page';
 import { useAuth } from '@/components/auth-provider';
 import { useDailyGmailTodos } from '@/lib/use-daily-gmail-todos';
 import { useCooperationCalendarEvents } from '@/lib/use-cooperation-calendar-events';
@@ -53,6 +56,12 @@ import {
   clearDashboardNavigationIntent,
   getDashboardNavigationIntent,
 } from '@/lib/dashboard-navigation';
+import { EmailGenerationProgress } from '@/components/email-generation-progress';
+import {
+  EMAIL_GENERATION_TASK_OPEN_EVENT,
+  type EmailGenerationTaskNavigation,
+} from '@/lib/email-generation-tasks';
+import { AppUpdateNotice } from '@/components/app-update-notice';
 
 type View = 'kanban' | 'list' | 'email' | 'reminders' | 'settings' | 'accounts' | 'todo' | 'calendar' | 'prospecting' | 'gmail' | 'prompts' | 'draft-prompts';
 
@@ -122,6 +131,8 @@ export default function DashboardPage() {
   const [currentView, setCurrentView] = useState<View>('todo');
   const [gmailHasMounted, setGmailHasMounted] = useState(false);
   const [gmailThreadOpenRequest, setGmailThreadOpenRequest] = useState<GmailThreadOpenRequest>();
+  const [prospectingHasMounted, setProspectingHasMounted] = useState(false);
+  const [prospectingOpenRequest, setProspectingOpenRequest] = useState<CreatorProspectingOpenRequest>();
   const [cooperationHasMounted, setCooperationHasMounted] = useState(false);
   const [influencerListHasMounted, setInfluencerListHasMounted] = useState(false);
   const [openCooperationProjectId, setOpenCooperationProjectId] = useState<string>();
@@ -176,6 +187,7 @@ export default function DashboardPage() {
 
   useEffect(() => {
     if (currentView === 'gmail') setGmailHasMounted(true);
+    if (currentView === 'prospecting') setProspectingHasMounted(true);
     if (currentView === 'kanban') setCooperationHasMounted(true);
     if (currentView === 'list') setInfluencerListHasMounted(true);
   }, [currentView]);
@@ -210,6 +222,36 @@ export default function DashboardPage() {
       requestId: (current?.requestId || 0) + 1,
     }));
     changeView('gmail');
+  }, [changeView]);
+
+  useEffect(() => {
+    const handleOpenGenerationTask = (event: Event) => {
+      const detail = (event as CustomEvent<{
+        taskId: string;
+        navigation: EmailGenerationTaskNavigation;
+      }>).detail;
+      if (!detail?.navigation) return;
+      if (detail.navigation.view === 'gmail') {
+        const { threadId, messageId, composerMode } = detail.navigation;
+        setGmailThreadOpenRequest((current) => ({
+          threadId,
+          messageId,
+          composerMode,
+          taskId: detail.taskId,
+          requestId: (current?.requestId || 0) + 1,
+        }));
+        changeView('gmail');
+        return;
+      }
+      const { prospectId } = detail.navigation;
+      setProspectingOpenRequest((current) => ({
+        prospectId,
+        requestId: (current?.requestId || 0) + 1,
+      }));
+      changeView('prospecting');
+    };
+    window.addEventListener(EMAIL_GENERATION_TASK_OPEN_EVENT, handleOpenGenerationTask);
+    return () => window.removeEventListener(EMAIL_GENERATION_TASK_OPEN_EVENT, handleOpenGenerationTask);
   }, [changeView]);
   const handleOpenCooperationProjectHandled = useCallback(() => {
     setOpenCooperationProjectId(undefined);
@@ -335,6 +377,9 @@ export default function DashboardPage() {
 
   return (
     <div className="workspace-shell h-dvh overflow-hidden">
+      {account?.status === 'active' && !account.mustChangePassword && !accountIssue && (
+        <AppUpdateNotice accountUserId={account.userId} />
+      )}
       {account && accountIssue?.kind === 'unavailable' && (
         <div className="fixed left-1/2 top-17 z-[70] flex max-w-[calc(100vw-2rem)] -translate-x-1/2 items-center gap-3 rounded-lg border border-amber-200 bg-amber-50/95 px-4 py-2 text-sm text-amber-900 shadow-lg backdrop-blur-sm">
           <TriangleAlert className="h-4 w-4 shrink-0" />
@@ -373,6 +418,7 @@ export default function DashboardPage() {
           </div>
 
           <div className="flex items-center gap-2 md:gap-3">
+            <EmailGenerationProgress />
             {stats.todayTodos > 0 && (
               <button
                 onClick={() => changeView('todo')}
@@ -630,9 +676,11 @@ export default function DashboardPage() {
             </div>
           )}
 
-          {currentView === 'prospecting' && (
-            <div className="app-workbench min-h-0 flex-1 overflow-hidden rounded-xl p-4">
-              <CreatorProspectingPage />
+          {(currentView === 'prospecting' || prospectingHasMounted) && (
+            <div className={currentView === 'prospecting'
+              ? 'app-workbench min-h-0 flex-1 overflow-hidden rounded-xl p-4'
+              : 'hidden'}>
+              <CreatorProspectingPage openProspectRequest={prospectingOpenRequest} />
             </div>
           )}
 

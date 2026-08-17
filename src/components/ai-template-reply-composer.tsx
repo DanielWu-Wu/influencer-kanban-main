@@ -71,10 +71,17 @@ import { useEmailDrafts, useEmailTemplates, useGmailAuth, useSettings } from '@/
 import type { GmailThread } from '@/lib/types';
 import { AIReplyTemplateManager } from './ai-reply-template-manager';
 import { RichEmailEditor } from './rich-email-editor';
+import { useEmailGenerationTasks } from './email-generation-task-provider';
+import { buildGmailEmailGenerationTaskKey } from '@/lib/email-generation-tasks';
 
 type ReplyTone = 'friendly' | 'formal' | 'casual';
 
 type TemplateSuggestion = GmailTemplateDraftResult;
+
+type GmailTemplateReplyTaskResult = {
+  suggestion: TemplateSuggestion;
+  targetLang: string;
+};
 
 const LANGUAGE_OPTIONS = [
   ['en', '英语'], ['es', '西班牙语'], ['nl', '荷兰语'], ['de', '德语'],
@@ -128,6 +135,7 @@ export function AITemplateReplyComposer({
   const { addDraft } = useEmailDrafts();
   const { auth, connect } = useGmailAuth();
   const { settings, loading: settingsLoading } = useSettings();
+  const { enqueueTask, getLatestTaskByKey } = useEmailGenerationTasks();
   const aiTemplates = useMemo(() => getAIReplyTemplates(templates), [templates]);
   const [selectedTemplateId, setSelectedTemplateId] = useState('ai-reply-logistics');
   const selectedTemplate = useMemo(
@@ -154,7 +162,7 @@ export function AITemplateReplyComposer({
   const [managerOpen, setManagerOpen] = useState(false);
   const [factEditorOpen, setFactEditorOpen] = useState(false);
   const factEditorTextareaRef = useRef<HTMLTextAreaElement | null>(null);
-  const generationRef = useRef<AbortController | null>(null);
+  const appliedGenerationTaskRef = useRef('');
   const chineseTranslationRef = useRef<AbortController | null>(null);
 
   const threadMessages = useMemo(() => buildThreadMessages(thread, replyTarget), [replyTarget, thread]);
@@ -167,6 +175,12 @@ export function AITemplateReplyComposer({
     snapshot: synchronizedDraft,
     foreignBody: replyContent,
   });
+  const generationTaskKey = buildGmailEmailGenerationTaskKey({
+    kind: 'gmail_template_reply',
+    threadId: thread.id,
+    messageId: replyTarget?.messageId,
+  });
+  const generationTask = getLatestTaskByKey(generationTaskKey);
 
   useEffect(() => {
     const detected = detectEmailLanguage(externalMessage?.body || '');
@@ -188,14 +202,67 @@ export function AITemplateReplyComposer({
   }, [factEditorOpen]);
 
   useEffect(() => () => {
-    generationRef.current?.abort();
     chineseTranslationRef.current?.abort();
   }, []);
 
-  const getAccessToken = async () => {
+  useEffect(() => {
+    if (!generationTask) return;
+    if (generationTask.status === 'queued' || generationTask.status === 'running') {
+      setLoading(true);
+      setError('');
+      setStage(generationTask.stage);
+      const partial = generationTask.partialResult as TemplateSuggestion | undefined;
+      if (partial?.suggestedReply) setReplyContent(partial.suggestedReply);
+      return;
+    }
+    if (appliedGenerationTaskRef.current === generationTask.id) return;
+    appliedGenerationTaskRef.current = generationTask.id;
+    setLoading(false);
+    setStage('');
+
+    if (generationTask.status === 'failed') {
+      const rollback = generationTask.rollbackResult as {
+        replyContent?: string;
+        suggestion?: TemplateSuggestion | null;
+        editedChineseReply?: string;
+        chineseDirty?: boolean;
+        translationUpdated?: boolean;
+        syncedTargetLang?: string;
+        synchronizedDraft?: GmailBilingualDraftSnapshot | null;
+      } | undefined;
+      setReplyContent(rollback?.replyContent || '');
+      setSuggestion(rollback?.suggestion || null);
+      setEditedChineseReply(rollback?.editedChineseReply || '');
+      setChineseDirty(Boolean(rollback?.chineseDirty));
+      setTranslationUpdated(Boolean(rollback?.translationUpdated));
+      setSyncedTargetLang(rollback?.syncedTargetLang || '');
+      setSynchronizedDraft(rollback?.synchronizedDraft || null);
+      setError(generationTask.error || 'AI 生成失败，请稍后重试。');
+      return;
+    }
+    if (generationTask.status !== 'completed') return;
+    const result = generationTask.result as GmailTemplateReplyTaskResult | undefined;
+    if (!result?.suggestion?.suggestedReply) return;
+    setTargetLang(result.targetLang);
+    setSuggestion(result.suggestion);
+    setReplyContent(result.suggestion.suggestedReply);
+    setEditedChineseReply(result.suggestion.translatedReply || '');
+    setSynchronizedDraft({
+      foreignBody: result.suggestion.suggestedReply,
+      chineseBody: result.suggestion.translatedReply || '',
+      targetLanguage: result.targetLang,
+    });
+    setChineseDirty(false);
+    setTranslationUpdated(false);
+    setSyncedTargetLang(result.targetLang);
+    setTranslationOpen(true);
+    setError('');
+  }, [generationTask]);
+
+  const getAccessToken = async (signal?: AbortSignal) => {
     if (!auth?.accessToken) throw new Error('请先连接 Gmail。');
     if (auth.expiresAt && auth.expiresAt > Date.now() + 60_000) return auth.accessToken;
-    const response = await fetch('/api/auth/refresh', { method: 'POST' });
+    const response = await fetch('/api/auth/refresh', { method: 'POST', signal });
     const result = await response.json();
     if (!response.ok || !result.data?.accessToken) {
       throw new Error(result.error || 'Gmail 授权已过期，请重新连接。');
@@ -204,7 +271,7 @@ export function AITemplateReplyComposer({
     return result.data.accessToken as string;
   };
 
-  const loadContactHistory = async () => {
+  const loadContactHistory = async (signal?: AbortSignal) => {
     const cacheKey = buildGmailAIHistoryCacheKey({
       accountEmail: auth?.email,
       threadId: thread.id,
@@ -214,10 +281,11 @@ export function AITemplateReplyComposer({
     });
     const loaded = await getOrLoadGmailAIHistory(cacheKey, async () => {
       if (!recipientEmail || !replyTarget) return threadMessages;
-      const accessToken = await getAccessToken();
+      const accessToken = await getAccessToken(signal);
       const response = await fetch('/api/gmail', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
+        signal,
         body: JSON.stringify({
           action: 'contactHistory',
           accessToken,
@@ -260,12 +328,9 @@ export function AITemplateReplyComposer({
     customModelName: settings.customModelName || '',
   });
 
-  const generate = async () => {
+  const generate = () => {
     if (!selectedTemplate || !userIdeas.trim() || settingsLoading) return;
-    generationRef.current?.abort();
     chineseTranslationRef.current?.abort();
-    const controller = new AbortController();
-    generationRef.current = controller;
     const previousContent = replyContent;
     const previousSuggestion = suggestion;
     const previousChineseReply = editedChineseReply;
@@ -273,18 +338,47 @@ export function AITemplateReplyComposer({
     const previousTranslationUpdated = translationUpdated;
     const previousSyncedTargetLang = syncedTargetLang;
     const previousSynchronizedDraft = synchronizedDraft;
-    setLoading(true);
-    setTranslatingChinese(false);
-    setDraftSaved(false);
-    setError('');
+    const senderLabel = String(externalMessage?.from || recipientEmail || '邮件联系人')
+      .replace(/<[^>]+>.*$/, '')
+      .replace(/^"|"$/g, '')
+      .trim() || recipientEmail || '邮件联系人';
+    const taskId = enqueueTask({
+      key: generationTaskKey,
+      kind: 'gmail_template_reply',
+      title: senderLabel,
+      description: 'AI 模板回复',
+      navigation: {
+        view: 'gmail',
+        threadId: thread.id,
+        messageId: replyTarget?.messageId,
+        composerMode: 'template',
+      },
+      initialStage: '等待生成',
+      rollbackResult: {
+        replyContent: previousContent,
+        suggestion: previousSuggestion,
+        editedChineseReply: previousChineseReply,
+        chineseDirty: previousChineseDirty,
+        translationUpdated: previousTranslationUpdated,
+        syncedTargetLang: previousSyncedTargetLang,
+        synchronizedDraft: previousSynchronizedDraft,
+      },
+      run: async ({ signal, report }) => {
+        const controller = { signal };
+        setLoading(true);
+        setTranslatingChinese(false);
+        setDraftSaved(false);
+        setError('');
+        report('正在读取最近邮件上下文');
     setStage('正在读取最近邮件上下文');
 
     try {
-      const history = await loadContactHistory();
+      const history = await loadContactHistory(controller.signal);
       let finalResult: TemplateSuggestion | null = null;
       let streamError = '';
       let streamedBody = '';
       setStage('正在生成外文邮件');
+      report('正在生成外文邮件');
       try {
         const response = await fetch('/api/ai/gmail-reply-stream', {
           method: 'POST',
@@ -304,10 +398,19 @@ export function AITemplateReplyComposer({
             .join('\n');
           if (!dataText) return;
           const event = JSON.parse(dataText) as Record<string, unknown>;
-          if (eventName === 'stage') setStage(String(event.label || '正在生成草稿'));
+          if (eventName === 'stage') {
+            const nextStage = String(event.label || '正在生成草稿');
+            setStage(nextStage);
+            report(nextStage);
+          }
           if (eventName === 'delta') {
             streamedBody += String(event.text || '');
             setReplyContent(streamedBody);
+            report('正在生成外文邮件', {
+              suggestedReply: streamedBody,
+              translatedReply: '',
+              tone: replyTone,
+            } satisfies TemplateSuggestion);
           }
           if (eventName === 'final') finalResult = event as unknown as TemplateSuggestion;
           if (eventName === 'error') streamError = String(event.message || '流式生成失败');
@@ -328,6 +431,7 @@ export function AITemplateReplyComposer({
         if (controller.signal.aborted) return;
         console.warn('[AI template reply stream fallback]', streamFailure);
         setStage('正在生成外文邮件');
+        report('流式生成不可用，正在使用兼容模式');
         const response = await fetch('/api/ai', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
@@ -359,6 +463,13 @@ export function AITemplateReplyComposer({
       setTranslationUpdated(false);
       setSyncedTargetLang(targetLang);
       setTranslationOpen(true);
+      return {
+        suggestion: {
+          ...finalResult,
+          suggestedReply: cleanReply,
+        },
+        targetLang,
+      } satisfies GmailTemplateReplyTaskResult;
     } catch (generationError) {
       if (controller.signal.aborted) return;
       setReplyContent(previousContent);
@@ -369,10 +480,17 @@ export function AITemplateReplyComposer({
       setSyncedTargetLang(previousSyncedTargetLang);
       setSynchronizedDraft(previousSynchronizedDraft);
       setError(generationError instanceof Error ? generationError.message : 'AI 生成失败，请稍后重试。');
+      throw generationError;
     } finally {
-      if (generationRef.current === controller) generationRef.current = null;
       setLoading(false);
       setStage('');
+    }
+      },
+    });
+    if (taskId) {
+      setLoading(true);
+      setError('');
+      setStage('等待生成');
     }
   };
 

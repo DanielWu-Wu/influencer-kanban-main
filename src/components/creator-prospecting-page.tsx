@@ -15,7 +15,7 @@ import {
   Zap,
   Youtube,
 } from 'lucide-react';
-import { toast, Toaster } from 'sonner';
+import { toast } from 'sonner';
 import { InfluencerImportTab } from '@/components/creator-prospecting/influencer-import-tab';
 import { InvitationConfirmTab } from '@/components/creator-prospecting/invitation-confirm-tab';
 import { OutreachEmailTab } from '@/components/creator-prospecting/outreach-email-tab';
@@ -111,6 +111,8 @@ import {
   type OutreachAiContext,
 } from '@/lib/outreach-context';
 import type { GmailAuth } from '@/lib/types';
+import { useEmailGenerationTasks } from '@/components/email-generation-task-provider';
+import { buildOutreachEmailGenerationTaskKey } from '@/lib/email-generation-tasks';
 
 type YouTubeResolveChannel = {
   inputUrl?: string;
@@ -812,10 +814,20 @@ function rememberDeletedProspects(ids: string[]) {
   saveDeletedProspectIds([...loadDeletedProspectIds(), ...ids]);
 }
 
-export function CreatorProspectingPage() {
+export type CreatorProspectingOpenRequest = {
+  prospectId: string;
+  requestId: number;
+};
+
+export function CreatorProspectingPage({
+  openProspectRequest,
+}: {
+  openProspectRequest?: CreatorProspectingOpenRequest;
+}) {
   const { settings } = useSettings();
   const { products } = useProducts();
   const { auth, connect } = useGmailAuth();
+  const { enqueueTask } = useEmailGenerationTasks();
   const [activeTab, setActiveTab] = useState<ProspectingTab>('import');
   const [input, setInput] = useState('');
   const [userPreference, setUserPreference] = useState('');
@@ -882,6 +894,10 @@ export function CreatorProspectingPage() {
   useEffect(() => {
     prospectsRef.current = prospects;
   }, [prospects]);
+
+  useEffect(() => {
+    if (openProspectRequest) setActiveTab('outreach');
+  }, [openProspectRequest]);
 
   useEffect(() => {
     const deletedIds = new Set(loadDeletedProspectIds());
@@ -1424,7 +1440,11 @@ export function CreatorProspectingPage() {
     settings.youtubeDefaultRegion,
   ]);
 
-  const syncFeishuProspect = async (prospect: Prospect, patch: Partial<Prospect> = {}) => {
+  const syncFeishuProspect = async (
+    prospect: Prospect,
+    patch: Partial<Prospect> = {},
+    signal?: AbortSignal,
+  ) => {
     if (!settings.feishuProspectingUrl || !prospect.feishuRecordId) return true;
     const next = { ...prospect, ...patch } as Prospect;
     const fields = buildDevelopmentSyncFields(next, settings.feishuProspectingFieldMapping || {});
@@ -1433,6 +1453,7 @@ export function CreatorProspectingPage() {
       const response = await fetch('/api/feishu/records', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
+        signal,
         body: JSON.stringify({
           action: 'update',
           url: settings.feishuProspectingUrl,
@@ -2967,7 +2988,7 @@ export function CreatorProspectingPage() {
     }
   };
 
-  const handleGenerateOutreach = async (prospect: Prospect) => {
+  const handleGenerateOutreach = (prospect: Prospect) => {
     if (
       !prospect.targetProduct
       || !prospect.cooperationType
@@ -2987,18 +3008,32 @@ export function CreatorProspectingPage() {
       customApiKey: settings.customApiKey,
       customModelName: settings.customModelName,
     };
-    const generateOneShot = async () => {
+    const generateOneShot = async (signal: AbortSignal) => {
       const response = await fetch('/api/ai', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
+        signal,
         body: JSON.stringify(requestBody),
       });
       const result = await response.json();
       if (!response.ok || !result.success) throw new Error(getErrorMessage(result, '开发信生成失败。'));
       return result.data as OutreachDraft;
     };
-    setGeneratingId(prospect.id);
-    updateProspect(prospect.id, {
+    enqueueTask({
+      key: buildOutreachEmailGenerationTaskKey(prospect.id),
+      kind: 'outreach_email',
+      title: prospect.title || '该频道',
+      description: '开发信生成',
+      avatarUrl: prospect.avatarUrl,
+      navigation: {
+        view: 'prospecting',
+        prospectId: prospect.id,
+      },
+      initialStage: '等待生成',
+      run: async ({ signal, report }) => {
+        setGeneratingId(prospect.id);
+        report('正在准备开发信上下文');
+        updateProspect(prospect.id, {
       aiDraft: {
         subject: '',
         body: '',
@@ -3012,12 +3047,13 @@ export function CreatorProspectingPage() {
       outreachGenerationStage: 'preparing',
       generationError: undefined,
       error: undefined,
-    });
-    let streamUiTimeout: number | undefined;
-    try {
+        });
+        let streamUiTimeout: number | undefined;
+        try {
       const response = await fetch('/api/ai/outreach-stream', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
+        signal,
         body: JSON.stringify(requestBody),
       });
       if (!response.ok || !response.body) throw new Error('流式生成暂不可用，正在切换到普通生成。');
@@ -3034,6 +3070,9 @@ export function CreatorProspectingPage() {
       const handleStreamEvent = (event: OutreachStreamEvent) => {
         if (event.event === 'stage' && event.data.stage) {
           updateProspect(prospect.id, { outreachGenerationStage: event.data.stage });
+          report(event.data.stage === 'finalizing'
+            ? '正在整理标题和中文翻译'
+            : '正在生成开发信');
         }
         if (event.event === 'delta') {
           const text = event.data.text || '';
@@ -3060,6 +3099,7 @@ export function CreatorProspectingPage() {
                 missingInfo: [],
               },
             });
+            report('正在生成开发信正文');
           };
           const elapsed = performance.now() - lastStreamUiAt;
           if (elapsed >= 80) {
@@ -3111,16 +3151,22 @@ export function CreatorProspectingPage() {
         generationError: undefined,
         error: undefined,
       });
-      await syncFeishuProspect(prospect, { workflowStatus: 'outreach_generated', aiDraft: draft });
-      toast.success(`已生成 ${prospect.title || '该频道'} 的开发信。`);
+      await syncFeishuProspect(
+        prospect,
+        { workflowStatus: 'outreach_generated', aiDraft: draft },
+        signal,
+      );
+      return { prospectId: prospect.id, draft };
     } catch (error) {
       if (streamUiTimeout) {
         window.clearTimeout(streamUiTimeout);
         streamUiTimeout = undefined;
       }
+      if (signal.aborted) return undefined;
       try {
         updateProspect(prospect.id, { outreachGenerationStage: 'finalizing' });
-        const generatedDraft = await generateOneShot();
+        report('流式生成不可用，正在使用兼容模式');
+        const generatedDraft = await generateOneShot(signal);
         const draft: OutreachDraft = {
           ...generatedDraft,
           body: stripConfiguredEmailSignature(
@@ -3136,9 +3182,14 @@ export function CreatorProspectingPage() {
           generationError: undefined,
           error: undefined,
         });
-        await syncFeishuProspect(prospect, { workflowStatus: 'outreach_generated', aiDraft: draft });
-        toast.success(`已生成 ${prospect.title || '该频道'} 的开发信。`);
+        await syncFeishuProspect(
+          prospect,
+          { workflowStatus: 'outreach_generated', aiDraft: draft },
+          signal,
+        );
+        return { prospectId: prospect.id, draft };
       } catch (fallbackError) {
+        if (signal.aborted) return undefined;
         const message = fallbackError instanceof Error
           ? fallbackError.message
           : error instanceof Error
@@ -3149,11 +3200,13 @@ export function CreatorProspectingPage() {
           generationError: message,
           error: message,
         });
-        toast.error(message);
+        throw fallbackError;
       }
     } finally {
-      setGeneratingId(null);
+      setGeneratingId((current) => current === prospect.id ? null : current);
     }
+      },
+    });
   };
 
   const handleRegenerateOutreachPart = async (prospect: Prospect, part: 'subject' | 'body') => {
@@ -3450,7 +3503,6 @@ export function CreatorProspectingPage() {
 
   return (
     <div className="flex h-full min-h-0 flex-col overflow-hidden">
-      <Toaster richColors position="top-center" />
       <header className="material-toolbar flex flex-wrap items-start justify-between gap-4 border-b border-border/55 px-4 py-3">
         <div className="flex items-center gap-3">
           <div className="flex h-10 w-10 items-center justify-center rounded-[10px] border border-red-100/80 bg-red-50/85 text-red-600 shadow-sm">
@@ -3659,6 +3711,7 @@ export function CreatorProspectingPage() {
             onPatch={updateProspect}
             onEmailChange={updateProspectEmail}
             onGenerate={handleGenerateOutreach}
+            openProspectRequest={openProspectRequest}
             onRegeneratePart={handleRegenerateOutreachPart}
             onTranslateChinese={handleTranslateEditedOutreach}
             onSaveDraft={handleSaveGmailDraft}

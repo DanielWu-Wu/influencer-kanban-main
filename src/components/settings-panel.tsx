@@ -32,6 +32,7 @@ import {
   type AIConfigValidation,
   type AIProviderPresetId,
 } from '@/lib/ai-provider-config';
+import { APP_RELEASES, CURRENT_APP_RELEASE } from '@/lib/app-release';
 import {
   Settings, Mail, Zap,
   CheckCircle2, AlertTriangle,
@@ -804,7 +805,7 @@ export function SettingsPanel() {
                   </div>
                   <div>
                     <CardTitle className="text-base">关于红人推广看板</CardTitle>
-                    <CardDescription className="mt-0.5 text-xs">版本信息和功能预告</CardDescription>
+                    <CardDescription className="mt-0.5 text-xs">版本信息和更新记录</CardDescription>
                   </div>
                 </div>
                 <div className="flex items-center gap-2">
@@ -829,7 +830,7 @@ export function SettingsPanel() {
               <div className="space-y-2 text-sm">
                 <div className="flex justify-between">
                   <span className="text-muted-foreground">版本</span>
-                  <span>1.0.0</span>
+                  <span>{CURRENT_APP_RELEASE.version}</span>
                 </div>
                 <div className="flex justify-between">
                   <span className="text-muted-foreground">技术栈</span>
@@ -839,18 +840,31 @@ export function SettingsPanel() {
 
               <Separator />
 
-              <div className="space-y-2 rounded-lg border border-white/65 bg-white/55 p-3">
+              <div className="space-y-4">
                 <h4 className="flex items-center gap-1.5 text-xs font-medium text-foreground">
                   <Zap className="w-3.5 h-3.5 text-primary" />
-                  已完成功能
+                  版本更新记录
                 </h4>
-                <ul className="space-y-1 text-xs text-muted-foreground">
-                  <li>Gmail 邮件集成</li>
-                  <li>AI 辅助写邮件（自定义 API）</li>
-                  <li>邮件翻译功能</li>
-                  <li>飞书多维表格内嵌</li>
-                  <li>提示词自定义管理</li>
-                </ul>
+                {APP_RELEASES.map((release) => (
+                  <section key={release.version} className="border-t border-border/55 pt-3 first:border-t-0 first:pt-0">
+                    <div className="flex flex-wrap items-baseline justify-between gap-x-3 gap-y-1">
+                      <h5 className="text-sm font-medium text-foreground">
+                        {release.version} · {release.title}
+                      </h5>
+                      <time className="text-xs tabular-nums text-muted-foreground" dateTime={release.releasedAt}>
+                        {release.releasedAt}
+                      </time>
+                    </div>
+                    <ul className="mt-2 space-y-1.5">
+                      {release.highlights.map((highlight) => (
+                        <li key={highlight} className="flex gap-2 text-xs leading-5 text-muted-foreground">
+                          <span className="mt-2 h-1.5 w-1.5 shrink-0 rounded-full bg-primary" aria-hidden="true" />
+                          <span>{highlight}</span>
+                        </li>
+                      ))}
+                    </ul>
+                  </section>
+                ))}
               </div>
             </CardContent>
           )}

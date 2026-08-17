@@ -56,6 +56,8 @@ import { GmailThread } from '@/lib/types';
 import { RichEmailEditor } from './rich-email-editor';
 import { useDelayedEmailSender } from './delayed-email-provider';
 import { useRecordAssistant } from './record-assistant-provider';
+import { useEmailGenerationTasks } from './email-generation-task-provider';
+import { buildGmailEmailGenerationTaskKey } from '@/lib/email-generation-tasks';
 
 interface EmailComposerProps {
   thread: GmailThread;
@@ -98,6 +100,13 @@ type TranslatedDraftResult = {
 };
 
 type ReplyTone = AISuggestion['tone'];
+
+type GmailAIReplyTaskResult = {
+  suggestion: AISuggestion;
+  targetLang: string;
+  targetLangName: string;
+  usedAnalysis: boolean;
+};
 
 const LANGUAGE_OPTIONS = [
   ['en', '英语'],
@@ -172,6 +181,7 @@ export function EmailComposer({
   const { settings, loading: settingsLoading } = useSettings();
   const { scheduleEmail } = useDelayedEmailSender();
   const { captureEvent } = useRecordAssistant();
+  const { enqueueTask, getLatestTaskByKey } = useEmailGenerationTasks();
   const [replyContent, setReplyContent] = useState(initialMessage || '');
   const [userIdeas, setUserIdeas] = useState('');
   const [analysis, setAnalysis] = useState<CollaborationAnalysis | null>(null);
@@ -207,7 +217,7 @@ export function EmailComposer({
   const analysisRunRef = useRef(0);
   const generationRunRef = useRef(0);
   const optimizationRunRef = useRef(0);
-  const generationControllerRef = useRef<AbortController | null>(null);
+  const appliedGenerationTaskRef = useRef('');
   const targetLangLockedRef = useRef(false);
   const targetContextKeyRef = useRef('');
 
@@ -219,6 +229,12 @@ export function EmailComposer({
   const externalMessage = replyTarget?.message;
   const recipientEmail = replyTarget?.recipientEmail || '';
   const targetContextKey = `${thread.id}:${replyTarget?.messageId || ''}`;
+  const generationTaskKey = buildGmailEmailGenerationTaskKey({
+    kind: 'gmail_ai_reply',
+    threadId: thread.id,
+    messageId: replyTarget?.messageId,
+  });
+  const generationTask = getLatestTaskByKey(generationTaskKey);
   const bilingualDraftTranslationCurrent = isGmailBilingualDraftTranslationCurrent({
     snapshot: synchronizedDraft,
     chineseBody: editedChineseReply,
@@ -253,10 +269,12 @@ export function EmailComposer({
   const invokeAI = async (
     payload: Record<string, unknown>,
     messages: GmailAIHistoryMessage[] = historyMessages.length ? historyMessages : threadMessages,
+    signal?: AbortSignal,
   ) => {
     const response = await fetch('/api/ai', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
+      signal,
       body: JSON.stringify({
         ...payload,
         threadSubject: replyTarget?.subject || thread.subject,
@@ -338,10 +356,63 @@ export function EmailComposer({
 
   useEffect(() => () => {
     analysisRunRef.current += 1;
-    generationRunRef.current += 1;
     optimizationRunRef.current += 1;
-    generationControllerRef.current?.abort();
   }, [thread.id]);
+
+  useEffect(() => {
+    if (!generationTask) return;
+    if (generationTask.status === 'queued' || generationTask.status === 'running') {
+      setAiLoading(true);
+      setAiError('');
+      setGenerationStage(generationTask.stage);
+      const partial = generationTask.partialResult as AISuggestion | undefined;
+      if (partial?.suggestedReply) {
+        setReplyContent(partial.suggestedReply);
+        setSuggestion(partial);
+        if (partial.translatedReply) {
+          setEditedChineseReply(partial.translatedReply);
+          setTranslationExpanded(true);
+        }
+      }
+      return;
+    }
+    if (appliedGenerationTaskRef.current === generationTask.id) return;
+    appliedGenerationTaskRef.current = generationTask.id;
+    setAiLoading(false);
+    setGenerationStage('');
+
+    if (generationTask.status === 'failed') {
+      const rollback = generationTask.rollbackResult as {
+        suggestion?: AISuggestion | null;
+        replyContent?: string;
+      } | undefined;
+      setSuggestion(rollback?.suggestion || null);
+      setReplyContent(rollback?.replyContent || '');
+      setAiError(generationTask.error || 'AI 生成失败，请稍后重试');
+      return;
+    }
+    if (generationTask.status !== 'completed') return;
+    const result = generationTask.result as GmailAIReplyTaskResult | undefined;
+    if (!result?.suggestion?.suggestedReply) return;
+    const completedSuggestion = result.suggestion;
+    targetLangLockedRef.current = true;
+    setTargetLang(result.targetLang);
+    setTargetLangName(result.targetLangName);
+    setSuggestion(completedSuggestion);
+    setReplyContent(completedSuggestion.suggestedReply);
+    setEditedChineseReply(completedSuggestion.translatedReply);
+    setTranslationExpanded(true);
+    setTranslationEditing(false);
+    setTranslationUpdated(false);
+    setSynchronizedDraft(completedSuggestion.translatedReply.trim() ? {
+      foreignBody: completedSuggestion.suggestedReply,
+      chineseBody: completedSuggestion.translatedReply,
+      targetLanguage: result.targetLang,
+    } : null);
+    setDraftUsedAnalysis(result.usedAnalysis);
+    setGeneratedLangName(result.targetLangName);
+    setAiError('');
+  }, [generationTask]);
 
   const translateDraftToChinese = async (
     text: string,
@@ -421,7 +492,7 @@ export function EmailComposer({
     return translatedText.trim();
   };
 
-  const generateReply = async () => {
+  const generateReply = () => {
     if (!userIdeas.trim()) return;
     const generationMessages = historyMessages.length ? historyMessages : threadMessages;
     if (generationMessages.length === 0) {
@@ -431,15 +502,35 @@ export function EmailComposer({
     targetLangLockedRef.current = true;
     const previousSuggestion = suggestion;
     const previousReplyContent = replyContent;
-    generationControllerRef.current?.abort();
-    const controller = new AbortController();
-    generationControllerRef.current = controller;
-    const runId = generationRunRef.current + 1;
-    generationRunRef.current = runId;
-    setAiLoading(true);
-    setAiError('');
-    setOptimizedSuggestion(null);
-    setOptimizationError('');
+    const senderLabel = String(externalMessage?.from || recipientEmail || '邮件联系人')
+      .replace(/<[^>]+>.*$/, '')
+      .replace(/^"|"$/g, '')
+      .trim() || recipientEmail || '邮件联系人';
+    const taskId = enqueueTask({
+      key: generationTaskKey,
+      kind: 'gmail_ai_reply',
+      title: senderLabel,
+      description: 'AI 辅助回复',
+      navigation: {
+        view: 'gmail',
+        threadId: thread.id,
+        messageId: replyTarget?.messageId,
+        composerMode: 'ai',
+      },
+      initialStage: '等待生成',
+      rollbackResult: {
+        suggestion: previousSuggestion,
+        replyContent: previousReplyContent,
+      },
+      run: async ({ signal, report }) => {
+        const controller = { signal };
+        const runId = generationRunRef.current + 1;
+        generationRunRef.current = runId;
+        setAiLoading(true);
+        setAiError('');
+        setOptimizedSuggestion(null);
+        setOptimizationError('');
+        report('正在准备邮件上下文');
     setGenerationStage('正在准备邮件上下文');
 
     try {
@@ -467,6 +558,12 @@ export function EmailComposer({
           tone: replyTone,
           keyPoints: [],
         });
+        report('正在生成回复正文', {
+          suggestedReply: visibleBody,
+          translatedReply: pendingTranslation,
+          tone: replyTone,
+          keyPoints: [],
+        } satisfies AISuggestion);
       };
 
       const queueStreamUiFlush = () => {
@@ -520,7 +617,9 @@ export function EmailComposer({
             if (event.stage === 'finalizing' && streamedBody.trim()) {
               streamedBodyComplete = true;
             }
-            setGenerationStage(String(event.label || '正在生成草稿'));
+            const nextStage = String(event.label || '正在生成草稿');
+            setGenerationStage(nextStage);
+            report(nextStage);
             return;
           }
           if (eventName === 'delta') {
@@ -582,6 +681,7 @@ export function EmailComposer({
           pendingBody = streamedBody.trim();
           pendingTranslation = '';
           setGenerationStage('正文已生成，正在单独补充中文对照');
+          report('正文已生成，正在补充中文对照');
           flushStreamUi();
           try {
             const translatedReply = await translateDraftToChinese(
@@ -615,6 +715,7 @@ export function EmailComposer({
           }
         } else {
           setGenerationStage('流式生成不可用，正在使用兼容模式');
+          report('流式生成不可用，正在使用兼容模式');
           finalResult = await invokeAI({
             action: 'draft',
             analysis: analysis || {},
@@ -622,7 +723,7 @@ export function EmailComposer({
             targetLang,
             targetLangName,
             replyTone,
-          }, generationMessages) as AISuggestion;
+          }, generationMessages, controller.signal) as AISuggestion;
           console.info('[Gmail AI client draft timing]', {
             mode: 'fallback',
             totalMs: Math.round(performance.now() - startedAt),
@@ -659,6 +760,12 @@ export function EmailComposer({
         keyPoints: result.keyPoints || [],
         status: 'pending',
       });
+      return {
+        suggestion: cleanSuggestion,
+        targetLang,
+        targetLangName,
+        usedAnalysis: Boolean(analysis),
+      } satisfies GmailAIReplyTaskResult;
     } catch (error) {
       if (controller.signal.aborted || runId !== generationRunRef.current) return;
       setSuggestion(previousSuggestion);
@@ -668,14 +775,19 @@ export function EmailComposer({
         setGeneratedLangName(targetLangName);
       }
       setAiError(error instanceof Error ? error.message : 'AI 生成失败，请稍后重试');
+      throw error;
     } finally {
       if (runId === generationRunRef.current) {
         setAiLoading(false);
         setGenerationStage('');
       }
-      if (generationControllerRef.current === controller) {
-        generationControllerRef.current = null;
-      }
+    }
+      },
+    });
+    if (taskId) {
+      setAiLoading(true);
+      setAiError('');
+      setGenerationStage('等待生成');
     }
   };
 

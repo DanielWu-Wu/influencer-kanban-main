@@ -8,6 +8,8 @@ import { RecordAssistantProvider } from '@/components/record-assistant-provider'
 import { UserDataProvider } from '@/components/user-data-provider';
 import { Toaster } from '@/components/ui/sonner';
 import { SettingsProvider } from '@/components/settings-provider';
+import { EmailGenerationTaskProvider } from '@/components/email-generation-task-provider';
+import { EMAIL_GENERATION_TOASTER_ID } from '@/lib/email-generation-tasks';
 
 export const metadata: Metadata = {
   title: {
@@ -51,15 +53,18 @@ export default function RootLayout({
           <GmailAuthProvider>
             <SettingsProvider>
               <UserDataProvider>
-                <DelayedEmailProvider>
-                  <FollowUpDraftProvider>
-                    <RecordAssistantProvider>{children}</RecordAssistantProvider>
-                  </FollowUpDraftProvider>
-                </DelayedEmailProvider>
+                <EmailGenerationTaskProvider>
+                  <DelayedEmailProvider>
+                    <FollowUpDraftProvider>
+                      <RecordAssistantProvider>{children}</RecordAssistantProvider>
+                    </FollowUpDraftProvider>
+                  </DelayedEmailProvider>
+                </EmailGenerationTaskProvider>
               </UserDataProvider>
             </SettingsProvider>
           </GmailAuthProvider>
           <Toaster richColors position="top-center" />
+          <Toaster id={EMAIL_GENERATION_TOASTER_ID} richColors position="top-center" />
         </AuthProvider>
       </body>
     </html>
