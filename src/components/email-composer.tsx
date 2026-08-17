@@ -67,6 +67,7 @@ interface EmailComposerProps {
   onClose: () => void;
   initialMessage?: string;
   onDraftSaved?: (content: string) => void;
+  autoRetryRequest?: { taskId: string; retryInput?: unknown };
 }
 
 type CollaborationAnalysis = {
@@ -174,6 +175,7 @@ export function EmailComposer({
   onClose,
   initialMessage,
   onDraftSaved,
+  autoRetryRequest,
 }: EmailComposerProps) {
   const { addSuggestion } = useEmailAISuggestions();
   const { addDraft } = useEmailDrafts();
@@ -219,6 +221,8 @@ export function EmailComposer({
   const optimizationRunRef = useRef(0);
   const appliedGenerationTaskRef = useRef('');
   const targetLangLockedRef = useRef(false);
+  const replyContentManuallyEditedRef = useRef(false);
+  const handledAutoRetryTaskRef = useRef('');
   const targetContextKeyRef = useRef('');
 
   const threadMessages = useMemo(() => buildGmailAIThreadMessages(
@@ -381,19 +385,39 @@ export function EmailComposer({
     setAiLoading(false);
     setGenerationStage('');
 
-    if (generationTask.status === 'failed') {
+    if (generationTask.status === 'failed' || generationTask.status === 'interrupted') {
+      if (generationTask.status === 'interrupted') {
+        const retryInput = generationTask.retryInput as {
+          userIdeas?: string;
+          targetLang?: string;
+          targetLangName?: string;
+          replyTone?: ReplyTone;
+        } | undefined;
+        setUserIdeas((current) => current.trim() ? current : retryInput?.userIdeas || '');
+        if (!targetLangLockedRef.current && retryInput?.targetLang) {
+          setTargetLang(retryInput.targetLang);
+          setTargetLangName(retryInput.targetLangName || retryInput.targetLang);
+        }
+        if (retryInput?.replyTone) setReplyTone(retryInput.replyTone);
+      }
       const rollback = generationTask.rollbackResult as {
         suggestion?: AISuggestion | null;
         replyContent?: string;
       } | undefined;
-      setSuggestion(rollback?.suggestion || null);
-      setReplyContent(rollback?.replyContent || '');
-      setAiError(generationTask.error || 'AI 生成失败，请稍后重试');
+      if (!replyContentManuallyEditedRef.current && !initialMessage?.trim()) {
+        setSuggestion(rollback?.suggestion || null);
+        setReplyContent(rollback?.replyContent || '');
+      }
+      setAiError(generationTask.error || '任务已中断，请重新点击生成。');
       return;
     }
     if (generationTask.status !== 'completed') return;
     const result = generationTask.result as GmailAIReplyTaskResult | undefined;
     if (!result?.suggestion?.suggestedReply) return;
+    if (replyContentManuallyEditedRef.current || initialMessage?.trim()) {
+      setAiError('生成结果已保存在邮件生成进度中；当前人工编辑内容未被覆盖。');
+      return;
+    }
     const completedSuggestion = result.suggestion;
     targetLangLockedRef.current = true;
     setTargetLang(result.targetLang);
@@ -412,7 +436,7 @@ export function EmailComposer({
     setDraftUsedAnalysis(result.usedAnalysis);
     setGeneratedLangName(result.targetLangName);
     setAiError('');
-  }, [generationTask]);
+  }, [generationTask, initialMessage]);
 
   const translateDraftToChinese = async (
     text: string,
@@ -521,6 +545,12 @@ export function EmailComposer({
       rollbackResult: {
         suggestion: previousSuggestion,
         replyContent: previousReplyContent,
+      },
+      retryInput: {
+        userIdeas: userIdeas.trim(),
+        targetLang,
+        targetLangName,
+        replyTone,
       },
       run: async ({ signal, report }) => {
         const controller = { signal };
@@ -790,6 +820,31 @@ export function EmailComposer({
       setGenerationStage('等待生成');
     }
   };
+
+  useEffect(() => {
+    if (!autoRetryRequest || handledAutoRetryTaskRef.current === autoRetryRequest.taskId) return;
+    const retryInput = autoRetryRequest.retryInput as {
+      userIdeas?: string;
+      targetLang?: string;
+      targetLangName?: string;
+      replyTone?: ReplyTone;
+    } | undefined;
+    if (!retryInput?.userIdeas?.trim()) return;
+    if (!userIdeas.trim()) {
+      setUserIdeas(retryInput.userIdeas);
+      if (retryInput.targetLang) {
+        setTargetLang(retryInput.targetLang);
+        setTargetLangName(retryInput.targetLangName || retryInput.targetLang);
+      }
+      if (retryInput.replyTone) setReplyTone(retryInput.replyTone);
+      return;
+    }
+    if (settingsLoading || aiLoading) return;
+    handledAutoRetryTaskRef.current = autoRetryRequest.taskId;
+    generateReply();
+    // The task id guard makes this a single, explicit retry after navigation.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [aiLoading, autoRetryRequest, settingsLoading, userIdeas]);
 
   const optimizeReplyWithPortrait = async () => {
     if (!analysis || !suggestion || optimizationLoading || aiLoading) return;
@@ -1517,6 +1572,7 @@ export function EmailComposer({
             <RichEmailEditor
               value={replyContent}
               onChange={(value) => {
+                replyContentManuallyEditedRef.current = true;
                 setReplyContent(value);
                 setTranslationUpdated(false);
               }}

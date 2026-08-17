@@ -124,12 +124,14 @@ export function AITemplateReplyComposer({
   onMinimize,
   onClose,
   onDraftSaved,
+  autoRetryRequest,
 }: {
   thread: GmailThread;
   replyTarget: GmailReplyTarget | null;
   onMinimize?: () => void;
   onClose: () => void;
   onDraftSaved?: (content: string) => void;
+  autoRetryRequest?: { taskId: string; retryInput?: unknown };
 }) {
   const { templates, addTemplate, updateTemplate, deleteTemplate } = useEmailTemplates();
   const { addDraft } = useEmailDrafts();
@@ -164,6 +166,9 @@ export function AITemplateReplyComposer({
   const factEditorTextareaRef = useRef<HTMLTextAreaElement | null>(null);
   const appliedGenerationTaskRef = useRef('');
   const chineseTranslationRef = useRef<AbortController | null>(null);
+  const replyContentManuallyEditedRef = useRef(false);
+  const restoringTaskSettingsRef = useRef(false);
+  const handledAutoRetryTaskRef = useRef('');
 
   const threadMessages = useMemo(() => buildThreadMessages(thread, replyTarget), [replyTarget, thread]);
   const externalMessage = replyTarget?.message;
@@ -189,7 +194,12 @@ export function AITemplateReplyComposer({
   }, [externalMessage?.body, thread.id]);
 
   useEffect(() => {
-    if (selectedTemplate) setReplyTone(selectedTemplate.defaultTone);
+    if (!selectedTemplate) return;
+    if (restoringTaskSettingsRef.current) {
+      restoringTaskSettingsRef.current = false;
+      return;
+    }
+    setReplyTone(selectedTemplate.defaultTone);
   }, [selectedTemplate]);
 
   useEffect(() => {
@@ -220,7 +230,22 @@ export function AITemplateReplyComposer({
     setLoading(false);
     setStage('');
 
-    if (generationTask.status === 'failed') {
+    if (generationTask.status === 'failed' || generationTask.status === 'interrupted') {
+      if (generationTask.status === 'interrupted') {
+        const retryInput = generationTask.retryInput as {
+          selectedTemplateId?: string;
+          userIdeas?: string;
+          targetLang?: string;
+          replyTone?: ReplyTone;
+        } | undefined;
+        setUserIdeas((current) => current.trim() ? current : retryInput?.userIdeas || '');
+        if (retryInput?.selectedTemplateId && retryInput.selectedTemplateId !== selectedTemplateId) {
+          restoringTaskSettingsRef.current = true;
+          setSelectedTemplateId(retryInput.selectedTemplateId);
+        }
+        if (retryInput?.targetLang) setTargetLang(retryInput.targetLang);
+        if (retryInput?.replyTone) setReplyTone(retryInput.replyTone);
+      }
       const rollback = generationTask.rollbackResult as {
         replyContent?: string;
         suggestion?: TemplateSuggestion | null;
@@ -230,19 +255,25 @@ export function AITemplateReplyComposer({
         syncedTargetLang?: string;
         synchronizedDraft?: GmailBilingualDraftSnapshot | null;
       } | undefined;
-      setReplyContent(rollback?.replyContent || '');
-      setSuggestion(rollback?.suggestion || null);
-      setEditedChineseReply(rollback?.editedChineseReply || '');
-      setChineseDirty(Boolean(rollback?.chineseDirty));
-      setTranslationUpdated(Boolean(rollback?.translationUpdated));
-      setSyncedTargetLang(rollback?.syncedTargetLang || '');
-      setSynchronizedDraft(rollback?.synchronizedDraft || null);
-      setError(generationTask.error || 'AI 生成失败，请稍后重试。');
+      if (!replyContentManuallyEditedRef.current) {
+        setReplyContent(rollback?.replyContent || '');
+        setSuggestion(rollback?.suggestion || null);
+        setEditedChineseReply(rollback?.editedChineseReply || '');
+        setChineseDirty(Boolean(rollback?.chineseDirty));
+        setTranslationUpdated(Boolean(rollback?.translationUpdated));
+        setSyncedTargetLang(rollback?.syncedTargetLang || '');
+        setSynchronizedDraft(rollback?.synchronizedDraft || null);
+      }
+      setError(generationTask.error || '任务已中断，请重新点击生成。');
       return;
     }
     if (generationTask.status !== 'completed') return;
     const result = generationTask.result as GmailTemplateReplyTaskResult | undefined;
     if (!result?.suggestion?.suggestedReply) return;
+    if (replyContentManuallyEditedRef.current) {
+      setError('生成结果已保存在邮件生成进度中；当前人工编辑内容未被覆盖。');
+      return;
+    }
     setTargetLang(result.targetLang);
     setSuggestion(result.suggestion);
     setReplyContent(result.suggestion.suggestedReply);
@@ -257,7 +288,7 @@ export function AITemplateReplyComposer({
     setSyncedTargetLang(result.targetLang);
     setTranslationOpen(true);
     setError('');
-  }, [generationTask]);
+  }, [generationTask, selectedTemplateId]);
 
   const getAccessToken = async (signal?: AbortSignal) => {
     if (!auth?.accessToken) throw new Error('请先连接 Gmail。');
@@ -362,6 +393,12 @@ export function AITemplateReplyComposer({
         translationUpdated: previousTranslationUpdated,
         syncedTargetLang: previousSyncedTargetLang,
         synchronizedDraft: previousSynchronizedDraft,
+      },
+      retryInput: {
+        selectedTemplateId: selectedTemplate.id,
+        userIdeas: userIdeas.trim(),
+        targetLang,
+        replyTone,
       },
       run: async ({ signal, report }) => {
         const controller = { signal };
@@ -493,6 +530,32 @@ export function AITemplateReplyComposer({
       setStage('等待生成');
     }
   };
+
+  useEffect(() => {
+    if (!autoRetryRequest || handledAutoRetryTaskRef.current === autoRetryRequest.taskId) return;
+    const retryInput = autoRetryRequest.retryInput as {
+      selectedTemplateId?: string;
+      userIdeas?: string;
+      targetLang?: string;
+      replyTone?: ReplyTone;
+    } | undefined;
+    if (!retryInput?.userIdeas?.trim()) return;
+    if (!userIdeas.trim()) {
+      setUserIdeas(retryInput.userIdeas);
+      if (retryInput.selectedTemplateId && retryInput.selectedTemplateId !== selectedTemplateId) {
+        restoringTaskSettingsRef.current = true;
+        setSelectedTemplateId(retryInput.selectedTemplateId);
+      }
+      if (retryInput.targetLang) setTargetLang(retryInput.targetLang);
+      if (retryInput.replyTone) setReplyTone(retryInput.replyTone);
+      return;
+    }
+    if (settingsLoading || loading || !selectedTemplate) return;
+    handledAutoRetryTaskRef.current = autoRetryRequest.taskId;
+    generate();
+    // The task id guard makes this a single, explicit retry after navigation.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [autoRetryRequest, loading, selectedTemplate, selectedTemplateId, settingsLoading, userIdeas]);
 
   const updateDraftFromChinese = async () => {
     const confirmedChineseReply = editedChineseReply.trim();
@@ -758,6 +821,7 @@ export function AITemplateReplyComposer({
               <RichEmailEditor
                 value={replyContent}
                 onChange={(value) => {
+                  replyContentManuallyEditedRef.current = true;
                   setReplyContent(value);
                   setDraftSaved(false);
                 }}

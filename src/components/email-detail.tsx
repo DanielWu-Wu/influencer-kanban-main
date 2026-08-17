@@ -1829,6 +1829,9 @@ export function EmailDetail({
                   onMinimize={() => setComposerState('minimized')}
                   onClose={() => setComposerState('closed')}
                   onDraftSaved={setSavedReplyDraft}
+                  autoRetryRequest={openComposerRequest?.retryRequested && openComposerRequest.taskId
+                    ? { taskId: openComposerRequest.taskId, retryInput: openComposerRequest.retryInput }
+                    : undefined}
                 />
               ) : (
                 <EmailComposer
@@ -1840,6 +1843,9 @@ export function EmailDetail({
                   onClose={() => setComposerState('closed')}
                   initialMessage={replyMode === 'compose' ? savedReplyDraft : undefined}
                   onDraftSaved={setSavedReplyDraft}
+                  autoRetryRequest={openComposerRequest?.retryRequested && openComposerRequest.taskId
+                    ? { taskId: openComposerRequest.taskId, retryInput: openComposerRequest.retryInput }
+                    : undefined}
                 />
               )}
             </div>

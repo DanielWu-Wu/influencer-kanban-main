@@ -48,6 +48,8 @@ export type GmailThreadOpenRequest = {
   threadId: string;
   requestId: number;
   taskId?: string;
+  retryRequested?: boolean;
+  retryInput?: unknown;
   messageId?: string;
   composerMode?: 'ai' | 'template';
 };

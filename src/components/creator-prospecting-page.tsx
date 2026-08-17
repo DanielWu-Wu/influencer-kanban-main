@@ -817,6 +817,7 @@ function rememberDeletedProspects(ids: string[]) {
 export type CreatorProspectingOpenRequest = {
   prospectId: string;
   requestId: number;
+  retryRequested?: boolean;
 };
 
 export function CreatorProspectingPage({
@@ -827,7 +828,7 @@ export function CreatorProspectingPage({
   const { settings } = useSettings();
   const { products } = useProducts();
   const { auth, connect } = useGmailAuth();
-  const { enqueueTask } = useEmailGenerationTasks();
+  const { enqueueTask, getLatestTaskByKey } = useEmailGenerationTasks();
   const [activeTab, setActiveTab] = useState<ProspectingTab>('import');
   const [input, setInput] = useState('');
   const [userPreference, setUserPreference] = useState('');
@@ -1022,6 +1023,40 @@ export function CreatorProspectingPage({
       item.id === id ? { ...item, ...patch, updatedAt: new Date().toISOString() } : item
     )));
   };
+
+  useEffect(() => {
+    const prospectId = openProspectRequest?.prospectId;
+    if (!prospectId || openProspectRequest.retryRequested) return;
+    const task = getLatestTaskByKey(buildOutreachEmailGenerationTaskKey(prospectId));
+    if (!task) return;
+    const prospect = prospectsRef.current.find((item) => item.id === prospectId);
+    if (!prospect) return;
+    if (task.status === 'completed') {
+      const result = task.result as { prospectId?: string; draft?: OutreachDraft } | undefined;
+      if (
+        result?.prospectId === prospectId
+        && result.draft
+        && prospect.workflowStatus !== 'outreach_generated'
+      ) {
+        updateProspect(prospectId, {
+          aiDraft: result.draft,
+          workflowStatus: 'outreach_generated',
+          outreachGenerationStage: 'completed',
+          streamingBody: undefined,
+          generationError: undefined,
+          error: undefined,
+        });
+      }
+      return;
+    }
+    if (task.status === 'interrupted' && prospect.workflowStatus !== 'outreach_generated') {
+      updateProspect(prospectId, {
+        outreachGenerationStage: 'error',
+        generationError: '任务已中断，请重新点击生成。',
+        error: '任务已中断，请重新点击生成。',
+      });
+    }
+  }, [getLatestTaskByKey, loaded, openProspectRequest, prospects.length]);
 
   const updateProspectEmail = (id: string, value: string) => {
     setProspects((current) => current.map((item) => (

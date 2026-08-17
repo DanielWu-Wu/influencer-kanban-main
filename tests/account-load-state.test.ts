@@ -1,26 +1,12 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import {
-  ACCOUNT_BACKGROUND_CHECK_INTERVAL_MS,
   classifyAccountFailure,
   classifyAuthVerificationError,
   isTransientAccountStatus,
   shouldPreserveLastAccount,
-  shouldRunAccountBackgroundCheck,
+  shouldRefreshAccountSession,
 } from '../src/lib/account-load-state';
-
-test('账号后台检查每 30 分钟最多执行一次', () => {
-  const lastCheckedAt = 1_000;
-  assert.equal(ACCOUNT_BACKGROUND_CHECK_INTERVAL_MS, 30 * 60 * 1000);
-  assert.equal(
-    shouldRunAccountBackgroundCheck(lastCheckedAt, lastCheckedAt + ACCOUNT_BACKGROUND_CHECK_INTERVAL_MS - 1),
-    false,
-  );
-  assert.equal(
-    shouldRunAccountBackgroundCheck(lastCheckedAt, lastCheckedAt + ACCOUNT_BACKGROUND_CHECK_INTERVAL_MS),
-    true,
-  );
-});
 
 test('账号失败状态区分明确权限拒绝和临时服务异常', () => {
   assert.equal(classifyAccountFailure(401), 'invalid');
@@ -47,6 +33,13 @@ test('令牌校验未知错误按服务异常处理，只有明确客户端错�
   assert.equal(classifyAuthVerificationError(500), 'unavailable');
   assert.equal(classifyAuthVerificationError(401), 'invalid');
   assert.equal(classifyAuthVerificationError(403), 'invalid');
+});
+
+test('只有会话确实失效时刷新令牌，账号停用和临时网络错误不会触发刷新循环', () => {
+  assert.equal(shouldRefreshAccountSession('invalid', 'SESSION_INVALID'), true);
+  assert.equal(shouldRefreshAccountSession('invalid', 'ACCOUNT_DISABLED'), false);
+  assert.equal(shouldRefreshAccountSession('invalid', 'ACCOUNT_NOT_PROVISIONED'), false);
+  assert.equal(shouldRefreshAccountSession('unavailable', 'ACCOUNT_SERVICE_UNAVAILABLE'), false);
 });
 
 test('只在同一账号发生临时异常时保留上一次已确认资料', () => {

@@ -9,6 +9,15 @@ export const APP_RELEASE_LAST_SEEN_STORAGE_KEY = 'influencer-board-last-seen-rel
 
 export const APP_RELEASES: readonly AppRelease[] = [
   {
+    version: '1.1.1',
+    releasedAt: '2026-08-17',
+    title: '用户使用体验优化',
+    highlights: [
+      '账号后台保持长时间登录',
+      '开发信生成记录保存从浏览器缓存改为云端',
+    ],
+  },
+  {
     version: '1.1.0',
     releasedAt: '2026-08-15',
     title: '邮件处理体验更新',

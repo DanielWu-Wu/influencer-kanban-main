@@ -1,7 +1,7 @@
 'use client';
 
 import { createContext, Fragment, useCallback, useContext, useEffect, useMemo, useRef, useState } from 'react';
-import type { Session, User } from '@supabase/supabase-js';
+import type { Session, SupabaseClient, User } from '@supabase/supabase-js';
 import { getSupabaseBrowserClient, getSupabaseConfig } from '@/lib/supabase/client';
 import type {
   AccountErrorCode,
@@ -11,10 +11,10 @@ import type {
 } from '@/lib/account-types';
 import { setAccountCacheScope } from '@/lib/account-cache-scope';
 import {
-  ACCOUNT_BACKGROUND_CHECK_INTERVAL_MS,
   classifyAccountFailure,
+  classifyAuthVerificationError,
   shouldPreserveLastAccount,
-  shouldRunAccountBackgroundCheck,
+  shouldRefreshAccountSession,
 } from '@/lib/account-load-state';
 
 interface AuthContextValue {
@@ -103,6 +103,45 @@ async function loadAccount(session: Session): Promise<AccountLoadResult> {
   }
 }
 
+type AccountSessionLoadResult = {
+  session: Session;
+  result: AccountLoadResult;
+};
+
+async function loadAccountWithSessionRecovery(
+  supabase: SupabaseClient,
+  session: Session,
+): Promise<AccountSessionLoadResult> {
+  let latestSession = session;
+  const currentSession = await supabase.auth.getSession().catch(() => ({ data: { session: null } }));
+  if (currentSession.data.session?.user.id === session.user.id) {
+    latestSession = currentSession.data.session;
+  }
+
+  let result = await loadAccount(latestSession);
+  if (result.status !== 'invalid' || !shouldRefreshAccountSession(result.status, result.issue.code)) {
+    return { session: latestSession, result };
+  }
+
+  const refreshed = await supabase.auth.refreshSession().catch(() => null);
+  if (!refreshed) {
+    return { session: latestSession, result: { status: 'unavailable', issue: createUnavailableIssue() } };
+  }
+  if (refreshed.data.session?.user.id === session.user.id) {
+    latestSession = refreshed.data.session;
+    result = await loadAccount(latestSession);
+    return { session: latestSession, result };
+  }
+
+  const refreshStatus = refreshed.error && 'status' in refreshed.error
+    ? Number((refreshed.error as { status?: unknown }).status)
+    : undefined;
+  if (classifyAuthVerificationError(refreshStatus) === 'unavailable') {
+    return { session: latestSession, result: { status: 'unavailable', issue: createUnavailableIssue() } };
+  }
+  return { session: latestSession, result };
+}
+
 export function AuthProvider({ children }: { children: React.ReactNode }) {
   const configured = getSupabaseConfig().configured;
   const supabase = useMemo(() => getSupabaseBrowserClient(), []);
@@ -111,15 +150,14 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   const [accountIssue, setAccountIssue] = useState<AccountIssue | null>(null);
   const [loading, setLoading] = useState(configured);
   const currentAccountId = useRef<string | null>(null);
-  const lastAccountCheckAt = useRef(0);
   const backgroundCheckInFlight = useRef(false);
+  const accountRequestVersion = useRef(0);
 
   useEffect(() => {
     currentAccountId.current = account?.userId || null;
   }, [account?.userId]);
 
   const applyAccountResult = useCallback((result: AccountLoadResult, expectedUserId: string) => {
-    lastAccountCheckAt.current = Date.now();
     if (result.status === 'success') {
       if (result.account.userId !== expectedUserId) {
         setAccount(null);
@@ -162,24 +200,26 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
         setAccount(null);
         setAccountIssue(null);
         currentAccountId.current = null;
-        lastAccountCheckAt.current = 0;
         setAccountCacheScope(null);
         setLoading(false);
         return;
       }
-      const result = await loadAccount(data.session);
+      const requestVersion = ++accountRequestVersion.current;
+      const loaded = await loadAccountWithSessionRecovery(supabase, data.session);
       if (!active) return;
-      applyAccountResult(result, data.session.user.id);
+      if (requestVersion !== accountRequestVersion.current) return;
+      setSession(loaded.session);
+      applyAccountResult(loaded.result, loaded.session.user.id);
       setLoading(false);
     });
 
     const { data: listener } = supabase.auth.onAuthStateChange((_event, nextSession) => {
       if (!nextSession) {
+        accountRequestVersion.current += 1;
         setSession(null);
         setAccount(null);
         setAccountIssue(null);
         currentAccountId.current = null;
-        lastAccountCheckAt.current = 0;
         setAccountCacheScope(null);
         setLoading(false);
         void syncServerSession(null);
@@ -191,9 +231,12 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       // same user stay non-blocking so the current workspace remains mounted.
       if (currentAccountId.current !== nextSession.user.id) setLoading(true);
       setSession(nextSession);
-      void loadAccount(nextSession).then((result) => {
+      const requestVersion = ++accountRequestVersion.current;
+      void loadAccountWithSessionRecovery(supabase, nextSession).then((loaded) => {
         if (!active) return;
-        applyAccountResult(result, nextSession.user.id);
+        if (requestVersion !== accountRequestVersion.current) return;
+        setSession(loaded.session);
+        applyAccountResult(loaded.result, loaded.session.user.id);
         setLoading(false);
       });
     });
@@ -206,28 +249,34 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
 
   useEffect(() => {
     if (!session) return;
+    if (!supabase) return;
     let active = true;
     const verifyAccount = () => {
-      if (!shouldRunAccountBackgroundCheck(lastAccountCheckAt.current)) return;
       if (backgroundCheckInFlight.current) return;
       backgroundCheckInFlight.current = true;
-      void loadAccount(session)
-        .then((result) => {
+      const requestVersion = ++accountRequestVersion.current;
+      void loadAccountWithSessionRecovery(supabase, session)
+        .then((loaded) => {
           if (!active) return;
-          applyAccountResult(result, session.user.id);
+          if (requestVersion !== accountRequestVersion.current) return;
+          setSession(loaded.session);
+          applyAccountResult(loaded.result, loaded.session.user.id);
         })
         .finally(() => {
           backgroundCheckInFlight.current = false;
         });
     };
-    const interval = window.setInterval(verifyAccount, ACCOUNT_BACKGROUND_CHECK_INTERVAL_MS);
+    const handleVisibilityChange = () => {
+      if (document.visibilityState === 'visible') verifyAccount();
+    };
     window.addEventListener('focus', verifyAccount);
+    document.addEventListener('visibilitychange', handleVisibilityChange);
     return () => {
       active = false;
-      window.clearInterval(interval);
       window.removeEventListener('focus', verifyAccount);
+      document.removeEventListener('visibilitychange', handleVisibilityChange);
     };
-  }, [applyAccountResult, session]);
+  }, [applyAccountResult, session, supabase]);
 
   const value = useMemo<AuthContextValue>(() => ({
     user: session?.user ?? null,
@@ -238,8 +287,12 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     configured,
     refreshAccount: async () => {
       if (!session) return null;
-      const result = await loadAccount(session);
-      return applyAccountResult(result, session.user.id);
+      if (!supabase) return null;
+      const requestVersion = ++accountRequestVersion.current;
+      const loaded = await loadAccountWithSessionRecovery(supabase, session);
+      if (requestVersion !== accountRequestVersion.current) return account;
+      setSession(loaded.session);
+      return applyAccountResult(loaded.result, loaded.session.user.id);
     },
     signOut: async () => {
       if (supabase) await supabase.auth.signOut();
@@ -248,7 +301,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       setAccount(null);
       setAccountIssue(null);
       currentAccountId.current = null;
-      lastAccountCheckAt.current = 0;
+      accountRequestVersion.current += 1;
       setAccountCacheScope(null);
     },
   }), [account, accountIssue, applyAccountResult, configured, loading, session, supabase]);

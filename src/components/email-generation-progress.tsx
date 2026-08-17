@@ -27,6 +27,7 @@ function taskStatusIcon(task: EmailGenerationTask) {
   if (task.status === 'running') return <LoaderCircle className="h-3.5 w-3.5 animate-spin text-primary" />;
   if (task.status === 'queued') return <Clock3 className="h-3.5 w-3.5 text-amber-600" />;
   if (task.status === 'completed') return <Check className="h-3.5 w-3.5 text-emerald-600" />;
+  if (task.status === 'interrupted') return <RotateCcw className="h-3.5 w-3.5 text-amber-600" />;
   return <X className="h-3.5 w-3.5 text-destructive" />;
 }
 
@@ -38,7 +39,7 @@ function TaskRow({
   onNavigate: () => void;
 }) {
   const { cancelTask, openTask, retryTask } = useEmailGenerationTasks();
-  const canOpen = task.status === 'completed' || task.status === 'running';
+  const canOpen = task.status !== 'cancelled';
   return (
     <div className="group flex min-h-16 items-center gap-3 px-3 py-2.5 transition-colors hover:bg-muted/45">
       <Avatar className="h-9 w-9 shrink-0 border border-border/60">
@@ -76,14 +77,14 @@ function TaskRow({
           <X className="h-3.5 w-3.5" />
         </Button>
       ) : null}
-      {task.status === 'failed' ? (
+      {task.status === 'failed' || task.status === 'interrupted' ? (
         <Button
           type="button"
           variant="ghost"
           size="icon-sm"
           className="shrink-0 text-muted-foreground"
-          title="重新生成"
-          aria-label="重新生成"
+          title={task.status === 'interrupted' ? '打开任务并重试' : '重新生成'}
+          aria-label={task.status === 'interrupted' ? '打开任务并重试' : '重新生成'}
           onClick={() => retryTask(task.id)}
         >
           <RotateCcw className="h-3.5 w-3.5" />
@@ -106,7 +107,7 @@ export function EmailGenerationProgress() {
     task.status === 'queued' || task.status === 'running'
   ));
   const recentTasks = visibleTasks.filter((task) => (
-    task.status === 'completed' || task.status === 'failed'
+    task.status === 'completed' || task.status === 'failed' || task.status === 'interrupted'
   ));
 
   return (
@@ -134,7 +135,7 @@ export function EmailGenerationProgress() {
         <div className="flex h-14 items-center justify-between gap-3 px-3.5">
           <div>
             <p className="text-sm font-semibold">邮件生成进度</p>
-            <p className="text-xs text-muted-foreground">当前标签页内持续运行</p>
+            <p className="text-xs text-muted-foreground">已完成结果将同步到云端</p>
           </div>
           <div className="flex items-center gap-2">
             <span className="text-xs text-muted-foreground">同时生成</span>

@@ -1,14 +1,5 @@
 export type AccountFailureKind = 'invalid' | 'unavailable';
 
-export const ACCOUNT_BACKGROUND_CHECK_INTERVAL_MS = 30 * 60 * 1000;
-
-export function shouldRunAccountBackgroundCheck(
-  lastCheckedAt: number,
-  now = Date.now(),
-) {
-  return now - lastCheckedAt >= ACCOUNT_BACKGROUND_CHECK_INTERVAL_MS;
-}
-
 export function isTransientAccountStatus(status: number) {
   return status === 408 || status === 425 || status === 429 || status >= 500;
 }
@@ -21,6 +12,13 @@ export function classifyAuthVerificationError(status: number | undefined): Accou
   return status && status >= 400 && status < 500 && !isTransientAccountStatus(status)
     ? 'invalid'
     : 'unavailable';
+}
+
+export function shouldRefreshAccountSession(
+  failure: AccountFailureKind,
+  issueCode: string,
+) {
+  return failure === 'invalid' && issueCode === 'SESSION_INVALID';
 }
 
 export function shouldPreserveLastAccount(

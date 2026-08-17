@@ -229,6 +229,8 @@ export default function DashboardPage() {
       const detail = (event as CustomEvent<{
         taskId: string;
         navigation: EmailGenerationTaskNavigation;
+        retryRequested?: boolean;
+        retryInput?: unknown;
       }>).detail;
       if (!detail?.navigation) return;
       if (detail.navigation.view === 'gmail') {
@@ -238,6 +240,8 @@ export default function DashboardPage() {
           messageId,
           composerMode,
           taskId: detail.taskId,
+          retryRequested: detail.retryRequested,
+          retryInput: detail.retryInput,
           requestId: (current?.requestId || 0) + 1,
         }));
         changeView('gmail');
@@ -246,6 +250,7 @@ export default function DashboardPage() {
       const { prospectId } = detail.navigation;
       setProspectingOpenRequest((current) => ({
         prospectId,
+        retryRequested: detail.retryRequested,
         requestId: (current?.requestId || 0) + 1,
       }));
       changeView('prospecting');

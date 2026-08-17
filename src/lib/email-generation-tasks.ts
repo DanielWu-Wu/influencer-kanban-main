@@ -1,4 +1,5 @@
 export const EMAIL_GENERATION_TASK_RETENTION_MS = 24 * 60 * 60 * 1000;
+export const EMAIL_GENERATION_TASKS_SCHEMA_VERSION = 1;
 export const EMAIL_GENERATION_TASK_OPEN_EVENT = 'email-generation-task-open';
 export const EMAIL_GENERATION_TOASTER_ID = 'email-generation-tasks';
 
@@ -12,7 +13,8 @@ export type EmailGenerationTaskStatus =
   | 'running'
   | 'completed'
   | 'failed'
-  | 'cancelled';
+  | 'cancelled'
+  | 'interrupted';
 
 export type EmailGenerationTaskNavigation =
   | {
@@ -44,7 +46,127 @@ export interface EmailGenerationTask {
   result?: unknown;
   partialResult?: unknown;
   rollbackResult?: unknown;
+  retryInput?: unknown;
   error?: string;
+}
+
+export interface EmailGenerationTaskCloudSnapshot {
+  version: number;
+  tasks: EmailGenerationTask[];
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return Boolean(value && typeof value === 'object' && !Array.isArray(value));
+}
+
+function cloneJsonValue(value: unknown) {
+  if (value === undefined) return undefined;
+  try {
+    return JSON.parse(JSON.stringify(value)) as unknown;
+  } catch {
+    return undefined;
+  }
+}
+
+function parseNavigation(value: unknown): EmailGenerationTaskNavigation | null {
+  if (!isRecord(value) || typeof value.view !== 'string') return null;
+  if (
+    value.view === 'gmail'
+    && typeof value.threadId === 'string'
+    && (value.composerMode === 'ai' || value.composerMode === 'template')
+  ) {
+    return {
+      view: 'gmail',
+      threadId: value.threadId,
+      messageId: typeof value.messageId === 'string' ? value.messageId : undefined,
+      composerMode: value.composerMode,
+    };
+  }
+  if (value.view === 'prospecting' && typeof value.prospectId === 'string') {
+    return { view: 'prospecting', prospectId: value.prospectId };
+  }
+  return null;
+}
+
+function parseTask(value: unknown): EmailGenerationTask | null {
+  if (!isRecord(value)) return null;
+  const navigation = parseNavigation(value.navigation);
+  const validKind = value.kind === 'gmail_ai_reply'
+    || value.kind === 'gmail_template_reply'
+    || value.kind === 'outreach_email';
+  const validStatus = value.status === 'queued'
+    || value.status === 'running'
+    || value.status === 'completed'
+    || value.status === 'failed'
+    || value.status === 'cancelled'
+    || value.status === 'interrupted';
+  if (
+    typeof value.id !== 'string'
+    || typeof value.key !== 'string'
+    || !validKind
+    || !validStatus
+    || typeof value.accountUserId !== 'string'
+    || typeof value.gmailEmail !== 'string'
+    || typeof value.title !== 'string'
+    || typeof value.description !== 'string'
+    || typeof value.stage !== 'string'
+    || !navigation
+    || typeof value.createdAt !== 'number'
+  ) return null;
+  return {
+    id: value.id,
+    key: value.key,
+    kind: value.kind as EmailGenerationTaskKind,
+    status: value.status as EmailGenerationTaskStatus,
+    accountUserId: value.accountUserId,
+    gmailEmail: value.gmailEmail,
+    title: value.title,
+    description: value.description,
+    avatarUrl: typeof value.avatarUrl === 'string' ? value.avatarUrl : undefined,
+    stage: value.stage,
+    navigation,
+    createdAt: value.createdAt,
+    startedAt: typeof value.startedAt === 'number' ? value.startedAt : undefined,
+    completedAt: typeof value.completedAt === 'number' ? value.completedAt : undefined,
+    result: cloneJsonValue(value.result),
+    partialResult: cloneJsonValue(value.partialResult),
+    rollbackResult: cloneJsonValue(value.rollbackResult),
+    retryInput: cloneJsonValue(value.retryInput),
+    error: typeof value.error === 'string' ? value.error : undefined,
+  };
+}
+
+export function readEmailGenerationTaskSnapshot(value: unknown): EmailGenerationTask[] {
+  const candidates = Array.isArray(value)
+    ? value
+    : isRecord(value) && Array.isArray(value.tasks)
+      ? value.tasks
+      : [];
+  return candidates.map(parseTask).filter((task): task is EmailGenerationTask => Boolean(task));
+}
+
+export function serializeEmailGenerationTasks(tasks: EmailGenerationTask[]): EmailGenerationTaskCloudSnapshot {
+  return {
+    version: EMAIL_GENERATION_TASKS_SCHEMA_VERSION,
+    tasks: readEmailGenerationTaskSnapshot({ tasks }),
+  };
+}
+
+export function markInterruptedEmailGenerationTasks(
+  tasks: EmailGenerationTask[],
+  now = Date.now(),
+) {
+  return tasks.map((task) => (
+    task.status === 'queued' || task.status === 'running'
+      ? {
+          ...task,
+          status: 'interrupted' as const,
+          stage: '页面已关闭或会话已中断，可重试',
+          completedAt: now,
+          error: undefined,
+        }
+      : task
+  ));
 }
 
 export function normalizeEmailGenerationConcurrency(value: number) {

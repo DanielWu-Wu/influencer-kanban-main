@@ -69,7 +69,7 @@ type Props = {
   onSaveDraft: (prospect: Prospect) => void;
   onBack: (prospect: Prospect) => void;
   onSkip: (prospect: Prospect) => void;
-  openProspectRequest?: { prospectId: string; requestId: number };
+  openProspectRequest?: { prospectId: string; requestId: number; retryRequested?: boolean };
 };
 
 function prospectLanguageLabel(prospect: Prospect) {
@@ -348,6 +348,10 @@ export function OutreachEmailTab({
       !openProspectRequest
       || handledOpenRequestRef.current === openProspectRequest.requestId
     ) return;
+    const retryProspect = openProspectRequest.retryRequested
+      ? prospects.find((item) => item.id === openProspectRequest.prospectId)
+      : undefined;
+    if (openProspectRequest.retryRequested && !retryProspect) return;
     handledOpenRequestRef.current = openProspectRequest.requestId;
     setQuery('');
     setExpandedIds((current) => Array.from(new Set([...current, openProspectRequest.prospectId])));
@@ -355,7 +359,8 @@ export function OutreachEmailTab({
       document.getElementById(`outreach-email-${openProspectRequest.prospectId}`)
         ?.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
     });
-  }, [openProspectRequest]);
+    if (retryProspect) onGenerate(retryProspect);
+  }, [onGenerate, openProspectRequest, prospects]);
 
   useEffect(() => {
     mountedRef.current = true;

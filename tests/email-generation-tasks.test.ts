@@ -5,8 +5,11 @@ import {
   buildEmailGenerationTaskScopeKey,
   buildGmailEmailGenerationTaskKey,
   buildOutreachEmailGenerationTaskKey,
+  markInterruptedEmailGenerationTasks,
   normalizeEmailGenerationConcurrency,
   pruneExpiredEmailGenerationTasks,
+  readEmailGenerationTaskSnapshot,
+  serializeEmailGenerationTasks,
   selectStartableEmailTaskIds,
   type EmailGenerationTask,
 } from '../src/lib/email-generation-tasks';
@@ -77,6 +80,35 @@ test('已结束任务保留 24 小时，运行中任务不会被过期清理', (
   );
 });
 
+test('云端快照只保留可恢复字段，并能恢复已完成结果', () => {
+  const original = {
+    ...task('completed', 'completed', 1),
+    completedAt: 2,
+    result: { suggestion: { suggestedReply: 'Hello' } },
+    rollbackResult: { replyContent: '之前内容' },
+    retryInput: { userIdeas: '礼貌确认发布时间', targetLang: 'en' },
+  };
+  const snapshot = serializeEmailGenerationTasks([original]);
+  assert.equal(snapshot.version, 1);
+  const [restored] = readEmailGenerationTaskSnapshot(snapshot);
+  assert.equal(restored.id, original.id);
+  assert.equal(restored.status, 'completed');
+  assert.deepEqual(restored.result, original.result);
+  assert.deepEqual(restored.rollbackResult, original.rollbackResult);
+  assert.deepEqual(restored.retryInput, original.retryInput);
+});
+
+test('重新打开页面会把排队中和运行中的任务标记为中断，不会自动重跑', () => {
+  const recovered = markInterruptedEmailGenerationTasks([
+    task('queued', 'queued', 1),
+    task('running', 'running', 2),
+    task('completed', 'completed', 3),
+  ], 100);
+  assert.deepEqual(recovered.map((item) => item.status), ['interrupted', 'interrupted', 'completed']);
+  assert.equal(recovered[0].stage, '页面已关闭或会话已中断，可重试');
+  assert.equal(recovered[1].completedAt, 100);
+});
+
 test('任务范围按系统账号和 Gmail 邮箱隔离', () => {
   const accountA = buildEmailGenerationTaskScopeKey('account-a', 'Owner@Example.com');
   const accountB = buildEmailGenerationTaskScopeKey('account-b', 'owner@example.com');
@@ -108,4 +140,3 @@ test('不同邮件线程、回复方式和开发信对象使用不同任务键',
   assert.notEqual(aiReply, anotherMessage);
   assert.equal(buildOutreachEmailGenerationTaskKey('prospect-1'), 'outreach_email:prospect-1');
 });
-
