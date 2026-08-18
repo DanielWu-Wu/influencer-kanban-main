@@ -61,6 +61,22 @@ import {
 import { YouTubeChannelAvatar } from './youtube-channel-avatar';
 import { GMAIL_AUTH_CACHE_RESET_EVENT } from './gmail-auth-provider';
 import { ACCOUNT_SCOPE_CHANGED_EVENT, getAccountCacheScope } from '@/lib/account-cache-scope';
+import { GMAIL_PRIMARY_INBOX_REFRESHED_EVENT } from '@/lib/gmail-translation-prefetch';
+import {
+  beginGmailReadStateOperation,
+  clearGmailReadStateRuntime,
+  copyGmailThreadReadState,
+  getAutomaticGmailReadRequest,
+  getGmailReadScopeKey,
+  getGmailReadStateOperationVersion,
+  hasManualGmailUnreadPreference,
+  registerAutomaticGmailReadRequest,
+  setGmailThreadReadState,
+  setManualGmailUnreadPreference,
+  shouldAutoMarkGmailThreadRead,
+  shouldRollbackAutomaticGmailRead,
+  waitForAutomaticGmailRead,
+} from '@/lib/gmail-read-state';
 
 const GMAIL_PAGE_SIZE = 50;
 const GMAIL_DETAIL_BATCH_SIZE = 16;
@@ -70,6 +86,11 @@ const GMAIL_THREAD_DETAIL_CACHE_MS = 5 * 60_000;
 const GMAIL_THREAD_PREFETCH_DELAY_MS = 180;
 const GMAIL_SEARCH_DEBOUNCE_MS = 400;
 const SUBJECT_TRANSLATION_BATCH_SIZE = 12;
+
+function notifyPrimaryInboxRefreshed(mailbox: GmailMailbox, category: GmailCategory, isGlobalSearch: boolean) {
+  if (mailbox !== 'inbox' || category !== 'primary' || isGlobalSearch) return;
+  window.dispatchEvent(new Event(GMAIL_PRIMARY_INBOX_REFRESHED_EVENT));
+}
 
 type GmailThreadLoadState = {
   loading: boolean;
@@ -84,6 +105,7 @@ interface GmailInboxProps {
   onCategoryChange: (category: GmailCategory) => void;
   updatedThread?: GmailThread | null;
   selectedThreadId?: string;
+  threadDetailVisible?: boolean;
   mailbox: GmailMailbox;
   category: GmailCategory;
   refreshKey?: number;
@@ -644,6 +666,7 @@ export function GmailInbox({
   onCategoryChange,
   updatedThread,
   selectedThreadId,
+  threadDetailVisible = false,
   mailbox,
   category,
   refreshKey = 0,
@@ -673,7 +696,10 @@ export function GmailInbox({
   const accountCacheScopeRef = useRef(getAccountCacheScope());
   const currentInboxCacheKeyRef = useRef<string | null>(null);
   const threadPrefetchTimerRef = useRef<number | null>(null);
-  const manuallyPreservedUnreadThreadIdsRef = useRef<Set<string>>(new Set());
+  const selectedThreadIdRef = useRef(selectedThreadId);
+  const threadDetailVisibleRef = useRef(threadDetailVisible);
+  const authEmailRef = useRef(auth?.email);
+  const internallyAppliedThreadRef = useRef<GmailThread | null>(null);
   const [threads, setThreads] = useState<GmailThread[]>([]);
   const threadsRef = useRef(threads);
   const [loading, setLoading] = useState(false);
@@ -689,6 +715,9 @@ export function GmailInbox({
   const [subjectTranslations, setSubjectTranslations] = useState<Record<string, string>>({});
   const [threadAvatars, setThreadAvatars] = useState<Record<string, ChannelAvatarState>>({});
   const [authProcessing, setAuthProcessing] = useState(false);
+  selectedThreadIdRef.current = selectedThreadId;
+  threadDetailVisibleRef.current = threadDetailVisible;
+  authEmailRef.current = auth?.email;
   const normalizedSearchQuery = debouncedSearchQuery.trim();
   const isGlobalSearch = normalizedSearchQuery.length > 0;
   const hasSearchInput = searchQuery.trim().length > 0;
@@ -719,6 +748,15 @@ export function GmailInbox({
   useEffect(() => {
     threadsRef.current = threads;
   }, [threads]);
+
+  useEffect(() => {
+    const handleAccountScopeChange = () => {
+      accountCacheScopeRef.current = getAccountCacheScope();
+      clearGmailReadStateRuntime();
+    };
+    window.addEventListener(ACCOUNT_SCOPE_CHANGED_EVENT, handleAccountScopeChange);
+    return () => window.removeEventListener(ACCOUNT_SCOPE_CHANGED_EVENT, handleAccountScopeChange);
+  }, []);
 
   useEffect(() => {
     const nextSearchQuery = searchQuery.trim();
@@ -805,13 +843,37 @@ export function GmailInbox({
 
   useEffect(() => {
     if (!updatedThread) return;
-    if (updatedThread.hasUnread && isLatestMessageFromEmail(updatedThread, auth?.email)) {
-      manuallyPreservedUnreadThreadIdsRef.current.add(updatedThread.id);
-    } else if (!updatedThread.hasUnread) {
-      manuallyPreservedUnreadThreadIdsRef.current.delete(updatedThread.id);
+    const internallyApplied = internallyAppliedThreadRef.current === updatedThread;
+    if (internallyApplied) internallyAppliedThreadRef.current = null;
+    if (!updatedThread.hasUnread) {
+      setManualGmailUnreadPreference(
+        getGmailReadScopeKey(auth?.email, accountCacheScopeRef.current),
+        updatedThread.id,
+        false,
+      );
+    }
+    const updatedThreadCacheKey = gmailThreadCacheKey(updatedThread.id, accountCacheScopeRef.current);
+    const cachedThread = gmailThreadDetailCache.get(updatedThreadCacheKey)?.thread;
+    const previousThread = threadsRef.current.find((thread) => thread.id === updatedThread.id)
+      || cachedThread;
+    if (
+      cachedThread
+      || updatedThread.messages.some((message) => Boolean(message.body || message.htmlBody))
+    ) {
+      cacheThreadDetail(updatedThread, updatedThreadCacheKey);
+    }
+    if (previousThread && !internallyApplied) {
+      const wasCountedAsNormalUnread = previousThread.hasUnread && isNormalInboxThread(previousThread);
+      const isCountedAsNormalUnread = updatedThread.hasUnread && isNormalInboxThread(updatedThread);
+      if (wasCountedAsNormalUnread !== isCountedAsNormalUnread) {
+        setNormalUnreadCount((current) => {
+          if (current === null) return current;
+          return isCountedAsNormalUnread ? current + 1 : Math.max(0, current - 1);
+        });
+      }
     }
     setThreads((current) => {
-      if (mailbox === 'unread' && !updatedThread.hasUnread) {
+      if ((mailbox === 'unread' || (isGlobalSearch && showUnreadOnly)) && !updatedThread.hasUnread) {
         return current.filter((thread) => thread.id !== updatedThread.id);
       }
       return sortThreadsByLatest(
@@ -819,7 +881,7 @@ export function GmailInbox({
         mailbox,
       );
     });
-  }, [auth?.email, mailbox, updatedThread]);
+  }, [auth?.email, isGlobalSearch, mailbox, showUnreadOnly, updatedThread]);
 
   useEffect(() => {
     const params = new URLSearchParams(window.location.search);
@@ -955,6 +1017,7 @@ export function GmailInbox({
         setThreads([]);
         if (unreadCount !== null) setNormalUnreadCount(unreadCount);
         setLastSyncedAt(new Date().toISOString());
+        notifyPrimaryInboxRefreshed(mailbox, category, isGlobalSearch);
         return;
       }
 
@@ -995,6 +1058,7 @@ export function GmailInbox({
         : sortThreadsByLatest(nextThreads, mailbox));
       if (unreadCount !== null) setNormalUnreadCount(unreadCount);
       setLastSyncedAt(new Date().toISOString());
+      notifyPrimaryInboxRefreshed(mailbox, category, isGlobalSearch);
     } catch (caughtError) {
       if (isCurrentRequest()) {
         setError((caughtError as Error).message);
@@ -1245,16 +1309,120 @@ export function GmailInbox({
     setPageIndex((current) => current + 1);
   };
 
+  const applyThreadStateLocally = (
+    previousThread: GmailThread,
+    nextThread: GmailThread,
+    options: { allowInsert?: boolean } = {},
+  ) => {
+    const cacheKey = gmailThreadCacheKey(nextThread.id, accountCacheScopeRef.current);
+    cacheThreadDetail(nextThread, cacheKey);
+
+    const wasCountedAsNormalUnread = previousThread.hasUnread && isNormalInboxThread(previousThread);
+    const isCountedAsNormalUnread = nextThread.hasUnread && isNormalInboxThread(nextThread);
+    if (wasCountedAsNormalUnread !== isCountedAsNormalUnread) {
+      setNormalUnreadCount((current) => {
+        if (current === null) return current;
+        return isCountedAsNormalUnread ? current + 1 : Math.max(0, current - 1);
+      });
+    }
+
+    setThreads((current) => {
+      const exists = current.some((item) => item.id === previousThread.id);
+      if ((mailbox === 'unread' || (isGlobalSearch && showUnreadOnly)) && !nextThread.hasUnread) {
+        return current.filter((item) => item.id !== previousThread.id);
+      }
+      if (!exists && !options.allowInsert) return current;
+      return sortThreadsByLatest(
+        exists
+          ? current.map((item) => item.id === previousThread.id ? nextThread : item)
+          : [nextThread, ...current],
+        mailbox,
+      );
+    });
+    internallyAppliedThreadRef.current = nextThread;
+    onThreadUpdated?.(nextThread);
+    return nextThread;
+  };
+
+  const markThreadReadAfterContentReady = (
+    thread: GmailThread,
+    runId: number,
+    accessTokenOverride?: string,
+  ) => {
+    const scopeKey = getGmailReadScopeKey(authEmailRef.current, accountCacheScopeRef.current);
+    const stillViewing = openingThreadRunRef.current === runId
+      && selectedThreadIdRef.current === thread.id
+      && threadDetailVisibleRef.current;
+    if (!shouldAutoMarkGmailThreadRead({
+      hasUnread: thread.hasUnread,
+      contentReady: true,
+      stillViewing,
+      manuallyPreservedUnread: hasManualGmailUnreadPreference(scopeKey, thread.id),
+      latestMessageFromOwnAccount: isLatestMessageFromEmail(thread, authEmailRef.current),
+    })) return thread;
+    if (getAutomaticGmailReadRequest(scopeKey, thread.id)) {
+      return setGmailThreadReadState(thread, true);
+    }
+
+    const requestVersion = beginGmailReadStateOperation(scopeKey, thread.id);
+    const wasListed = threadsRef.current.some((item) => item.id === thread.id);
+    const readThread = setGmailThreadReadState(thread, true);
+    applyThreadStateLocally(thread, readThread);
+    let unregister: () => void = () => undefined;
+    const request = (async () => {
+      const accessToken = accessTokenOverride || await getAccessToken();
+      const response = await fetch(
+        `https://gmail.googleapis.com/gmail/v1/users/me/threads/${thread.id}/modify`,
+        {
+          method: 'POST',
+          headers: {
+            Authorization: `Bearer ${accessToken}`,
+            'Content-Type': 'application/json',
+          },
+          body: JSON.stringify({ addLabelIds: [], removeLabelIds: ['UNREAD'] }),
+        },
+      );
+      if (!response.ok) {
+        const result = await response.json().catch(() => ({}));
+        throw new Error(result.error?.message || '自动标记已读失败');
+      }
+    })()
+      .catch((caughtError) => {
+        const currentScope = getGmailReadScopeKey(authEmailRef.current, accountCacheScopeRef.current);
+        const currentVersion = getGmailReadStateOperationVersion(scopeKey, thread.id);
+        if (
+          shouldRollbackAutomaticGmailRead(requestVersion, currentVersion, scopeKey, currentScope)
+          && !hasManualGmailUnreadPreference(scopeKey, thread.id)
+        ) {
+          applyThreadStateLocally(readThread, thread, { allowInsert: wasListed });
+          setError(`标记已读失败，可点击信封按钮重试：${(caughtError as Error).message}`);
+        }
+      })
+      .finally(() => unregister());
+    unregister = registerAutomaticGmailReadRequest(scopeKey, thread.id, request);
+    return readThread;
+  };
+
   const modifyThread = async (
     thread: GmailThread,
     addLabelIds: string[] = [],
     removeLabelIds: string[] = [],
     accessTokenOverride?: string,
   ) => {
+    const changesUnreadState = addLabelIds.includes('UNREAD') || removeLabelIds.includes('UNREAD');
+    const readScopeKey = getGmailReadScopeKey(auth?.email, accountCacheScopeRef.current);
+    const hadManualUnreadPreference = changesUnreadState
+      ? hasManualGmailUnreadPreference(readScopeKey, thread.id)
+      : false;
+    if (changesUnreadState) {
+      beginGmailReadStateOperation(readScopeKey, thread.id);
+      setManualGmailUnreadPreference(readScopeKey, thread.id, addLabelIds.includes('UNREAD'));
+    }
     setActionThreadId(thread.id);
     setError(null);
 
     try {
+      if (changesUnreadState) await waitForAutomaticGmailRead(readScopeKey, thread.id);
       const accessToken = accessTokenOverride || await getAccessToken();
       const response = await fetch(
         `https://gmail.googleapis.com/gmail/v1/users/me/threads/${thread.id}/modify`,
@@ -1270,13 +1438,6 @@ export function GmailInbox({
       if (!response.ok) {
         const result = await response.json().catch(() => ({}));
         throw new Error(result.error?.message || '\u66f4\u65b0\u90ae\u4ef6\u72b6\u6001\u5931\u8d25');
-      }
-
-      if (addLabelIds.includes('UNREAD')) {
-        manuallyPreservedUnreadThreadIdsRef.current.add(thread.id);
-      }
-      if (removeLabelIds.includes('UNREAD')) {
-        manuallyPreservedUnreadThreadIdsRef.current.delete(thread.id);
       }
 
       const nextLabels = Array.from(new Set([
@@ -1345,9 +1506,13 @@ export function GmailInbox({
           ),
         );
       }
+      internallyAppliedThreadRef.current = nextThread;
       onThreadUpdated?.(nextThread);
       return nextThread;
     } catch (caughtError) {
+      if (changesUnreadState) {
+        setManualGmailUnreadPreference(readScopeKey, thread.id, hadManualUnreadPreference);
+      }
       setError((caughtError as Error).message);
       return thread;
     } finally {
@@ -1395,20 +1560,36 @@ export function GmailInbox({
     const cachedThread = readCachedThreadDetail(thread);
     openingThreadRunRef.current = runId;
     openingThreadRef.current = thread.id;
+    selectedThreadIdRef.current = thread.id;
+    threadDetailVisibleRef.current = true;
     setOpeningThreadId(thread.id);
     onSelectThread(cachedThread || thread);
     onThreadLoadStateChange?.(thread.id, { loading: !cachedThread });
     let nextThread = cachedThread || thread;
     let accessToken: string | null = null;
 
+    if (cachedThread) {
+      nextThread = markThreadReadAfterContentReady(cachedThread, runId);
+    }
+
     try {
       accessToken = await getAccessToken();
       if (!cachedThread) {
         nextThread = await fetchThreadDetail(thread, accessToken);
       }
-      if (openingThreadRunRef.current === runId) {
+      const stillViewing = openingThreadRunRef.current === runId
+        && selectedThreadIdRef.current === thread.id
+        && threadDetailVisibleRef.current;
+      if (stillViewing) {
         onSelectThread(nextThread);
         onThreadLoadStateChange?.(thread.id, { loading: false });
+        setThreads((current) => sortThreadsByLatest(
+          current.map((item) => item.id === nextThread.id ? nextThread : item),
+          mailbox,
+        ));
+        if (!cachedThread) {
+          nextThread = markThreadReadAfterContentReady(nextThread, runId, accessToken);
+        }
         prefetchGmailAIHistory(nextThread);
       }
     } catch (caughtError) {
@@ -1425,31 +1606,26 @@ export function GmailInbox({
       }
     }
 
-    const shouldPreserveUnread = nextThread.hasUnread
-      && (
-        manuallyPreservedUnreadThreadIdsRef.current.has(nextThread.id)
-        || isLatestMessageFromEmail(nextThread, auth?.email)
-      );
-
-    if (nextThread.hasUnread && !shouldPreserveUnread) {
-      void modifyThread(nextThread, [], ['UNREAD'], accessToken || undefined);
-    } else {
-      setThreads((current) =>
-        sortThreadsByLatest(
-          current.map((item) => item.id === nextThread.id ? nextThread : item),
-          mailbox,
-        ),
-      );
-    }
-
-    if (accessToken && openingThreadRunRef.current === runId) {
+    if (
+      accessToken
+      && openingThreadRunRef.current === runId
+      && selectedThreadIdRef.current === thread.id
+      && threadDetailVisibleRef.current
+    ) {
       void hydrateInlineAttachments(nextThread, accessToken).then((hydratedThread) => {
         if (hydratedThread === nextThread) return;
+        const cacheKey = gmailThreadCacheKey(hydratedThread.id, accountCacheScopeRef.current);
+        const latestState = gmailThreadDetailCache.get(cacheKey)?.thread || nextThread;
+        const synchronizedThread = copyGmailThreadReadState(hydratedThread, latestState);
         cacheThreadDetail(
-          hydratedThread,
-          gmailThreadCacheKey(hydratedThread.id, accountCacheScopeRef.current),
+          synchronizedThread,
+          cacheKey,
         );
-        if (openingThreadRunRef.current === runId) onSelectThread(hydratedThread);
+        if (
+          openingThreadRunRef.current === runId
+          && selectedThreadIdRef.current === thread.id
+          && threadDetailVisibleRef.current
+        ) onSelectThread(synchronizedThread);
       }).catch(() => {
         // Inline images are optional and must never delay or hide the email body.
       });

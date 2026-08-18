@@ -57,6 +57,18 @@ import { useRecordAssistant } from './record-assistant-provider';
 import { useEmailGenerationTasks } from './email-generation-task-provider';
 import { GmailReplyTargetBar } from './gmail-reply-target-bar';
 import type { GmailThreadOpenRequest } from './gmail-page';
+import {
+  getGmailTranslationScopeKey,
+  prioritizeGmailTranslationPrefetch,
+  requestGmailTranslation,
+} from '@/lib/gmail-translation-prefetch';
+import {
+  beginGmailReadStateOperation,
+  getGmailReadScopeKey,
+  hasManualGmailUnreadPreference,
+  setManualGmailUnreadPreference,
+  waitForAutomaticGmailRead,
+} from '@/lib/gmail-read-state';
 
 interface EmailDetailProps {
   thread: GmailThread;
@@ -313,10 +325,15 @@ export function EmailDetail({
   const toggleMessageReadState = async (message: GmailMessage) => {
     if (changingReadStateId) return;
     const markAsUnread = message.isRead;
+    const readScopeKey = getGmailReadScopeKey(auth?.email);
+    const hadManualUnreadPreference = hasManualGmailUnreadPreference(readScopeKey, thread.id);
+    beginGmailReadStateOperation(readScopeKey, thread.id);
+    setManualGmailUnreadPreference(readScopeKey, thread.id, markAsUnread);
     setChangingReadStateId(message.id);
     setMessageActionError(null);
 
     try {
+      await waitForAutomaticGmailRead(readScopeKey, thread.id);
       const accessToken = await getAccessToken();
       const response = await fetch(
         `https://gmail.googleapis.com/gmail/v1/users/me/messages/${message.id}/modify`,
@@ -359,6 +376,7 @@ export function EmailDetail({
       };
       onThreadUpdated?.(updatedThread);
     } catch (error) {
+      setManualGmailUnreadPreference(readScopeKey, thread.id, hadManualUnreadPreference);
       setMessageActionError(
         error instanceof Error
           ? error.message
@@ -771,83 +789,17 @@ export function EmailDetail({
   };
 
   const requestTranslation = async (
+    messageId: string,
     text: string,
     onProgress?: (translatedText: string) => void,
   ) => {
-    const response = await fetch('/api/translate', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        text,
-        sourceLang: detectEmailLanguage(text),
-        customPrompt: settings.translatePrompt || '',
-        modelProvider: settings.modelProvider || 'builtin',
-        customApiUrl: settings.customApiUrl || '',
-        customModelName: settings.customModelName || '',
-        stream: true,
-      }),
+    return requestGmailTranslation({
+      scopeKey: getGmailTranslationScopeKey(auth?.email),
+      messageId,
+      text,
+      settings,
+      onProgress,
     });
-
-    const contentType = response.headers.get('content-type')?.toLowerCase() || '';
-    if (!contentType.includes('text/event-stream')) {
-      const result = await response.json();
-      if (!response.ok || !result.success) throw new Error(result.error || '翻译失败');
-      const translatedText = String(result.data.translatedText || '').trim();
-      onProgress?.(translatedText);
-      return {
-        translatedText,
-        sourceLang: String(result.data.sourceLang || 'auto'),
-      };
-    }
-
-    if (!response.ok || !response.body) throw new Error('翻译服务没有返回可读取的结果。');
-    const reader = response.body.getReader();
-    const decoder = new TextDecoder();
-    let buffer = '';
-    let translatedText = '';
-    let sourceLang = 'auto';
-    let streamError = '';
-
-    const handleBlock = (block: string) => {
-      const event = block.match(/^event:\s*(.+)$/m)?.[1]?.trim() || 'message';
-      const dataText = block
-        .split(/\r?\n/)
-        .filter((line) => line.startsWith('data:'))
-        .map((line) => line.replace(/^data:\s?/, ''))
-        .join('\n');
-      if (!dataText) return;
-      try {
-        const data = JSON.parse(dataText);
-        if (event === 'delta' && typeof data.text === 'string') {
-          translatedText += data.text;
-          onProgress?.(translatedText);
-        } else if (event === 'final') {
-          translatedText = String(data.translatedText || translatedText).trim();
-          sourceLang = String(data.sourceLang || sourceLang);
-          onProgress?.(translatedText);
-        } else if (event === 'metrics') {
-          console.info('[Email translation client timing]', data);
-        } else if (event === 'error') {
-          streamError = String(data.message || '翻译失败');
-        }
-      } catch {
-        // Ignore malformed keepalive events and continue consuming the stream.
-      }
-    };
-
-    while (true) {
-      const { value, done } = await reader.read();
-      if (done) break;
-      buffer += decoder.decode(value, { stream: true });
-      const blocks = buffer.split(/\r?\n\r?\n/);
-      buffer = blocks.pop() || '';
-      blocks.forEach(handleBlock);
-    }
-    buffer += decoder.decode();
-    if (buffer.trim()) handleBlock(buffer);
-    if (streamError) throw new Error(streamError);
-    if (!translatedText.trim()) throw new Error('翻译服务没有返回可用译文。');
-    return { translatedText: translatedText.trim(), sourceLang };
   };
 
   const handleTranslateLegacy = async (message: GmailMessage) => {
@@ -921,6 +873,9 @@ export function EmailDetail({
       return;
     }
 
+    const translationScopeKey = getGmailTranslationScopeKey(auth?.email);
+    prioritizeGmailTranslationPrefetch(message.id, translationScopeKey);
+
     if (getTranslation(message.id)) {
       setShowingTranslationIds((current) => new Set(current).add(message.id));
       return;
@@ -949,7 +904,7 @@ export function EmailDetail({
         ...current,
         [message.id]: translationPrefix,
       }));
-      const currentResult = await requestTranslation(currentText, (partial) => {
+      const currentResult = await requestTranslation(message.id, currentText, (partial) => {
         setStreamingTranslations((current) => ({
           ...current,
           [message.id]: `${translationPrefix}${partial}`,
@@ -1029,7 +984,7 @@ export function EmailDetail({
         ...current,
         [message.id]: translationPrefix,
       }));
-      const quotedResult = await requestTranslation(quotedText, (partial) => {
+      const quotedResult = await requestTranslation(message.id, quotedText, (partial) => {
         setStreamingTranslations((current) => ({
           ...current,
           [message.id]: `${translationPrefix}${partial}`,

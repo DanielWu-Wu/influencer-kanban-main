@@ -380,6 +380,7 @@ export function GmailPage({
             setThreadLoadState({ threadId, ...state });
           }}
           selectedThreadId={selectedThread?.id}
+          threadDetailVisible={!showSettings && Boolean(selectedThread) && detailExpanded}
           mailbox={mailbox}
           category={category}
           refreshKey={mailboxRefreshKey}
@@ -391,7 +392,7 @@ export function GmailPage({
             ? openThreadRequest
             : undefined}
           onThreadUpdated={(thread) => {
-            if (selectedThread?.id === thread.id) setSelectedThread(thread);
+            setSelectedThread((current) => current?.id === thread.id ? thread : current);
           }}
         />
       </div>

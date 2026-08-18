@@ -5,6 +5,7 @@ import { containsIgnoredGmailContactEmail } from '@/lib/gmail-thread-contact';
 import { refreshStoredGmailAuth } from '@/lib/gmail-cloud-auth';
 import { getRequestUser } from '@/lib/supabase/server';
 import { resolveLatestGmailAnswerAt } from '@/lib/daily-gmail-todos';
+import { selectLatestGmailTranslationCandidate } from '@/lib/gmail-translation-candidates';
 
 type GmailHeader = { name: string; value: string };
 type InlineImagePayload = {
@@ -261,6 +262,56 @@ export async function GET(request: NextRequest) {
           body: message.body,
           date: message.date,
           answeredAt: message.answeredAt,
+        })),
+      });
+    }
+
+    if (action === 'translation-candidates') {
+      const maxResults = Math.min(Math.max(Number(searchParams.get('maxResults') || 3), 1), 3);
+      const q = 'in:inbox is:unread newer_than:3d -category:promotions -category:social';
+      const listResponse = await fetch(
+        `https://gmail.googleapis.com/gmail/v1/users/me/threads?maxResults=20&q=${encodeURIComponent(q)}`,
+        { headers },
+      );
+      if (!listResponse.ok) {
+        const details = await listResponse.text();
+        return NextResponse.json(
+          { error: '读取 Gmail 预翻译候选邮件失败', details },
+          { status: listResponse.status },
+        );
+      }
+
+      const listData = await listResponse.json() as { threads?: Array<{ id: string }> };
+      const candidates: Array<ReturnType<typeof parseHistoryMessage>> = [];
+      const references = listData.threads || [];
+      for (let index = 0; index < references.length; index += 12) {
+        const batch = references.slice(index, index + 12);
+        const threadResults = await Promise.all(batch.map(async ({ id }) => {
+          const threadResponse = await fetch(
+            `https://gmail.googleapis.com/gmail/v1/users/me/threads/${id}?format=full`,
+            { headers },
+          );
+          return threadResponse.ok ? threadResponse.json() as Promise<Record<string, unknown>> : null;
+        }));
+
+        threadResults.forEach((thread) => {
+          if (!thread) return;
+          const messages = ((thread.messages || []) as Record<string, unknown>[]).map(parseHistoryMessage);
+          const latestIncoming = selectLatestGmailTranslationCandidate(messages);
+          if (latestIncoming) candidates.push(latestIncoming);
+        });
+      }
+
+      candidates.sort((left, right) => Date.parse(right.date) - Date.parse(left.date));
+      return NextResponse.json({
+        success: true,
+        data: candidates.slice(0, maxResults).map((message) => ({
+          messageId: message.id,
+          threadId: message.threadId,
+          from: message.from,
+          subject: message.subject,
+          body: message.body,
+          date: message.date,
         })),
       });
     }

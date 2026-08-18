@@ -34,7 +34,7 @@ import {
   stripConfiguredEmailSignature,
   toBase64Url,
 } from '@/lib/email-content';
-import { detectEmailLanguage } from '@/lib/email-language';
+import { detectReplyLanguage } from '@/lib/email-language';
 import {
   buildGmailAIAnalysisCacheKey,
   buildGmailAIThreadMessages,
@@ -194,6 +194,7 @@ export function EmailComposer({
   const [historyMessages, setHistoryMessages] = useState<GmailAIHistoryMessage[]>([]);
   const [targetLang, setTargetLang] = useState('en');
   const [targetLangName, setTargetLangName] = useState('英语');
+  const [targetLangNeedsConfirmation, setTargetLangNeedsConfirmation] = useState(false);
   const [replyTone, setReplyTone] = useState<ReplyTone>('friendly');
   const [generatedLangName, setGeneratedLangName] = useState('');
   const [aiLoading, setAiLoading] = useState(false);
@@ -241,6 +242,17 @@ export function EmailComposer({
   });
   const generationTask = getLatestTaskByKey(generationTaskKey);
 
+  const latestExternalMessage = useMemo(() => {
+    const normalizedAccountEmail = String(auth?.email || '').trim().toLowerCase();
+    return [...threadMessages].reverse().find((message) => (
+      !normalizedAccountEmail
+      || !String(message.from || '').toLowerCase().includes(normalizedAccountEmail)
+    )) || threadMessages.at(-1);
+  }, [auth?.email, threadMessages]);
+  const detectedReplyLanguage = latestExternalMessage?.body
+    ? detectReplyLanguage(emailHtmlToText(latestExternalMessage.body))
+    : '';
+
   useEffect(() => {
     if (avatarUrl) updateTaskAvatarByKey(generationTaskKey, avatarUrl);
   }, [avatarUrl, generationTaskKey, updateTaskAvatarByKey]);
@@ -258,22 +270,19 @@ export function EmailComposer({
     if (targetContextKeyRef.current !== targetContextKey) {
       targetContextKeyRef.current = targetContextKey;
       targetLangLockedRef.current = false;
+      setTargetLangNeedsConfirmation(false);
     }
     if (targetLangLockedRef.current) return;
-
-    const normalizedAccountEmail = String(auth?.email || '').trim().toLowerCase();
-    const latestMessage = [...threadMessages].reverse().find((message) => (
-      !normalizedAccountEmail
-      || !String(message.from || '').toLowerCase().includes(normalizedAccountEmail)
-    )) || threadMessages.at(-1);
-    const detectedLanguage = detectEmailLanguage(
-      `${latestMessage?.subject || ''}\n${latestMessage?.body || ''}`,
-    );
-    const knownLanguage = LANGUAGE_OPTIONS.find(([code]) => code === detectedLanguage);
-    if (!knownLanguage) return;
+    if (!latestExternalMessage?.body?.trim()) return;
+    const knownLanguage = LANGUAGE_OPTIONS.find(([code]) => code === detectedReplyLanguage);
+    if (!knownLanguage) {
+      setTargetLangNeedsConfirmation(true);
+      return;
+    }
     setTargetLang(knownLanguage[0]);
     setTargetLangName(knownLanguage[1]);
-  }, [auth?.email, targetContextKey, threadMessages]);
+    setTargetLangNeedsConfirmation(false);
+  }, [detectedReplyLanguage, latestExternalMessage?.body, targetContextKey]);
 
   const invokeAI = async (
     payload: Record<string, unknown>,
@@ -345,9 +354,11 @@ export function EmailComposer({
       const language = result.language || 'en';
       const knownLanguage = LANGUAGE_OPTIONS.find(([code]) => code === language);
       setAnalysis(result);
-      if (!targetLangLockedRef.current) {
+      if (!targetLangLockedRef.current && knownLanguage) {
         setTargetLang(language);
         setTargetLangName(result.languageName || knownLanguage?.[1] || language);
+        setTargetLangNeedsConfirmation(false);
+        targetLangLockedRef.current = true;
       }
     } catch (error) {
       if (runId !== analysisRunRef.current) return;
@@ -454,6 +465,7 @@ export function EmailComposer({
     text: string,
     signal: AbortSignal,
     onProgress: (translatedText: string) => void,
+    sourceLang = targetLang,
   ) => {
     const response = await fetch('/api/translate', {
       method: 'POST',
@@ -461,7 +473,7 @@ export function EmailComposer({
       signal,
       body: JSON.stringify({
         text,
-        sourceLang: targetLang,
+        sourceLang,
         customPrompt: settings.translatePrompt || '',
         modelProvider: settings.modelProvider || 'builtin',
         customApiUrl: settings.customApiUrl || '',
@@ -535,7 +547,20 @@ export function EmailComposer({
       setAiError('当前邮件还没有可用于起草的正文，请稍后重试。');
       return;
     }
+    const detectedLanguageAtGeneration = !targetLangLockedRef.current
+      ? detectedReplyLanguage
+      : '';
+    if (!targetLangLockedRef.current && latestExternalMessage?.body?.trim() && !detectedLanguageAtGeneration) {
+      setAiError('暂时无法确认来信语言，请先在“回复语言”中手动选择后再生成。');
+      return;
+    }
+    const generationTargetLang = detectedLanguageAtGeneration || targetLang;
+    const generationTargetLangName = LANGUAGE_OPTIONS.find(([code]) => code === generationTargetLang)?.[1]
+      || targetLangName;
     targetLangLockedRef.current = true;
+    setTargetLang(generationTargetLang);
+    setTargetLangName(generationTargetLangName);
+    setTargetLangNeedsConfirmation(false);
     const previousSuggestion = suggestion;
     const previousReplyContent = replyContent;
     const previousEditedChineseReply = editedChineseReply;
@@ -574,8 +599,8 @@ export function EmailComposer({
       },
       retryInput: {
         userIdeas: userIdeas.trim(),
-        targetLang,
-        targetLangName,
+        targetLang: generationTargetLang,
+        targetLangName: generationTargetLangName,
         replyTone,
       },
       run: async ({ signal, report }) => {
@@ -644,8 +669,8 @@ export function EmailComposer({
             threadMessages: generationMessages,
             analysis: analysis || {},
             userIdeas,
-            targetLang,
-            targetLangName,
+            targetLang: generationTargetLang,
+            targetLangName: generationTargetLangName,
             replyTone,
             gmailAccountEmail: auth?.email || '',
             targetMessageId: replyTarget?.messageId || '',
@@ -750,6 +775,7 @@ export function EmailComposer({
                 if (!replacingExistingDraft) setTranslationExpanded(true);
                 queueStreamUiFlush();
               },
+              generationTargetLang,
             );
             finalResult = {
               suggestedReply: pendingBody,
@@ -778,8 +804,8 @@ export function EmailComposer({
             action: 'draft',
             analysis: analysis || {},
             userIdeas,
-            targetLang,
-            targetLangName,
+            targetLang: generationTargetLang,
+            targetLangName: generationTargetLangName,
             replyTone,
           }, generationMessages, controller.signal) as AISuggestion;
           console.info('[Gmail AI client draft timing]', {
@@ -805,10 +831,10 @@ export function EmailComposer({
       setSynchronizedDraft(result.translatedReply.trim() ? {
         foreignBody: cleanSuggestedReply,
         chineseBody: result.translatedReply,
-        targetLanguage: targetLang,
+        targetLanguage: generationTargetLang,
       } : null);
       setDraftUsedAnalysis(Boolean(analysis));
-      setGeneratedLangName(targetLangName);
+      setGeneratedLangName(generationTargetLangName);
       addSuggestion({
         threadId: thread.id,
         messageId: externalMessage?.id || thread.id,
@@ -820,8 +846,8 @@ export function EmailComposer({
       });
       return {
         suggestion: cleanSuggestion,
-        targetLang,
-        targetLangName,
+        targetLang: generationTargetLang,
+        targetLangName: generationTargetLangName,
         usedAnalysis: Boolean(analysis),
       } satisfies GmailAIReplyTaskResult;
     } catch (error) {
@@ -1277,6 +1303,7 @@ export function EmailComposer({
           onChange={(event) => {
             const language = LANGUAGE_OPTIONS.find(([code]) => code === event.target.value);
             targetLangLockedRef.current = true;
+            setTargetLangNeedsConfirmation(false);
             setTargetLang(event.target.value);
             setTargetLangName(language?.[1] || event.target.value);
             setTranslationUpdated(false);
@@ -1289,6 +1316,9 @@ export function EmailComposer({
           ))}
         </select>
       </label>
+      {targetLangNeedsConfirmation && !targetLangLockedRef.current && (
+        <span className="text-xs font-medium text-amber-700">暂未确认来信语言，请先选择</span>
+      )}
       <label className="flex items-center gap-2 text-xs font-medium text-gray-600">
         <span className="shrink-0">回复语气</span>
         <select

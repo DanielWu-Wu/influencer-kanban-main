@@ -1,3 +1,5 @@
+import { splitEmailForTranslation } from '@/lib/email-text';
+
 type LanguageMarkers = {
   code: string;
   words: readonly string[];
@@ -66,10 +68,11 @@ const LATIN_LANGUAGE_MARKERS: readonly LanguageMarkers[] = [
   {
     code: 'it',
     words: [
-      'anche', 'buongiorno', 'come', 'con', 'grazie', 'nostro', 'nostra', 'per',
-      'perché', 'possiamo', 'potrebbe', 'questa', 'questo', 'sarebbe', 'vorrei',
+      'anche', 'buongiorno', 'ciao', 'come', 'con', 'che', 'grazie', 'ho', 'nostro',
+      'nostra', 'per', 'perché', 'piacere', 'possiamo', 'potrebbe', 'questa',
+      'questo', 'sarebbe', 'sono', 'stato', 'vacanza', 'vorrei',
     ],
-    phrases: ['grazie mille', 'cordiali saluti', 'per favore', 'vorremmo'],
+    phrases: ['che piacere', 'grazie mille', 'cordiali saluti', 'per favore', 'vorremmo'],
   },
   {
     code: 'sv',
@@ -155,21 +158,26 @@ function countMatches(text: string, pattern: RegExp) {
   return text.match(pattern)?.length || 0;
 }
 
-export function detectEmailLanguage(text: string): string {
+export type EmailLanguageDetection = {
+  languageCode: string;
+  confidence: 'high' | 'low';
+};
+
+export function detectEmailLanguageWithConfidence(text: string): EmailLanguageDetection {
   const sample = String(text || '')
     .normalize('NFKC')
     .replace(/https?:\/\/\S+|www\.\S+|\S+@\S+/gi, ' ')
     .slice(0, 8_000)
     .toLowerCase();
 
-  if (!sample.trim()) return '';
-  if (/[\u3040-\u30ff]/.test(sample)) return 'ja';
-  if (/[\uac00-\ud7af]/.test(sample)) return 'ko';
-  if (/[\u4e00-\u9fff]/.test(sample)) return 'zh';
-  if (/[\u0600-\u06ff]/.test(sample)) return 'ar';
-  if (/[\u0370-\u03ff]/.test(sample)) return 'el';
-  if (/[іїєґ]/i.test(sample)) return 'uk';
-  if (/[\u0400-\u04ff]/.test(sample)) return 'ru';
+  if (!sample.trim()) return { languageCode: '', confidence: 'low' };
+  if (/[\u3040-\u30ff]/.test(sample)) return { languageCode: 'ja', confidence: 'high' };
+  if (/[\uac00-\ud7af]/.test(sample)) return { languageCode: 'ko', confidence: 'high' };
+  if (/[\u4e00-\u9fff]/.test(sample)) return { languageCode: 'zh', confidence: 'high' };
+  if (/[\u0600-\u06ff]/.test(sample)) return { languageCode: 'ar', confidence: 'high' };
+  if (/[\u0370-\u03ff]/.test(sample)) return { languageCode: 'el', confidence: 'high' };
+  if (/[іїєґ]/i.test(sample)) return { languageCode: 'uk', confidence: 'high' };
+  if (/[\u0400-\u04ff]/.test(sample)) return { languageCode: 'ru', confidence: 'high' };
 
   const tokens = sample.match(/\p{L}+/gu) || [];
   const tokenCounts = new Map<string, number>();
@@ -197,7 +205,20 @@ export function detectEmailLanguage(text: string): string {
   const ranked = [...scores.entries()].sort((left, right) => right[1] - left[1]);
   const [bestCode, bestScore] = ranked[0] || ['', 0];
   const secondScore = ranked[1]?.[1] || 0;
-  if (bestScore >= 2 && (bestScore >= 4 || bestScore > secondScore)) return bestCode;
+  if (bestScore >= 2 && (bestScore >= 4 || bestScore > secondScore)) {
+    return { languageCode: bestCode, confidence: 'high' };
+  }
 
-  return /[a-z]/i.test(sample) ? 'en' : '';
+  return { languageCode: /[a-z]/i.test(sample) ? 'en' : '', confidence: 'low' };
+}
+
+export function detectEmailLanguage(text: string): string {
+  return detectEmailLanguageWithConfidence(text).languageCode;
+}
+
+/** Detect the language of the current reply, excluding quoted thread history. */
+export function detectReplyLanguage(text: string): string {
+  const currentText = splitEmailForTranslation(text).currentText;
+  const detection = detectEmailLanguageWithConfidence(currentText);
+  return detection.confidence === 'high' ? detection.languageCode : '';
 }

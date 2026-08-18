@@ -9,6 +9,16 @@ export const APP_RELEASE_LAST_SEEN_STORAGE_KEY = 'influencer-board-last-seen-rel
 
 export const APP_RELEASES: readonly AppRelease[] = [
   {
+    version: '1.1.4',
+    releasedAt: '2026-08-18',
+    title: 'Gmail 邮件处理体验优化',
+    highlights: [
+      '主要收件箱支持后台预翻译近期未读来信，打开邮件时更快看到中文内容',
+      '优化邮件已读状态：正文显示后立即标记已读，邮件列表状态同步更加及时',
+      '优化 AI 回复语言识别：无需等待红人画像分析完成，也能根据当前来信生成对应语言的邮件',
+    ],
+  },
+  {
     version: '1.1.2',
     releasedAt: '2026-08-17',
     title: '邮件回复体验优化',

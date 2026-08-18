@@ -46,7 +46,7 @@ import {
   stripConfiguredEmailSignature,
   textToEmailHtml,
 } from '@/lib/email-content';
-import { detectEmailLanguage } from '@/lib/email-language';
+import { detectReplyLanguage } from '@/lib/email-language';
 import {
   buildGmailAIHistoryCacheKey,
   getOrLoadGmailAIHistory,
@@ -148,6 +148,7 @@ export function AITemplateReplyComposer({
   );
   const [userIdeas, setUserIdeas] = useState('');
   const [targetLang, setTargetLang] = useState('en');
+  const [targetLangNeedsConfirmation, setTargetLangNeedsConfirmation] = useState(false);
   const [replyTone, setReplyTone] = useState<ReplyTone>('friendly');
   const [replyContent, setReplyContent] = useState('');
   const [suggestion, setSuggestion] = useState<TemplateSuggestion | null>(null);
@@ -170,6 +171,7 @@ export function AITemplateReplyComposer({
   const chineseTranslationRef = useRef<AbortController | null>(null);
   const restoringTaskSettingsRef = useRef(false);
   const handledAutoRetryTaskRef = useRef('');
+  const targetLangLockedRef = useRef(false);
 
   const threadMessages = useMemo(() => buildThreadMessages(thread, replyTarget), [replyTarget, thread]);
   const externalMessage = replyTarget?.message;
@@ -188,15 +190,25 @@ export function AITemplateReplyComposer({
   });
   const generationTask = getLatestTaskByKey(generationTaskKey);
 
+  const detectedReplyLanguage = externalMessage?.body
+    ? detectReplyLanguage(emailHtmlToText(externalMessage.body))
+    : '';
+
   useEffect(() => {
     if (avatarUrl) updateTaskAvatarByKey(generationTaskKey, avatarUrl);
   }, [avatarUrl, generationTaskKey, updateTaskAvatarByKey]);
 
   useEffect(() => {
-    const detected = detectEmailLanguage(externalMessage?.body || '');
-    const option = LANGUAGE_OPTIONS.find(([code]) => code === detected);
-    if (option) setTargetLang(option[0]);
-  }, [externalMessage?.body, thread.id]);
+    if (targetLangLockedRef.current) return;
+    if (!externalMessage?.body?.trim()) return;
+    const option = LANGUAGE_OPTIONS.find(([code]) => code === detectedReplyLanguage);
+    if (!option) {
+      setTargetLangNeedsConfirmation(true);
+      return;
+    }
+    setTargetLang(option[0]);
+    setTargetLangNeedsConfirmation(false);
+  }, [detectedReplyLanguage, externalMessage?.body, thread.id]);
 
   useEffect(() => {
     if (!selectedTemplate) return;
@@ -344,15 +356,19 @@ export function AITemplateReplyComposer({
     return loaded.value;
   };
 
-  const baseAIPayload = (history: GmailAIHistoryMessage[], template: AIReplyTemplate) => ({
+  const baseAIPayload = (
+    history: GmailAIHistoryMessage[],
+    template: AIReplyTemplate,
+    generationTargetLang = targetLang,
+  ) => ({
     threadSubject: replyTarget?.subject || thread.subject,
     threadMessages: history,
     targetMessageId: replyTarget?.messageId || '',
     templateReply: true,
     replyTemplate: template,
     userIdeas: userIdeas.trim(),
-    targetLang,
-    targetLangName: languageName,
+    targetLang: generationTargetLang,
+    targetLangName: LANGUAGE_OPTIONS.find(([code]) => code === generationTargetLang)?.[1] || languageName,
     replyTone,
     gmailAccountEmail: auth?.email || '',
     draftPrompt: settings.aiDraftPrompt || settings.aiEmailPrompt || '',
@@ -363,6 +379,15 @@ export function AITemplateReplyComposer({
 
   const generate = () => {
     if (!selectedTemplate || !userIdeas.trim() || settingsLoading) return;
+    const generationDetectedLanguage = targetLangLockedRef.current ? '' : detectedReplyLanguage;
+    const generationTargetLang = generationDetectedLanguage || targetLang;
+    if (externalMessage?.body?.trim() && !generationDetectedLanguage && targetLangNeedsConfirmation && !targetLangLockedRef.current) {
+      setError('暂时无法确认来信语言，请先在“回复语言”中手动选择后再生成。');
+      return;
+    }
+    targetLangLockedRef.current = true;
+    setTargetLang(generationTargetLang);
+    setTargetLangNeedsConfirmation(false);
     chineseTranslationRef.current?.abort();
     const previousContent = replyContent;
     const previousSuggestion = suggestion;
@@ -401,7 +426,7 @@ export function AITemplateReplyComposer({
       retryInput: {
         selectedTemplateId: selectedTemplate.id,
         userIdeas: userIdeas.trim(),
-        targetLang,
+        targetLang: generationTargetLang,
         replyTone,
       },
       run: async ({ signal, report }) => {
@@ -425,7 +450,7 @@ export function AITemplateReplyComposer({
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           signal: controller.signal,
-          body: JSON.stringify(baseAIPayload(history, selectedTemplate)),
+          body: JSON.stringify(baseAIPayload(history, selectedTemplate, generationTargetLang)),
         });
         if (!response.ok || !response.body) throw new Error(`流式接口暂不可用 (${response.status})`);
         const reader = response.body.getReader();
@@ -478,7 +503,7 @@ export function AITemplateReplyComposer({
           headers: { 'Content-Type': 'application/json' },
           signal: controller.signal,
           body: JSON.stringify({
-            ...baseAIPayload(history, selectedTemplate),
+            ...baseAIPayload(history, selectedTemplate, generationTargetLang),
             action: 'templateDraft',
           }),
         });
@@ -498,18 +523,18 @@ export function AITemplateReplyComposer({
       setSynchronizedDraft({
         foreignBody: cleanReply,
         chineseBody: finalResult.translatedReply || '',
-        targetLanguage: targetLang,
+        targetLanguage: generationTargetLang,
       });
       setChineseDirty(false);
       setTranslationUpdated(false);
-      setSyncedTargetLang(targetLang);
+      setSyncedTargetLang(generationTargetLang);
       setTranslationOpen(true);
       return {
         suggestion: {
           ...finalResult,
           suggestedReply: cleanReply,
         },
-        targetLang,
+        targetLang: generationTargetLang,
       } satisfies GmailTemplateReplyTaskResult;
     } catch (generationError) {
       if (controller.signal.aborted) return;
@@ -551,6 +576,7 @@ export function AITemplateReplyComposer({
         setSelectedTemplateId(retryInput.selectedTemplateId);
       }
       if (retryInput.targetLang) setTargetLang(retryInput.targetLang);
+      if (retryInput.targetLang) targetLangLockedRef.current = true;
       if (retryInput.replyTone) setReplyTone(retryInput.replyTone);
       return;
     }
@@ -771,7 +797,9 @@ export function AITemplateReplyComposer({
                   value={targetLang}
                   disabled={loading || translatingChinese}
                   onValueChange={(value) => {
+                    targetLangLockedRef.current = true;
                     setTargetLang(value);
+                    setTargetLangNeedsConfirmation(false);
                     if (suggestion) {
                       setTranslationUpdated(false);
                       setDraftSaved(false);
@@ -794,6 +822,9 @@ export function AITemplateReplyComposer({
                   </SelectContent>
                 </Select>
               </div>
+              {targetLangNeedsConfirmation && !targetLangLockedRef.current && (
+                <p className="mt-2 text-xs font-medium text-amber-700">暂未确认来信语言，请先选择回复语言</p>
+              )}
               <Button className="mt-3 w-full" disabled={!selectedTemplate || !userIdeas.trim() || loading || translatingChinese || settingsLoading} onClick={generate}>
                 {loading ? <Loader2 className="animate-spin" /> : <Sparkles />}
                 {loading ? stage || '正在生成' : '按模板生成邮件'}
