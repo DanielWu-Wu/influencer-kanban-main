@@ -1,3 +1,5 @@
+import { wrapGmailDefaultEmailHtml } from '@/lib/gmail-compose-html';
+
 export type EmailSignatureScope = 'outreach' | 'regular' | 'both';
 export type EmailSignatureContext = Exclude<EmailSignatureScope, 'both'>;
 
@@ -306,7 +308,7 @@ export async function buildRichRawEmail({
     'Content-Type: text/html; charset=utf-8',
     'Content-Transfer-Encoding: base64',
     '',
-    wrapBase64(encodeUtf8Base64(`<div style="font-family:Arial,sans-serif;font-size:14px;line-height:1.5;word-break:break-word">${safeHtmlBody}</div>`)),
+    wrapBase64(encodeUtf8Base64(wrapGmailDefaultEmailHtml(safeHtmlBody))),
     `--${alternativeBoundary}--`,
   ];
 

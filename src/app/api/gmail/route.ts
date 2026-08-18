@@ -6,6 +6,7 @@ import { refreshStoredGmailAuth } from '@/lib/gmail-cloud-auth';
 import { getRequestUser } from '@/lib/supabase/server';
 import { resolveLatestGmailAnswerAt } from '@/lib/daily-gmail-todos';
 import { selectLatestGmailTranslationCandidate } from '@/lib/gmail-translation-candidates';
+import { wrapGmailDefaultEmailHtml } from '@/lib/gmail-compose-html';
 
 type GmailHeader = { name: string; value: string };
 type InlineImagePayload = {
@@ -641,7 +642,7 @@ export async function POST(request: NextRequest) {
         'Content-Type: text/html; charset=utf-8',
         'Content-Transfer-Encoding: base64',
         '',
-        wrapBase64(encodeBase64(`<div style="font-family:Arial,sans-serif;font-size:14px;line-height:1.5;word-break:break-word">${htmlBody}</div>`)),
+        wrapBase64(encodeBase64(wrapGmailDefaultEmailHtml(htmlBody))),
       ];
       const textPart = [
         `--${alternativeBoundary}`,

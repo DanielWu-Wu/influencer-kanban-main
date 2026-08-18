@@ -9,6 +9,14 @@ export const APP_RELEASE_LAST_SEEN_STORAGE_KEY = 'influencer-board-last-seen-rel
 
 export const APP_RELEASES: readonly AppRelease[] = [
   {
+    version: '1.1.5',
+    releasedAt: '2026-08-18',
+    title: 'Gmail 草稿格式优化',
+    highlights: [
+      '优化邮件默认字体格式，保存到 Gmail 后自动使用 Gmail 原生默认样式。',
+    ],
+  },
+  {
     version: '1.1.4',
     releasedAt: '2026-08-18',
     title: 'Gmail 邮件处理体验优化',

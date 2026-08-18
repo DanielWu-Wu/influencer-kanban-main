@@ -105,7 +105,7 @@ export function RichEmailEditor({
   const editorRef = useRef<HTMLDivElement>(null);
   const savedRangeRef = useRef<Range | null>(null);
   const [activeCommands, setActiveCommands] = useState<Set<string>>(new Set());
-  const [textColor, setTextColor] = useState('#111111');
+  const [textColor, setTextColor] = useState('#202124');
   const [highlightColor, setHighlightColor] = useState('#fff2a8');
 
   useEffect(() => {
@@ -215,10 +215,16 @@ export function RichEmailEditor({
           aria-label="邮件正文"
           aria-multiline="true"
           className={cn(
-            'overflow-y-auto px-3 py-3 text-sm leading-6 outline-none [&_a]:text-blue-600 [&_a]:underline [&_blockquote]:border-l-4 [&_blockquote]:border-muted-foreground/30 [&_blockquote]:pl-3 [&_blockquote]:text-muted-foreground [&_img]:my-2 [&_img]:max-w-full [&_ol]:ml-5 [&_ol]:list-decimal [&_ul]:ml-5 [&_ul]:list-disc',
+            'overflow-y-auto px-3 py-3 outline-none [&_a]:text-blue-600 [&_a]:underline [&_blockquote]:border-l-4 [&_blockquote]:border-muted-foreground/30 [&_blockquote]:pl-3 [&_blockquote]:text-muted-foreground [&_img]:my-2 [&_img]:max-w-full [&_ol]:ml-5 [&_ol]:list-decimal [&_ul]:ml-5 [&_ul]:list-disc',
             fillHeight && 'absolute inset-0',
           )}
-          style={fillHeight ? undefined : { minHeight }}
+          style={{
+            color: '#202124',
+            fontFamily: 'Arial, sans-serif',
+            fontSize: '14px',
+            lineHeight: 'normal',
+            ...(fillHeight ? {} : { minHeight }),
+          }}
           onFocus={saveSelection}
           onInput={() => {
             emitChange();
@@ -237,10 +243,11 @@ export function RichEmailEditor({
         <select
           aria-label="字体"
           className="h-8 max-w-32 rounded-lg border-0 bg-transparent px-1 text-xs outline-none hover:bg-white/80"
-          defaultValue="Arial"
+          defaultValue="sans-serif"
           onMouseDown={saveSelection}
           onChange={(event) => runCommand('fontName', event.target.value)}
         >
+          <option value="sans-serif">Sans Serif</option>
           <option value="Arial">Arial</option>
           <option value="Georgia">Georgia</option>
           <option value="Times New Roman">Times New Roman</option>
