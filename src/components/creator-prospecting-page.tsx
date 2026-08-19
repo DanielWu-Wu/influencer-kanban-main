@@ -112,7 +112,17 @@ import {
 } from '@/lib/outreach-context';
 import type { GmailAuth } from '@/lib/types';
 import { useEmailGenerationTasks } from '@/components/email-generation-task-provider';
-import { buildOutreachEmailGenerationTaskKey } from '@/lib/email-generation-tasks';
+import {
+  buildOutreachEmailGenerationTaskKey,
+  buildOutreachEmailTranslationTaskKey,
+} from '@/lib/email-generation-tasks';
+import {
+  EMAIL_TRANSLATION_RETRY_OPERATION,
+  canApplyEmailTranslationResult,
+  isEmailTranslationTaskResult,
+  requestEmailTranslation,
+  type EmailTranslationRetryInput,
+} from '@/lib/email-translation-tasks';
 
 type YouTubeResolveChannel = {
   inputUrl?: string;
@@ -818,6 +828,7 @@ export type CreatorProspectingOpenRequest = {
   prospectId: string;
   requestId: number;
   retryRequested?: boolean;
+  retryInput?: unknown;
 };
 
 export function CreatorProspectingPage({
@@ -828,7 +839,7 @@ export function CreatorProspectingPage({
   const { settings } = useSettings();
   const { products } = useProducts();
   const { auth, connect } = useGmailAuth();
-  const { enqueueTask, getLatestTaskByKey } = useEmailGenerationTasks();
+  const { enqueueTask, getLatestTaskByKey, tasks: emailGenerationTasks } = useEmailGenerationTasks();
   const [activeTab, setActiveTab] = useState<ProspectingTab>('import');
   const [input, setInput] = useState('');
   const [userPreference, setUserPreference] = useState('');
@@ -866,7 +877,7 @@ export function CreatorProspectingPage({
   const developmentSnapshotRef = useRef<FeishuRecordSnapshot | null>(null);
   const previewOperationIdRef = useRef('');
   const quickOperationIdRef = useRef('');
-  const outreachChineseTranslationRunRef = useRef(new Map<string, number>());
+  const appliedOutreachTranslationTaskRef = useRef(new Set<string>());
   const pendingFeishuProspectIdsRef = useRef(new Set<string>());
   const prospectsRef = useRef<Prospect[]>([]);
   const cloudSyncedUpdatedAtRef = useRef(new Map<string, string>());
@@ -1023,6 +1034,45 @@ export function CreatorProspectingPage({
       item.id === id ? { ...item, ...patch, updatedAt: new Date().toISOString() } : item
     )));
   };
+
+  useEffect(() => {
+    if (!loaded) return;
+    prospectsRef.current.forEach((prospect) => {
+      const task = getLatestTaskByKey(buildOutreachEmailTranslationTaskKey(prospect.id));
+      if (task?.status !== 'completed' || !isEmailTranslationTaskResult(task.result)) return;
+      if (!prospect.aiDraft) return;
+      const translationResult = task.result;
+      const currentChineseBody = prospect.aiDraft?.translatedBody || prospect.aiDraft?.translatedSummary || '';
+      const currentTargetLang = prospect.outreachLanguage
+        || prospect.aiDraft?.language
+        || prospect.language
+        || 'en';
+      if (!canApplyEmailTranslationResult({
+        result: translationResult,
+        chineseBody: currentChineseBody,
+        targetLang: currentTargetLang,
+      })) return;
+      if (appliedOutreachTranslationTaskRef.current.has(task.id)) return;
+      const translatedBody = stripConfiguredEmailSignature(
+        sanitizeOutreachEmailBody(translationResult.foreignBody),
+        settings.emailSignature,
+      );
+      if (!translatedBody) return;
+      appliedOutreachTranslationTaskRef.current.add(task.id);
+      if (prospect.aiDraft?.body === translatedBody
+        && prospect.aiDraft.synchronizedChineseBody === translationResult.chineseBody
+        && prospect.aiDraft.synchronizedTargetLanguage === translationResult.targetLang) return;
+      updateProspect(prospect.id, {
+        aiDraft: {
+          ...prospect.aiDraft,
+          body: translatedBody,
+          synchronizedChineseBody: translationResult.chineseBody,
+          synchronizedTargetLanguage: translationResult.targetLang,
+        },
+        error: undefined,
+      });
+    });
+  }, [emailGenerationTasks, getLatestTaskByKey, loaded, settings.emailSignature, prospects.length]);
 
   useEffect(() => {
     const prospectId = openProspectRequest?.prospectId;
@@ -3173,6 +3223,8 @@ export function CreatorProspectingPage({
           sanitizeOutreachEmailBody(completedDraft.body || streamedBody),
           settings.emailSignature,
         ),
+        synchronizedChineseBody: String(completedDraft.translatedBody || completedDraft.translatedSummary || '').trim(),
+        synchronizedTargetLanguage: prospect.outreachLanguage || completedDraft.language || prospect.language || 'en',
       };
       if (streamUiTimeout) {
         window.clearTimeout(streamUiTimeout);
@@ -3208,6 +3260,8 @@ export function CreatorProspectingPage({
             sanitizeOutreachEmailBody(generatedDraft.body),
             settings.emailSignature,
           ),
+          synchronizedChineseBody: String(generatedDraft.translatedBody || generatedDraft.translatedSummary || '').trim(),
+          synchronizedTargetLanguage: prospect.outreachLanguage || generatedDraft.language || prospect.language || 'en',
         };
         updateProspect(prospect.id, {
           aiDraft: draft,
@@ -3313,7 +3367,11 @@ export function CreatorProspectingPage({
     }
   };
 
-  const handleTranslateEditedOutreach = async (prospectId: string, chineseBody: string) => {
+  const handleTranslateEditedOutreach = async (
+    prospectId: string,
+    chineseBody: string,
+    requestedTargetLang?: string,
+  ) => {
     const normalizedChineseBody = chineseBody.trim();
     const prospect = prospectsRef.current.find((item) => item.id === prospectId);
     if (!prospect?.aiDraft || !normalizedChineseBody) {
@@ -3321,55 +3379,53 @@ export function CreatorProspectingPage({
       return false;
     }
 
-    const targetLang = prospect.outreachLanguage || prospect.aiDraft.language || prospect.language || 'en';
-    const runId = (outreachChineseTranslationRunRef.current.get(prospectId) || 0) + 1;
-    outreachChineseTranslationRunRef.current.set(prospectId, runId);
-
-    try {
-      const response = await fetch('/api/ai', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          action: 'translateEditedReply',
-          editedChineseReply: normalizedChineseBody,
+    const targetLang = requestedTargetLang
+      || prospect.outreachLanguage
+      || prospect.aiDraft.language
+      || prospect.language
+      || 'en';
+    const targetLangName = outreachLanguageLabel(targetLang);
+    const retryInput: EmailTranslationRetryInput = {
+      operation: EMAIL_TRANSLATION_RETRY_OPERATION,
+      source: 'outreach_email',
+      chineseBody: normalizedChineseBody,
+      targetLang,
+      targetLangName,
+    };
+    const taskId = enqueueTask({
+      key: buildOutreachEmailTranslationTaskKey(prospectId),
+      kind: 'email_translation',
+      title: prospect.title || '该频道',
+      description: '根据中文更新外文',
+      avatarUrl: prospect.avatarUrl,
+      navigation: {
+        view: 'prospecting',
+        prospectId,
+      },
+      initialStage: `等待翻译为${targetLangName}`,
+      retryInput,
+      run: async ({ signal, report }) => {
+        report(`正在翻译为${targetLangName}`);
+        const foreignBody = await requestEmailTranslation({
+          chineseBody: normalizedChineseBody,
           targetLang,
-          targetLangName: outreachLanguageLabel(targetLang),
+          targetLangName,
           modelProvider: settings.modelProvider,
           customApiUrl: settings.customApiUrl,
           customApiKey: settings.customApiKey,
           customModelName: settings.customModelName,
-        }),
-      });
-      const result = await response.json();
-      if (!response.ok || !result.success) {
-        throw new Error(getErrorMessage(result, '中文邮件自动翻译失败。'));
-      }
-
-      const latestProspect = prospectsRef.current.find((item) => item.id === prospectId);
-      if (
-        outreachChineseTranslationRunRef.current.get(prospectId) !== runId
-        || latestProspect?.aiDraft?.translatedBody?.trim() !== normalizedChineseBody
-      ) {
-        return false;
-      }
-
-      const translatedBody = sanitizeOutreachEmailBody(result.data?.suggestedReply);
-      if (!translatedBody) throw new Error('AI 没有返回可用的外文正文。');
-      updateProspect(prospectId, {
-        aiDraft: {
-          ...latestProspect.aiDraft,
-          body: translatedBody,
-        },
-        error: undefined,
-      });
-      toast.success(`已根据中文修改更新为${outreachLanguageLabel(targetLang)}开发信。`);
-      return true;
-    } catch (error) {
-      if (outreachChineseTranslationRunRef.current.get(prospectId) === runId) {
-        toast.error(error instanceof Error ? error.message : '中文邮件自动翻译失败。');
-      }
-      return false;
-    }
+          signal,
+        });
+        return {
+          source: 'outreach_email' as const,
+          chineseBody: normalizedChineseBody,
+          targetLang,
+          targetLangName,
+          foreignBody,
+        };
+      },
+    });
+    return Boolean(taskId);
   };
 
   const handleSaveGmailDraft = async (prospect: Prospect) => {

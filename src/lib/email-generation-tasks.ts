@@ -6,7 +6,8 @@ export const EMAIL_GENERATION_TOASTER_ID = 'email-generation-tasks';
 export type EmailGenerationTaskKind =
   | 'gmail_ai_reply'
   | 'gmail_template_reply'
-  | 'outreach_email';
+  | 'outreach_email'
+  | 'email_translation';
 
 export type EmailGenerationTaskStatus =
   | 'queued'
@@ -93,7 +94,8 @@ function parseTask(value: unknown): EmailGenerationTask | null {
   const navigation = parseNavigation(value.navigation);
   const validKind = value.kind === 'gmail_ai_reply'
     || value.kind === 'gmail_template_reply'
-    || value.kind === 'outreach_email';
+    || value.kind === 'outreach_email'
+    || value.kind === 'email_translation';
   const validStatus = value.status === 'queued'
     || value.status === 'running'
     || value.status === 'completed'
@@ -237,6 +239,23 @@ export function buildGmailEmailGenerationTaskKey(input: {
 
 export function buildOutreachEmailGenerationTaskKey(prospectId: string) {
   return `outreach_email:${prospectId}`;
+}
+
+export function buildGmailEmailTranslationTaskKey(input: {
+  composerMode: 'ai' | 'template';
+  threadId: string;
+  messageId?: string;
+}) {
+  return [
+    'email_translation',
+    input.composerMode,
+    input.threadId,
+    input.messageId || 'latest',
+  ].join(':');
+}
+
+export function buildOutreachEmailTranslationTaskKey(prospectId: string) {
+  return `email_translation:outreach:${prospectId}`;
 }
 
 export function buildEmailGenerationTaskScopeKey(

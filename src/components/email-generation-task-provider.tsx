@@ -86,6 +86,7 @@ function dispatchOpenTask(task: EmailGenerationTask, retryRequested = false) {
 }
 
 function completionMessage(task: EmailGenerationTask) {
+  if (task.kind === 'email_translation') return `${task.title} 的外文邮件已更新`;
   return task.kind === 'outreach_email'
     ? `${task.title} 的开发信已生成`
     : `${task.title} 的邮件回复已生成`;
@@ -201,7 +202,7 @@ export function EmailGenerationTaskProvider({ children }: { children: ReactNode 
           completedTask = {
             ...task,
             status: 'completed',
-            stage: '已生成',
+            stage: task.kind === 'email_translation' ? '外文邮件已更新' : '已生成',
             completedAt: Date.now(),
             result,
             partialResult: undefined,
@@ -224,6 +225,7 @@ export function EmailGenerationTaskProvider({ children }: { children: ReactNode 
       })
       .catch((error: unknown) => {
         if (disposedRef.current || controller.signal.aborted || scopeKeyRef.current !== taskScopeKey) return;
+        const failedTask = tasksRef.current.find((task) => task.id === taskId);
         const message = error instanceof Error && error.message
           ? error.message
           : '生成失败，请稍后重试。';
@@ -231,15 +233,18 @@ export function EmailGenerationTaskProvider({ children }: { children: ReactNode 
           ? {
               ...task,
               status: 'failed',
-              stage: '生成失败',
+              stage: task.kind === 'email_translation' ? '翻译失败' : '生成失败',
               completedAt: Date.now(),
               error: message,
             }
           : task));
         persistCloudTasks(true);
-        toast.error('邮件生成失败，请在“邮件生成进度”中重试。', {
-          toasterId: EMAIL_GENERATION_TOASTER_ID,
-        });
+        toast.error(
+          failedTask?.kind === 'email_translation'
+            ? '外文翻译失败，请在“邮件生成进度”中重试。'
+            : '邮件生成失败，请在“邮件生成进度”中重试。',
+          { toasterId: EMAIL_GENERATION_TOASTER_ID },
+        );
       })
       .finally(() => {
         controllersRef.current.delete(taskId);

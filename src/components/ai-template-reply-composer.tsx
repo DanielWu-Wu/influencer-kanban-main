@@ -72,7 +72,18 @@ import type { GmailThread } from '@/lib/types';
 import { AIReplyTemplateManager } from './ai-reply-template-manager';
 import { RichEmailEditor } from './rich-email-editor';
 import { useEmailGenerationTasks } from './email-generation-task-provider';
-import { buildGmailEmailGenerationTaskKey } from '@/lib/email-generation-tasks';
+import {
+  buildGmailEmailGenerationTaskKey,
+  buildGmailEmailTranslationTaskKey,
+} from '@/lib/email-generation-tasks';
+import {
+  EMAIL_TRANSLATION_RETRY_OPERATION,
+  canApplyEmailTranslationResult,
+  isEmailTranslationRetryInput,
+  isEmailTranslationTaskResult,
+  requestEmailTranslation,
+  type EmailTranslationRetryInput,
+} from '@/lib/email-translation-tasks';
 
 type ReplyTone = 'friendly' | 'formal' | 'casual';
 
@@ -168,7 +179,6 @@ export function AITemplateReplyComposer({
   const [factEditorOpen, setFactEditorOpen] = useState(false);
   const factEditorTextareaRef = useRef<HTMLTextAreaElement | null>(null);
   const appliedGenerationTaskRef = useRef('');
-  const chineseTranslationRef = useRef<AbortController | null>(null);
   const restoringTaskSettingsRef = useRef(false);
   const handledAutoRetryTaskRef = useRef('');
   const targetLangLockedRef = useRef(false);
@@ -189,6 +199,12 @@ export function AITemplateReplyComposer({
     messageId: replyTarget?.messageId,
   });
   const generationTask = getLatestTaskByKey(generationTaskKey);
+  const translationTaskKey = buildGmailEmailTranslationTaskKey({
+    composerMode: 'template',
+    threadId: thread.id,
+    messageId: replyTarget?.messageId,
+  });
+  const translationTask = getLatestTaskByKey(translationTaskKey);
 
   const detectedReplyLanguage = externalMessage?.body
     ? detectReplyLanguage(emailHtmlToText(externalMessage.body))
@@ -196,7 +212,8 @@ export function AITemplateReplyComposer({
 
   useEffect(() => {
     if (avatarUrl) updateTaskAvatarByKey(generationTaskKey, avatarUrl);
-  }, [avatarUrl, generationTaskKey, updateTaskAvatarByKey]);
+    if (avatarUrl) updateTaskAvatarByKey(translationTaskKey, avatarUrl);
+  }, [avatarUrl, generationTaskKey, translationTaskKey, updateTaskAvatarByKey]);
 
   useEffect(() => {
     if (targetLangLockedRef.current) return;
@@ -227,10 +244,6 @@ export function AITemplateReplyComposer({
     const end = editor.value.length;
     editor.setSelectionRange(end, end);
   }, [factEditorOpen]);
-
-  useEffect(() => () => {
-    chineseTranslationRef.current?.abort();
-  }, []);
 
   useEffect(() => {
     if (!generationTask) return;
@@ -303,6 +316,51 @@ export function AITemplateReplyComposer({
     setTranslationOpen(true);
     setError('');
   }, [generationTask, selectedTemplateId]);
+
+  useEffect(() => {
+    if (!translationTask) return;
+    if (translationTask.status === 'queued' || translationTask.status === 'running') {
+      setTranslatingChinese(true);
+      setError('');
+      return;
+    }
+    setTranslatingChinese(false);
+    if (translationTask.status === 'failed' || translationTask.status === 'interrupted') {
+      setError(translationTask.error || '翻译任务已中断，请在邮件生成进度中重试。');
+      return;
+    }
+    if (translationTask.status !== 'completed' || !suggestion || !editedChineseReply.trim()) return;
+    if (!isEmailTranslationTaskResult(translationTask.result)) return;
+    const translationResult = translationTask.result;
+    if (!canApplyEmailTranslationResult({
+      result: translationResult,
+      chineseBody: editedChineseReply,
+      targetLang,
+    })) return;
+    const taskMarker = `translation:${translationTask.id}`;
+    if (appliedGenerationTaskRef.current === taskMarker) return;
+    const translatedReply = stripConfiguredEmailSignature(
+      translationResult.foreignBody,
+      settings.emailSignature,
+    );
+    if (!translatedReply.trim()) return;
+    appliedGenerationTaskRef.current = taskMarker;
+    setReplyContent(translatedReply);
+    setSuggestion((current) => current ? {
+      ...current,
+      suggestedReply: translatedReply,
+      translatedReply: translationResult.chineseBody,
+    } : current);
+    setEditedChineseReply(translationResult.chineseBody);
+    setTranslationUpdated(true);
+    setSyncedTargetLang(translationResult.targetLang);
+    setSynchronizedDraft({
+      foreignBody: translatedReply,
+      chineseBody: translationResult.chineseBody,
+      targetLanguage: translationResult.targetLang,
+    });
+    setError('');
+  }, [editedChineseReply, settings.emailSignature, suggestion, targetLang, translationTask]);
 
   const getAccessToken = async (signal?: AbortSignal) => {
     if (!auth?.accessToken) throw new Error('请先连接 Gmail。');
@@ -388,7 +446,6 @@ export function AITemplateReplyComposer({
     targetLangLockedRef.current = true;
     setTargetLang(generationTargetLang);
     setTargetLangNeedsConfirmation(false);
-    chineseTranslationRef.current?.abort();
     const previousContent = replyContent;
     const previousSuggestion = suggestion;
     const previousChineseReply = editedChineseReply;
@@ -587,76 +644,91 @@ export function AITemplateReplyComposer({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [autoRetryRequest, loading, selectedTemplate, selectedTemplateId, settingsLoading, userIdeas]);
 
-  const updateDraftFromChinese = async () => {
-    const confirmedChineseReply = editedChineseReply.trim();
-    if (!confirmedChineseReply || !suggestion || !translationOutOfSync) return;
-    if (foreignManuallyEdited && !window.confirm('根据中文更新外文会覆盖当前手动调整的外文，是否继续？')) return;
-    chineseTranslationRef.current?.abort();
-    const controller = new AbortController();
-    chineseTranslationRef.current = controller;
-    setTranslatingChinese(true);
-    setTranslationUpdated(false);
-    setDraftSaved(false);
-    setError('');
-
-    try {
-      const response = await fetch('/api/ai', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        signal: controller.signal,
-        body: JSON.stringify({
-          action: 'translateEditedReply',
-          editedChineseReply: confirmedChineseReply,
-          targetLang,
-          targetLangName: languageName,
+  const enqueueEditedReplyTranslation = (
+    chineseBody: string,
+    nextTargetLang = targetLang,
+    nextTargetLangName = languageName,
+  ) => {
+    const normalizedChineseBody = chineseBody.trim();
+    if (!normalizedChineseBody || !suggestion) return null;
+    const senderLabel = String(externalMessage?.from || recipientEmail || '邮件联系人')
+      .replace(/<[^>]+>.*$/, '')
+      .replace(/^"|"$/g, '')
+      .trim() || recipientEmail || '邮件联系人';
+    const retryInput: EmailTranslationRetryInput = {
+      operation: EMAIL_TRANSLATION_RETRY_OPERATION,
+      source: 'gmail_template_reply',
+      chineseBody: normalizedChineseBody,
+      targetLang: nextTargetLang,
+      targetLangName: nextTargetLangName,
+    };
+    const taskId = enqueueTask({
+      key: translationTaskKey,
+      kind: 'email_translation',
+      title: senderLabel,
+      description: '根据中文更新外文',
+      avatarUrl,
+      navigation: {
+        view: 'gmail',
+        threadId: thread.id,
+        messageId: replyTarget?.messageId,
+        composerMode: 'template',
+      },
+      initialStage: `等待翻译为${nextTargetLangName}`,
+      retryInput,
+      run: async ({ signal, report }) => {
+        report(`正在翻译为${nextTargetLangName}`);
+        const foreignBody = await requestEmailTranslation({
+          chineseBody: normalizedChineseBody,
+          targetLang: nextTargetLang,
+          targetLangName: nextTargetLangName,
           modelProvider: settings.modelProvider,
           customApiUrl: settings.customApiUrl,
           customApiKey: settings.customApiKey,
           customModelName: settings.customModelName,
-        }),
-      });
-      const result = await response.json().catch(() => ({})) as {
-        success?: boolean;
-        data?: { suggestedReply?: string };
-        error?: string;
-      };
-      if (!response.ok || !result.success) {
-        throw new Error(result.error || '根据中文更新外文草稿失败。');
-      }
-      const translatedReply = stripConfiguredEmailSignature(
-        String(result.data?.suggestedReply || ''),
-        settings.emailSignature,
-      );
-      if (!translatedReply.trim()) throw new Error('AI 没有返回可用的外文正文。');
-      if (controller.signal.aborted || chineseTranslationRef.current !== controller) return;
-
-      setReplyContent(translatedReply);
-      setSuggestion((current) => current ? {
-        ...current,
-        suggestedReply: translatedReply,
-        translatedReply: confirmedChineseReply,
-      } : current);
-      setEditedChineseReply(confirmedChineseReply);
-      setSynchronizedDraft({
-        foreignBody: translatedReply,
-        chineseBody: confirmedChineseReply,
-        targetLanguage: targetLang,
-      });
-      setChineseDirty(false);
-      setTranslationUpdated(true);
-      setSyncedTargetLang(targetLang);
-    } catch (translationError) {
-      if (controller.signal.aborted) return;
-      setError(translationError instanceof Error
-        ? translationError.message
-        : '根据中文更新外文草稿失败。');
-    } finally {
-      if (chineseTranslationRef.current === controller) {
-        chineseTranslationRef.current = null;
-        setTranslatingChinese(false);
-      }
+          signal,
+        });
+        return {
+          source: 'gmail_template_reply' as const,
+          chineseBody: normalizedChineseBody,
+          targetLang: nextTargetLang,
+          targetLangName: nextTargetLangName,
+          foreignBody,
+        };
+      },
+    });
+    if (taskId) {
+      setTranslatingChinese(true);
+      setTranslationUpdated(false);
+      setDraftSaved(false);
+      setError('');
     }
+    return taskId;
   };
+
+  const updateDraftFromChinese = () => {
+    const confirmedChineseReply = editedChineseReply.trim();
+    if (!confirmedChineseReply || !suggestion || !translationOutOfSync || translatingChinese) return;
+    if (foreignManuallyEdited && !window.confirm('根据中文更新外文会覆盖当前手动调整的外文，是否继续？')) return;
+    enqueueEditedReplyTranslation(confirmedChineseReply);
+  };
+
+  useEffect(() => {
+    if (!autoRetryRequest || handledAutoRetryTaskRef.current === autoRetryRequest.taskId) return;
+    if (!isEmailTranslationRetryInput(autoRetryRequest.retryInput)) return;
+    if (autoRetryRequest.retryInput.source !== 'gmail_template_reply') return;
+    if (settingsLoading || loading || !suggestion) return;
+    handledAutoRetryTaskRef.current = autoRetryRequest.taskId;
+    setEditedChineseReply(autoRetryRequest.retryInput.chineseBody);
+    setTargetLang(autoRetryRequest.retryInput.targetLang);
+    enqueueEditedReplyTranslation(
+      autoRetryRequest.retryInput.chineseBody,
+      autoRetryRequest.retryInput.targetLang,
+      autoRetryRequest.retryInput.targetLangName,
+    );
+    // The task id guard makes this a single, explicit retry after navigation.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [autoRetryRequest, loading, settingsLoading, suggestion]);
 
   const saveGmailDraft = async () => {
     if (isEmailContentEmpty(replyContent)) return;

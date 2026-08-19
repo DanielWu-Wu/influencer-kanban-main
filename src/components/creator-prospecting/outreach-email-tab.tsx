@@ -11,6 +11,7 @@ import {
   ExternalLink,
   GripVertical,
   Image as ImageIcon,
+  Languages,
   Link2,
   Loader2,
   MailPlus,
@@ -53,6 +54,12 @@ import {
   type OutreachEmailProductAsset,
 } from '@/lib/outreach-email-rendering';
 import type { Product } from '@/lib/types';
+import { useEmailGenerationTasks } from '@/components/email-generation-task-provider';
+import { buildOutreachEmailTranslationTaskKey } from '@/lib/email-generation-tasks';
+import {
+  isEmailTranslationRetryInput,
+  normalizeEmailTranslationText,
+} from '@/lib/email-translation-tasks';
 
 type Props = {
   prospects: Prospect[];
@@ -65,11 +72,11 @@ type Props = {
   onEmailChange: (id: string, value: string) => void;
   onGenerate: (prospect: Prospect) => void;
   onRegeneratePart: (prospect: Prospect, part: 'subject' | 'body') => void;
-  onTranslateChinese: (prospectId: string, chineseBody: string) => Promise<boolean>;
+  onTranslateChinese: (prospectId: string, chineseBody: string, targetLang?: string) => Promise<boolean>;
   onSaveDraft: (prospect: Prospect) => void;
   onBack: (prospect: Prospect) => void;
   onSkip: (prospect: Prospect) => void;
-  openProspectRequest?: { prospectId: string; requestId: number; retryRequested?: boolean };
+  openProspectRequest?: { prospectId: string; requestId: number; retryRequested?: boolean; retryInput?: unknown };
 };
 
 function prospectLanguageLabel(prospect: Prospect) {
@@ -311,15 +318,12 @@ export function OutreachEmailTab({
 }: Props) {
   const [query, setQuery] = useState('');
   const [editingIds, setEditingIds] = useState<string[]>([]);
-  const [translationStatusById, setTranslationStatusById] = useState<Record<string, 'pending' | 'syncing' | 'synced' | 'error'>>({});
   const [expandedIds, setExpandedIds] = useState<string[]>(() => (
     prospects[0] ? [prospects[0].id] : []
   ));
   const [confirmDraftId, setConfirmDraftId] = useState<string | null>(null);
-  const translationTimersRef = useRef(new Map<string, number>());
-  const translationVersionsRef = useRef(new Map<string, number>());
-  const mountedRef = useRef(true);
   const handledOpenRequestRef = useRef(0);
+  const { getLatestTaskByKey } = useEmailGenerationTasks();
   const prospectIdsKey = prospects.map((prospect) => prospect.id).join('\u0000');
   const filtered = useMemo(() => {
     const normalized = query.trim().toLowerCase();
@@ -359,41 +363,40 @@ export function OutreachEmailTab({
       document.getElementById(`outreach-email-${openProspectRequest.prospectId}`)
         ?.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
     });
-    if (retryProspect) onGenerate(retryProspect);
-  }, [onGenerate, openProspectRequest, prospects]);
+    if (retryProspect) {
+      const retryInput = isEmailTranslationRetryInput(openProspectRequest.retryInput)
+        && openProspectRequest.retryInput.source === 'outreach_email'
+        ? openProspectRequest.retryInput
+        : null;
+      if (retryInput) {
+        const currentChineseBody = retryProspect.aiDraft?.translatedBody
+          || retryProspect.aiDraft?.translatedSummary
+          || '';
+        const currentTargetLang = retryProspect.outreachLanguage
+          || retryProspect.aiDraft?.language
+          || retryProspect.language
+          || 'en';
+        if (normalizeEmailTranslationText(currentChineseBody) === normalizeEmailTranslationText(retryInput.chineseBody)
+          && currentTargetLang === retryInput.targetLang) {
+          void onTranslateChinese(retryProspect.id, retryInput.chineseBody, retryInput.targetLang);
+        }
+      } else {
+        onGenerate(retryProspect);
+      }
+    }
+  }, [onGenerate, onTranslateChinese, openProspectRequest, prospects]);
 
-  useEffect(() => {
-    mountedRef.current = true;
-    const translationTimers = translationTimersRef.current;
-    return () => {
-      mountedRef.current = false;
-      translationTimers.forEach((timer) => window.clearTimeout(timer));
-      translationTimers.clear();
-    };
-  }, []);
-
-  const scheduleChineseTranslation = (prospect: Prospect, chineseBody: string) => {
-    onPatch(prospect.id, patchDraft(prospect, { translatedBody: chineseBody }));
-
-    const previousTimer = translationTimersRef.current.get(prospect.id);
-    if (previousTimer !== undefined) window.clearTimeout(previousTimer);
-
-    const version = (translationVersionsRef.current.get(prospect.id) || 0) + 1;
-    translationVersionsRef.current.set(prospect.id, version);
-    setTranslationStatusById((current) => ({ ...current, [prospect.id]: 'pending' }));
-
-    const timer = window.setTimeout(async () => {
-      translationTimersRef.current.delete(prospect.id);
-      if (!mountedRef.current || translationVersionsRef.current.get(prospect.id) !== version) return;
-      setTranslationStatusById((current) => ({ ...current, [prospect.id]: 'syncing' }));
-      const success = await onTranslateChinese(prospect.id, chineseBody);
-      if (!mountedRef.current || translationVersionsRef.current.get(prospect.id) !== version) return;
-      setTranslationStatusById((current) => ({
-        ...current,
-        [prospect.id]: success ? 'synced' : 'error',
-      }));
-    }, 1200);
-    translationTimersRef.current.set(prospect.id, timer);
+  const updateChineseBody = (prospect: Prospect, chineseBody: string) => {
+    const previousChineseBody = prospect.aiDraft?.synchronizedChineseBody
+      || prospect.aiDraft?.translatedBody
+      || prospect.aiDraft?.translatedSummary
+      || '';
+    const targetLang = prospect.outreachLanguage || prospect.aiDraft?.language || prospect.language || 'en';
+    onPatch(prospect.id, patchDraft(prospect, {
+      translatedBody: chineseBody,
+      synchronizedChineseBody: prospect.aiDraft?.synchronizedChineseBody || previousChineseBody,
+      synchronizedTargetLanguage: prospect.aiDraft?.synchronizedTargetLanguage || targetLang,
+    }));
   };
 
   if (!prospects.length) {
@@ -466,9 +469,22 @@ export function OutreachEmailTab({
           const productAsset = selectedProductEmailAsset(products, prospect.targetProduct);
           const isRegeneratingSubject = regeneratingPart?.id === prospect.id && regeneratingPart.part === 'subject';
           const isRegeneratingBody = regeneratingPart?.id === prospect.id && regeneratingPart.part === 'body';
-          const translationStatus = translationStatusById[prospect.id];
-          const translationBusy = translationStatus === 'pending' || translationStatus === 'syncing';
-          const translationUnsynced = translationBusy || translationStatus === 'error';
+          const translationTask = getLatestTaskByKey(buildOutreachEmailTranslationTaskKey(prospect.id));
+          const translationBusy = translationTask?.status === 'queued' || translationTask?.status === 'running';
+          const currentChineseBody = prospect.aiDraft?.translatedBody || prospect.aiDraft?.translatedSummary || '';
+          const targetLang = prospect.outreachLanguage || prospect.aiDraft?.language || prospect.language || 'en';
+          const synchronizedChineseBody = prospect.aiDraft?.synchronizedChineseBody
+            || prospect.aiDraft?.translatedBody
+            || prospect.aiDraft?.translatedSummary
+            || '';
+          const synchronizedTargetLanguage = prospect.aiDraft?.synchronizedTargetLanguage || targetLang;
+          const translationUnsynced = Boolean(
+            currentChineseBody.trim()
+            && (
+              normalizeEmailTranslationText(synchronizedChineseBody) !== normalizeEmailTranslationText(currentChineseBody)
+              || synchronizedTargetLanguage !== targetLang
+            ),
+          );
           return (
             <article
               key={prospect.id}
@@ -755,24 +771,36 @@ export function OutreachEmailTab({
                           />
                           <div>
                             <Label htmlFor={`translation-${prospect.id}`}>中文翻译对照</Label>
-                            <p className={`mt-0.5 text-xs ${translationStatus === 'error' ? 'text-red-600' : 'text-muted-foreground'}`}>
-                              {translationStatus === 'pending'
-                                ? '中文已修改，停止输入后将自动更新外文正文…'
-                                : translationStatus === 'syncing'
-                                  ? '正在润色并翻译为对应语言…'
-                                  : translationStatus === 'synced'
-                                    ? '已根据中文修改自动更新外文正文。'
-                                    : translationStatus === 'error'
-                                      ? '自动更新失败；中文修改已保留，继续编辑即可重试。'
-                                      : '修改中文后，将自动润色并更新上方外文正文。'}
+                            <p className={`mt-0.5 text-xs ${translationTask?.status === 'failed' || translationTask?.status === 'interrupted' ? 'text-red-600' : 'text-muted-foreground'}`}>
+                              {translationBusy
+                                ? translationTask?.stage || '正在后台翻译…'
+                                : translationTask?.status === 'failed' || translationTask?.status === 'interrupted'
+                                  ? translationTask.error || '翻译失败，请在邮件生成进度中重试。'
+                                  : translationUnsynced
+                                    ? '中文已修改，请点击“根据中文更新外文”后再保存草稿。'
+                                    : '修改中文后，确认无误再点击“根据中文更新外文”。'}
                             </p>
                             <Textarea
                               id={`translation-${prospect.id}`}
                               value={prospect.aiDraft?.translatedBody || prospect.aiDraft?.translatedSummary || ''}
                               readOnly={!isEditing}
-                              onChange={(event) => scheduleChineseTranslation(prospect, event.target.value)}
+                              onChange={(event) => updateChineseBody(prospect, event.target.value)}
                               className={`mt-1.5 min-h-48 resize-y leading-6 ${isEditing ? 'bg-white' : 'bg-slate-50'}`}
                             />
+                            <div className="mt-2 flex justify-end">
+                              <Button
+                                type="button"
+                                size="sm"
+                                variant="outline"
+                                disabled={!translationUnsynced || translationBusy || !isEditing}
+                                onClick={() => { void onTranslateChinese(prospect.id, currentChineseBody, targetLang); }}
+                              >
+                                {translationBusy
+                                  ? <Loader2 className="mr-1 h-3.5 w-3.5 animate-spin" />
+                                  : <Languages className="mr-1 h-3.5 w-3.5" />}
+                                {translationBusy ? '正在后台翻译' : '根据中文更新外文'}
+                              </Button>
+                            </div>
                           </div>
                           <div className="grid gap-3 md:grid-cols-2">
                             <div className="rounded-md bg-blue-50/70 p-3">
@@ -824,8 +852,8 @@ export function OutreachEmailTab({
                       {savingDraftId === prospect.id || translationBusy ? <Loader2 className="mr-1 h-4 w-4 animate-spin" /> : <MailPlus className="mr-1 h-4 w-4" />}
                       {translationBusy
                         ? '等待中文同步'
-                        : translationStatus === 'error'
-                          ? '中文同步失败'
+                         : translationTask?.status === 'failed' || translationTask?.status === 'interrupted'
+                           ? '中文同步失败'
                           : '保存 Gmail 草稿'}
                     </Button>
                     <Button variant="ghost" onClick={() => onBack(prospect)}>

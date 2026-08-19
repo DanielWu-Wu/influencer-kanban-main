@@ -253,6 +253,7 @@ export default function DashboardPage() {
       setProspectingOpenRequest((current) => ({
         prospectId,
         retryRequested: detail.retryRequested,
+        retryInput: detail.retryInput,
         requestId: (current?.requestId || 0) + 1,
       }));
       changeView('prospecting');

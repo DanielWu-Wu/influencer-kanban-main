@@ -9,6 +9,14 @@ export const APP_RELEASE_LAST_SEEN_STORAGE_KEY = 'influencer-board-last-seen-rel
 
 export const APP_RELEASES: readonly AppRelease[] = [
   {
+    version: '1.1.6',
+    releasedAt: '2026-08-19',
+    title: '邮件中文同步外文后台翻译',
+    highlights: [
+      '“根据中文更新外文”现已加入邮件生成进度',
+    ],
+  },
+  {
     version: '1.1.5',
     releasedAt: '2026-08-18',
     title: 'Gmail 草稿格式优化',

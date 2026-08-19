@@ -4,7 +4,9 @@ import {
   EMAIL_GENERATION_TASK_RETENTION_MS,
   buildEmailGenerationTaskScopeKey,
   buildGmailEmailGenerationTaskKey,
+  buildGmailEmailTranslationTaskKey,
   buildOutreachEmailGenerationTaskKey,
+  buildOutreachEmailTranslationTaskKey,
   markInterruptedEmailGenerationTasks,
   normalizeEmailGenerationConcurrency,
   pruneExpiredEmailGenerationTasks,
@@ -171,4 +173,67 @@ test('不同邮件线程、回复方式和开发信对象使用不同任务键',
   assert.notEqual(aiReply, templateReply);
   assert.notEqual(aiReply, anotherMessage);
   assert.equal(buildOutreachEmailGenerationTaskKey('prospect-1'), 'outreach_email:prospect-1');
+  assert.notEqual(
+    buildGmailEmailTranslationTaskKey({ composerMode: 'ai', threadId: 'thread-1', messageId: 'message-1' }),
+    aiReply,
+  );
+  assert.notEqual(
+    buildGmailEmailTranslationTaskKey({ composerMode: 'template', threadId: 'thread-1', messageId: 'message-1' }),
+    templateReply,
+  );
+  assert.equal(
+    buildOutreachEmailTranslationTaskKey('prospect-1'),
+    'email_translation:outreach:prospect-1',
+  );
+});
+
+test('翻译任务可以保存并恢复结果', () => {
+  const original: EmailGenerationTask = {
+    ...task('translation', 'completed', 1),
+    key: 'email_translation:ai:thread-1:message-1',
+    kind: 'email_translation',
+    description: '根据中文更新外文',
+    stage: '外文邮件已更新',
+    retryInput: {
+      operation: 'translate_chinese_to_foreign',
+      source: 'gmail_ai_reply',
+      chineseBody: '请确认发布时间。',
+      targetLang: 'es',
+      targetLangName: '西班牙语',
+    },
+    result: {
+      source: 'gmail_ai_reply',
+      chineseBody: '请确认发布时间。',
+      targetLang: 'es',
+      targetLangName: '西班牙语',
+      foreignBody: 'Confirma la fecha de publicación, por favor.',
+    },
+  };
+  const [restored] = readEmailGenerationTaskSnapshot(serializeEmailGenerationTasks([original]));
+  assert.equal(restored.kind, 'email_translation');
+  assert.deepEqual(restored.result, original.result);
+  assert.deepEqual(restored.retryInput, original.retryInput);
+});
+
+test('翻译任务复用统一并发队列和中断恢复规则', () => {
+  const translationTask: EmailGenerationTask = {
+    ...task('translation-queued', 'queued', 2),
+    key: 'email_translation:ai:thread-1:message-1',
+    kind: 'email_translation',
+    description: '根据中文更新外文',
+    retryInput: {
+      operation: 'translate_chinese_to_foreign',
+      source: 'gmail_ai_reply',
+      chineseBody: '请确认发布时间。',
+      targetLang: 'es',
+      targetLangName: '西班牙语',
+    },
+  };
+  const running = task('running', 'running', 1);
+
+  assert.deepEqual(selectStartableEmailTaskIds([running, translationTask], 2), ['translation-queued']);
+  const interrupted = markInterruptedEmailGenerationTasks([translationTask], 100)[0];
+  assert.equal(interrupted.status, 'interrupted');
+  assert.equal(interrupted.stage, '页面已关闭或会话已中断，可重试');
+  assert.deepEqual(interrupted.retryInput, translationTask.retryInput);
 });

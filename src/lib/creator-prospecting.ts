@@ -74,6 +74,8 @@ export type OutreachDraft = {
   productImageIncluded?: boolean;
   translatedBody?: string;
   translatedSummary?: string;
+  synchronizedChineseBody?: string;
+  synchronizedTargetLanguage?: string;
   personalizationNotes?: string[];
   riskNotes?: string[];
   missingInfo?: string[];
