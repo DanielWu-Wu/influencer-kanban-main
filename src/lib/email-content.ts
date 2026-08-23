@@ -1,4 +1,5 @@
 import { wrapGmailDefaultEmailHtml } from '@/lib/gmail-compose-html';
+import type { EditableInlineImage, MailRecipient } from '@/lib/mail-draft-edit';
 
 export type EmailSignatureScope = 'outreach' | 'regular' | 'both';
 export type EmailSignatureContext = Exclude<EmailSignatureScope, 'both'>;
@@ -271,24 +272,51 @@ export function toBase64Url(value: string) {
   return btoa(value).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
 }
 
+function formatRecipientHeader(value: string | MailRecipient[]) {
+  if (typeof value === 'string') return value.replace(/[\r\n]/g, '').trim();
+  return value.map((recipient) => {
+    const email = recipient.email.replace(/[\r\n<>]/g, '').trim();
+    const name = recipient.name?.replace(/[\r\n]/g, ' ').trim();
+    if (!name) return email;
+    return `=?utf-8?B?${encodeUtf8Base64(name)}?= <${email}>`;
+  }).join(', ');
+}
+
+function inlineImageBase64(image: EditableInlineImage) {
+  const dataUrl = image.dataUrl || '';
+  const commaIndex = dataUrl.indexOf(',');
+  if (!dataUrl.startsWith('data:') || commaIndex < 0 || !/;base64$/i.test(dataUrl.slice(0, commaIndex))) {
+    throw new Error(`内嵌图片内容不可用：${image.filename}`);
+  }
+  return dataUrl.slice(commaIndex + 1).replace(/\s/g, '');
+}
+
 export async function buildRichRawEmail({
   to,
+  cc,
+  bcc,
   subject,
   htmlBody,
   inReplyTo,
   references,
   attachments,
+  inlineImages = [],
 }: {
-  to: string;
+  to: string | MailRecipient[];
+  cc?: string | MailRecipient[];
+  bcc?: string | MailRecipient[];
   subject: string;
   htmlBody: string;
   inReplyTo?: string;
   references?: string;
   attachments: File[];
+  inlineImages?: EditableInlineImage[];
 }) {
   const safeHtmlBody = sanitizeEmailHtml(htmlBody);
   const headers = [
-    `To: ${to.replace(/[\r\n]/g, '')}`,
+    `To: ${formatRecipientHeader(to)}`,
+    ...(cc && formatRecipientHeader(cc) ? [`Cc: ${formatRecipientHeader(cc)}`] : []),
+    ...(bcc && formatRecipientHeader(bcc) ? [`Bcc: ${formatRecipientHeader(bcc)}`] : []),
     `Subject: =?utf-8?B?${encodeUtf8Base64(subject)}?=`,
     ...(inReplyTo ? [`In-Reply-To: ${inReplyTo.replace(/[\r\n]/g, '')}`] : []),
     ...(references ? [`References: ${references.replace(/[\r\n]/g, ' ')}`] : []),
@@ -312,9 +340,32 @@ export async function buildRichRawEmail({
     `--${alternativeBoundary}--`,
   ];
 
-  if (attachments.length === 0) {
-    return [...headers, ...alternativeParts].join('\r\n');
+  let contentParts = alternativeParts;
+  if (inlineImages.length > 0) {
+    const relatedBoundary = `related-${crypto.randomUUID()}`;
+    const relatedParts = [
+      `Content-Type: multipart/related; boundary="${relatedBoundary}"`,
+      '',
+      `--${relatedBoundary}`,
+      ...alternativeParts,
+    ];
+    for (const image of inlineImages) {
+      const encodedName = encodeUtf8Base64(image.filename.replace(/[\r\n]/g, ' '));
+      relatedParts.push(
+        `--${relatedBoundary}`,
+        `Content-Type: ${image.mimeType}; name="=?utf-8?B?${encodedName}?="`,
+        `Content-Disposition: inline; filename="=?utf-8?B?${encodedName}?="`,
+        `Content-ID: <${image.contentId.replace(/[\r\n<>]/g, '')}>`,
+        'Content-Transfer-Encoding: base64',
+        '',
+        wrapBase64(inlineImageBase64(image)),
+      );
+    }
+    relatedParts.push(`--${relatedBoundary}--`);
+    contentParts = relatedParts;
   }
+
+  if (attachments.length === 0) return [...headers, ...contentParts].join('\r\n');
 
   const mixedBoundary = `mixed-${crypto.randomUUID()}`;
   const parts = [
@@ -322,7 +373,7 @@ export async function buildRichRawEmail({
     `Content-Type: multipart/mixed; boundary="${mixedBoundary}"`,
     '',
     `--${mixedBoundary}`,
-    ...alternativeParts,
+    ...contentParts,
   ];
 
   for (const file of attachments) {

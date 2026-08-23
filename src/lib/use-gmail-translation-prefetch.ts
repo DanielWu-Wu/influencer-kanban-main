@@ -7,6 +7,7 @@ import {
   GMAIL_PRIMARY_INBOX_REFRESHED_EVENT,
   GmailTranslationPrefetchQueue,
   getGmailTranslationScopeKey,
+  getMailTranslationStorageMessageId,
   registerGmailTranslationPrefetchQueue,
   requestGmailTranslation,
   selectGmailTranslationPrefetchCandidates,
@@ -51,7 +52,16 @@ export function useGmailTranslationPrefetch(active: boolean) {
       } | null;
       if (!response.ok || !result?.success || !Array.isArray(result.data)) return;
       if (scopeRef.current !== scopeKey || queueRef.current !== queue) return;
-      const cachedMessageIds = translationsRef.current.map((translation) => translation.messageId);
+      const cachedMessageIds = result.data.flatMap((candidate) => {
+        const storageMessageId = getMailTranslationStorageMessageId(scopeKey, candidate.messageId);
+        const originalText = repairTextEncoding(candidate.body);
+        return translationsRef.current.some((translation) => (
+          translation.messageId === storageMessageId
+          && translation.originalText === originalText
+        ))
+          ? [candidate.messageId]
+          : [];
+      });
       queue.enqueue(selectGmailTranslationPrefetchCandidates(result.data, cachedMessageIds, 3));
     } finally {
       requestInFlightRef.current = false;
@@ -70,8 +80,12 @@ export function useGmailTranslationPrefetch(active: boolean) {
     scopeRef.current = scopeKey;
     const queue = new GmailTranslationPrefetchQueue(async (candidate) => {
       if (scopeRef.current !== scopeKey) return;
-      if (translationsRef.current.some((translation) => translation.messageId === candidate.messageId)) return;
       const originalText = repairTextEncoding(candidate.body);
+      const storageMessageId = getMailTranslationStorageMessageId(scopeKey, candidate.messageId);
+      if (translationsRef.current.some((translation) => (
+        translation.messageId === storageMessageId
+        && translation.originalText === originalText
+      ))) return;
       const currentText = splitEmailForTranslation(originalText).currentText || originalText;
       if (!currentText.trim()) throw new Error('这封邮件没有可翻译的正文。');
       const result = await requestGmailTranslation({
@@ -82,7 +96,7 @@ export function useGmailTranslationPrefetch(active: boolean) {
       });
       if (scopeRef.current !== scopeKey) return;
       addTranslationRef.current({
-        messageId: candidate.messageId,
+        messageId: storageMessageId,
         originalText,
         translatedText: result.translatedText,
         sourceLang: result.sourceLang,

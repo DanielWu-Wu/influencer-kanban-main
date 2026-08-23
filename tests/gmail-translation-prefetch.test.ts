@@ -4,6 +4,7 @@ import {
   GmailTranslationPrefetchQueue,
   clearGmailTranslationRequests,
   getGmailTranslationScopeKey,
+  getMailTranslationStorageMessageId,
   requestGmailTranslation,
   selectGmailTranslationPrefetchCandidates,
   type GmailTranslationPrefetchCandidate,
@@ -108,6 +109,20 @@ test('翻译作用域同时隔离系统账号和 Gmail 邮箱', () => {
   assert.notEqual(
     getGmailTranslationScopeKey('one@gmail.com', 'account-a'),
     getGmailTranslationScopeKey('two@gmail.com', 'account-a'),
+  );
+});
+
+test('长期翻译缓存键同时隔离邮箱作用域和邮件编号', () => {
+  const gmailScope = getGmailTranslationScopeKey('one@gmail.com', 'account-a');
+  const tencentScope = getGmailTranslationScopeKey('tencent-mail-account-id', 'account-a');
+
+  assert.notEqual(
+    getMailTranslationStorageMessageId(gmailScope, 'same-message-id'),
+    getMailTranslationStorageMessageId(tencentScope, 'same-message-id'),
+  );
+  assert.notEqual(
+    getMailTranslationStorageMessageId(gmailScope, 'same-message-id'),
+    getMailTranslationStorageMessageId(gmailScope, 'another-message-id'),
   );
 });
 

@@ -5,6 +5,7 @@ import {
   buildEmailGenerationTaskScopeKey,
   buildGmailEmailGenerationTaskKey,
   buildGmailEmailTranslationTaskKey,
+  buildMailEmailGenerationTaskKey,
   buildOutreachEmailGenerationTaskKey,
   buildOutreachEmailTranslationTaskKey,
   markInterruptedEmailGenerationTasks,
@@ -30,6 +31,9 @@ function task(
     status,
     accountUserId: 'account-a',
     gmailEmail: 'owner@example.com',
+    provider: 'gmail',
+    mailAccountId: 'gmail:owner@example.com',
+    mailAddress: 'owner@example.com',
     title: id,
     description: 'AI 辅助回复',
     stage: '等待生成',
@@ -122,7 +126,7 @@ test('云端快照只保留可恢复字段，并能恢复已完成结果', () =>
     retryInput: { userIdeas: '礼貌确认发布时间', targetLang: 'en' },
   };
   const snapshot = serializeEmailGenerationTasks([original]);
-  assert.equal(snapshot.version, 1);
+  assert.equal(snapshot.version, 2);
   const [restored] = readEmailGenerationTaskSnapshot(snapshot);
   assert.equal(restored.id, original.id);
   assert.equal(restored.status, 'completed');
@@ -184,6 +188,36 @@ test('不同邮件线程、回复方式和开发信对象使用不同任务键',
   assert.equal(
     buildOutreachEmailTranslationTaskKey('prospect-1'),
     'email_translation:outreach:prospect-1',
+  );
+});
+
+test('相同邮件编号在 Gmail 和腾讯邮箱中不会互相替换', () => {
+  const gmail = { ...task('gmail', 'completed', 1), key: 'same', mailAccountId: 'gmail:owner@example.com' };
+  const tencent = {
+    ...task('tencent', 'queued', 2),
+    key: 'same',
+    kind: 'tencent_ai_reply' as const,
+    provider: 'tencent_exmail' as const,
+    mailAccountId: 'tencent_exmail:owner@example.com',
+    mailAddress: 'owner@example.com',
+  };
+  assert.deepEqual(
+    replaceEmailGenerationTaskForKey([gmail], tencent).map((item) => item.id),
+    ['gmail', 'tencent'],
+  );
+  assert.notEqual(
+    buildMailEmailGenerationTaskKey({
+      kind: 'gmail_ai_reply',
+      mailAccountId: gmail.mailAccountId,
+      threadId: 'thread-1',
+      messageId: 'message-1',
+    }),
+    buildMailEmailGenerationTaskKey({
+      kind: 'tencent_ai_reply',
+      mailAccountId: tencent.mailAccountId,
+      threadId: 'thread-1',
+      messageId: 'message-1',
+    }),
   );
 });
 

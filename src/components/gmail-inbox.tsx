@@ -99,7 +99,7 @@ type GmailThreadLoadState = {
 
 interface GmailInboxProps {
   active?: boolean;
-  onSelectThread: (thread: GmailThread) => void;
+  onSelectThread: (thread: GmailThread, options?: { detailLoaded?: boolean }) => void;
   onThreadLoadStateChange?: (threadId: string, state: GmailThreadLoadState) => void;
   onThreadUpdated?: (thread: GmailThread) => void;
   onCategoryChange: (category: GmailCategory) => void;
@@ -1563,7 +1563,7 @@ export function GmailInbox({
     selectedThreadIdRef.current = thread.id;
     threadDetailVisibleRef.current = true;
     setOpeningThreadId(thread.id);
-    onSelectThread(cachedThread || thread);
+    onSelectThread(cachedThread || thread, { detailLoaded: Boolean(cachedThread) });
     onThreadLoadStateChange?.(thread.id, { loading: !cachedThread });
     let nextThread = cachedThread || thread;
     let accessToken: string | null = null;
@@ -1581,7 +1581,7 @@ export function GmailInbox({
         && selectedThreadIdRef.current === thread.id
         && threadDetailVisibleRef.current;
       if (stillViewing) {
-        onSelectThread(nextThread);
+        onSelectThread(nextThread, { detailLoaded: true });
         onThreadLoadStateChange?.(thread.id, { loading: false });
         setThreads((current) => sortThreadsByLatest(
           current.map((item) => item.id === nextThread.id ? nextThread : item),
@@ -1625,7 +1625,7 @@ export function GmailInbox({
           openingThreadRunRef.current === runId
           && selectedThreadIdRef.current === thread.id
           && threadDetailVisibleRef.current
-        ) onSelectThread(synchronizedThread);
+        ) onSelectThread(synchronizedThread, { detailLoaded: true });
       }).catch(() => {
         // Inline images are optional and must never delay or hide the email body.
       });

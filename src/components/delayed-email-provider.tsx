@@ -23,15 +23,20 @@ type SendTask = {
   remainingSeconds: number;
   status: SendTaskStatus;
   hidden: boolean;
+  providerLabel: string;
+  sourceEmail?: string;
   error?: string;
 };
 
 type SendRequest = {
-  accessToken: string;
-  raw: string;
+  accessToken?: string;
+  raw?: string;
   threadId?: string;
   recipient: string;
   delaySeconds: number;
+  providerLabel?: string;
+  sourceEmail?: string;
+  execute?: (signal: AbortSignal) => Promise<void>;
   onSent?: () => void;
   onCancel?: () => void;
   onError?: (message: string) => void;
@@ -77,21 +82,26 @@ export function DelayedEmailProvider({ children }: { children: ReactNode }) {
         : task));
 
     try {
-      const response = await fetch('https://gmail.googleapis.com/gmail/v1/users/me/messages/send', {
-        method: 'POST',
-        headers: {
-          Authorization: `Bearer ${pending.accessToken}`,
-          'Content-Type': 'application/json',
-        },
-        body: JSON.stringify({
-          raw: pending.raw,
-          ...(pending.threadId ? { threadId: pending.threadId } : {}),
-        }),
-        signal: controller.signal,
-      });
-      const result = await response.json().catch(() => ({}));
-      if (!response.ok) {
-        throw new Error(result.error?.message || '邮件发送失败。');
+      if (pending.execute) {
+        await pending.execute(controller.signal);
+      } else {
+        if (!pending.accessToken || !pending.raw) throw new Error('Gmail 发送信息不完整。');
+        const response = await fetch('https://gmail.googleapis.com/gmail/v1/users/me/messages/send', {
+          method: 'POST',
+          headers: {
+            Authorization: `Bearer ${pending.accessToken}`,
+            'Content-Type': 'application/json',
+          },
+          body: JSON.stringify({
+            raw: pending.raw,
+            ...(pending.threadId ? { threadId: pending.threadId } : {}),
+          }),
+          signal: controller.signal,
+        });
+        const result = await response.json().catch(() => ({}));
+        if (!response.ok) {
+          throw new Error(result.error?.message || '邮件发送失败。');
+        }
       }
       pending.onSent?.();
       removeTask(id);
@@ -121,6 +131,8 @@ export function DelayedEmailProvider({ children }: { children: ReactNode }) {
         remainingSeconds: delaySeconds,
         status: 'countdown',
         hidden: false,
+        providerLabel: request.providerLabel || 'Gmail',
+        sourceEmail: request.sourceEmail,
       },
     ]);
     return id;
@@ -196,15 +208,15 @@ export function DelayedEmailProvider({ children }: { children: ReactNode }) {
                     {task.status === 'error'
                       ? '邮件发送失败'
                       : task.status === 'sending'
-                        ? '正在提交给 Gmail'
+                        ? `正在提交给${task.providerLabel}`
                         : '邮件正在等待发送'}
                   </p>
                   <p className="mt-1 truncate text-xs text-muted-foreground">
                     {task.status === 'error'
                       ? task.error
                       : task.status === 'sending'
-                        ? `正在发送给 ${task.recipient}`
-                        : `${task.remainingSeconds} 秒后发送给 ${task.recipient}`}
+                        ? `${task.sourceEmail ? `由 ${task.sourceEmail} ` : ''}发送给 ${task.recipient}`
+                        : `${task.remainingSeconds} 秒后由 ${task.sourceEmail || task.providerLabel} 发送给 ${task.recipient}`}
                   </p>
                 </div>
               </div>

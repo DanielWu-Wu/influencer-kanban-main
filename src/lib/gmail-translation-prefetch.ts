@@ -121,6 +121,10 @@ export function getGmailTranslationScopeKey(gmailEmail?: string, accountScope = 
   return `${accountScope}::${gmailEmail?.trim().toLowerCase() || 'unknown-gmail'}`;
 }
 
+export function getMailTranslationStorageMessageId(scopeKey: string, messageId: string) {
+  return `${scopeKey}::${messageId}`;
+}
+
 export function requestGmailTranslation(options: GmailTranslationRequestOptions) {
   const key = createTranslationRequestKey(options.scopeKey, options.messageId, options.text);
   const recent = recentTranslations.get(key);

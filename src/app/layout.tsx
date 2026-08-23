@@ -9,6 +9,7 @@ import { UserDataProvider } from '@/components/user-data-provider';
 import { Toaster } from '@/components/ui/sonner';
 import { SettingsProvider } from '@/components/settings-provider';
 import { EmailGenerationTaskProvider } from '@/components/email-generation-task-provider';
+import { MailAccountProvider } from '@/components/mail-account-provider';
 import { EMAIL_GENERATION_TOASTER_ID } from '@/lib/email-generation-tasks';
 
 export const metadata: Metadata = {
@@ -51,17 +52,19 @@ export default function RootLayout({
       <body className="antialiased">
         <AuthProvider>
           <GmailAuthProvider>
-            <SettingsProvider>
-              <UserDataProvider>
-                <EmailGenerationTaskProvider>
-                  <DelayedEmailProvider>
-                    <FollowUpDraftProvider>
-                      <RecordAssistantProvider>{children}</RecordAssistantProvider>
-                    </FollowUpDraftProvider>
-                  </DelayedEmailProvider>
-                </EmailGenerationTaskProvider>
-              </UserDataProvider>
-            </SettingsProvider>
+            <MailAccountProvider>
+              <SettingsProvider>
+                <UserDataProvider>
+                  <EmailGenerationTaskProvider>
+                    <DelayedEmailProvider>
+                      <FollowUpDraftProvider>
+                        <RecordAssistantProvider>{children}</RecordAssistantProvider>
+                      </FollowUpDraftProvider>
+                    </DelayedEmailProvider>
+                  </EmailGenerationTaskProvider>
+                </UserDataProvider>
+              </SettingsProvider>
+            </MailAccountProvider>
           </GmailAuthProvider>
           <Toaster richColors position="top-center" />
           <Toaster id={EMAIL_GENERATION_TOASTER_ID} richColors position="top-center" />

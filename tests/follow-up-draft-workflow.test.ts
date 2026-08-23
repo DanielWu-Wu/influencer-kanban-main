@@ -59,7 +59,7 @@ test('未到期时不能生成，达到第3天后允许进入 Gmail 检查', () 
     record,
     stage: 2,
     now: new Date(2026, 7, 4, 0).getTime(),
-  }).code, 'needs_gmail_check');
+  }).code, 'needs_mail_check');
 });
 
 test('人工回复和退信都会阻止生成，自动回复只给出提醒', () => {
@@ -130,7 +130,7 @@ test('Gmail 已存在同阶段邮件或没有初次开发信时禁止重复生�
     stage: 2,
     now,
     check: { ...cleanCheck, outbound: [initialMessage, { ...initialMessage, id: 'follow-up' }] },
-  }).code, 'already_sent_in_gmail');
+  }).code, 'already_sent_in_mail');
 });
 
 test('Follow Up 飞书写回只使用已配置映射并写入指定日期', () => {
@@ -146,7 +146,8 @@ test('Follow Up 飞书写回只使用已配置映射并写入指定日期', () =
 });
 
 test('Gmail 草稿已存在且飞书失败时只允许重试飞书', () => {
-  assert.equal(followUpSaveMode({ status: 'generated', canSave: true }), 'create_gmail');
+  assert.equal(followUpSaveMode({ status: 'generated', canSave: true }), 'create_draft');
   assert.equal(followUpSaveMode({ status: 'feishu_error', gmailDraftId: 'draft-1', canSave: false }), 'retry_feishu');
+  assert.equal(followUpSaveMode({ status: 'feishu_error', draftRef: 'tencent:draft-1', canSave: false }), 'retry_feishu');
   assert.equal(followUpSaveMode({ status: 'saved', gmailDraftId: 'draft-1', canSave: false }), 'blocked');
 });

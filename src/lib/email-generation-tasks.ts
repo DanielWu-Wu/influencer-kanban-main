@@ -1,11 +1,14 @@
 export const EMAIL_GENERATION_TASK_RETENTION_MS = 24 * 60 * 60 * 1000;
-export const EMAIL_GENERATION_TASKS_SCHEMA_VERSION = 1;
+export const EMAIL_GENERATION_TASKS_SCHEMA_VERSION = 2;
 export const EMAIL_GENERATION_TASK_OPEN_EVENT = 'email-generation-task-open';
 export const EMAIL_GENERATION_TOASTER_ID = 'email-generation-tasks';
 
 export type EmailGenerationTaskKind =
   | 'gmail_ai_reply'
   | 'gmail_template_reply'
+  | 'tencent_ai_reply'
+  | 'tencent_template_reply'
+  | 'cooperation_email'
   | 'outreach_email'
   | 'email_translation';
 
@@ -27,6 +30,17 @@ export type EmailGenerationTaskNavigation =
   | {
       view: 'prospecting';
       prospectId: string;
+    }
+  | {
+      view: 'tencent';
+      mailAccountId: string;
+      folderRef: string;
+      providerMessageRef: string;
+      composerMode: 'ai' | 'template';
+    }
+  | {
+      view: 'cooperation';
+      projectId: string;
     };
 
 export interface EmailGenerationTask {
@@ -36,6 +50,9 @@ export interface EmailGenerationTask {
   status: EmailGenerationTaskStatus;
   accountUserId: string;
   gmailEmail: string;
+  provider: 'gmail' | 'tencent_exmail';
+  mailAccountId: string;
+  mailAddress: string;
   title: string;
   description: string;
   avatarUrl?: string;
@@ -83,8 +100,26 @@ function parseNavigation(value: unknown): EmailGenerationTaskNavigation | null {
       composerMode: value.composerMode,
     };
   }
+  if (value.view === 'cooperation' && typeof value.projectId === 'string') {
+    return { view: 'cooperation', projectId: value.projectId };
+  }
   if (value.view === 'prospecting' && typeof value.prospectId === 'string') {
     return { view: 'prospecting', prospectId: value.prospectId };
+  }
+  if (
+    value.view === 'tencent'
+    && typeof value.mailAccountId === 'string'
+    && typeof value.folderRef === 'string'
+    && typeof value.providerMessageRef === 'string'
+    && (value.composerMode === 'ai' || value.composerMode === 'template')
+  ) {
+    return {
+      view: 'tencent',
+      mailAccountId: value.mailAccountId,
+      folderRef: value.folderRef,
+      providerMessageRef: value.providerMessageRef,
+      composerMode: value.composerMode,
+    };
   }
   return null;
 }
@@ -94,6 +129,9 @@ function parseTask(value: unknown): EmailGenerationTask | null {
   const navigation = parseNavigation(value.navigation);
   const validKind = value.kind === 'gmail_ai_reply'
     || value.kind === 'gmail_template_reply'
+    || value.kind === 'tencent_ai_reply'
+    || value.kind === 'tencent_template_reply'
+    || value.kind === 'cooperation_email'
     || value.kind === 'outreach_email'
     || value.kind === 'email_translation';
   const validStatus = value.status === 'queued'
@@ -122,6 +160,13 @@ function parseTask(value: unknown): EmailGenerationTask | null {
     status: value.status as EmailGenerationTaskStatus,
     accountUserId: value.accountUserId,
     gmailEmail: value.gmailEmail,
+    provider: value.provider === 'tencent_exmail' ? 'tencent_exmail' : 'gmail',
+    mailAccountId: typeof value.mailAccountId === 'string' && value.mailAccountId
+      ? value.mailAccountId
+      : `gmail:${value.gmailEmail.trim().toLowerCase()}`,
+    mailAddress: typeof value.mailAddress === 'string' && value.mailAddress
+      ? value.mailAddress
+      : value.gmailEmail,
     title: value.title,
     description: value.description,
     avatarUrl: typeof value.avatarUrl === 'string' ? value.avatarUrl : undefined,
@@ -207,9 +252,18 @@ export function replaceEmailGenerationTaskForKey(
   nextTask: EmailGenerationTask,
 ) {
   return [
-    ...tasks.filter((task) => task.key !== nextTask.key),
+    ...tasks.filter((task) => task.key !== nextTask.key || task.mailAccountId !== nextTask.mailAccountId),
     nextTask,
   ];
+}
+
+export function buildMailEmailGenerationTaskKey(input: {
+  kind: 'gmail_ai_reply' | 'gmail_template_reply' | 'tencent_ai_reply' | 'tencent_template_reply';
+  mailAccountId: string;
+  threadId: string;
+  messageId?: string;
+}) {
+  return [input.kind, input.mailAccountId, input.threadId, input.messageId || 'latest'].join(':');
 }
 
 export function updateEmailGenerationTaskAvatar(

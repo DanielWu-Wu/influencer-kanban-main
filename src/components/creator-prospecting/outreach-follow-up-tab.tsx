@@ -45,6 +45,13 @@ import { Separator } from '@/components/ui/separator';
 import { Spinner } from '@/components/ui/spinner';
 import { Textarea } from '@/components/ui/textarea';
 import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from '@/components/ui/select';
+import {
   useFollowUpDrafts,
   type FollowUpDraftTask,
 } from '@/components/follow-up-draft-provider';
@@ -65,6 +72,11 @@ import {
   type FollowUpStage,
 } from '@/lib/follow-up-draft-workflow';
 import type { GmailAuth } from '@/lib/types';
+import { useMailAccounts } from '@/components/mail-account-provider';
+import { useUserDataStore } from '@/components/user-data-provider';
+import { USER_DATA_KEYS } from '@/lib/account-data-keys';
+import { getMailProviderLabel } from '@/lib/mail-accounts';
+import { parseMailAccountBindings, resolveMailAccountBinding, upsertMailAccountBinding } from '@/lib/mail-account-bindings';
 import {
   buildChannelAvatarLookup,
   channelAvatarLookupPriority,
@@ -88,6 +100,7 @@ type FollowUpRecord = FollowUpSourceRecord & {
   checkedAt?: number;
   checkError?: string;
   synced?: boolean;
+  mailBindingStatus?: 'bound' | 'legacy' | 'unconfirmed' | 'disconnected';
 };
 type WritePreview = {
   record: FollowUpRecord;
@@ -223,6 +236,12 @@ function isGmailAuthError(error: unknown) {
   );
 }
 
+function recordMailboxLabel(record: Pick<FollowUpSourceRecord, 'mailAddress' | 'provider'>) {
+  return record.mailAddress
+    ? `${getMailProviderLabel(record.provider || 'gmail')} · ${record.mailAddress}`
+    : '未确认邮箱';
+}
+
 function mappedSentCount(record: FollowUpRecord) {
   return mappedFollowUpSentCount(record);
 }
@@ -233,9 +252,9 @@ function effectiveSentCount(record: FollowUpRecord) {
 
 function unsyncedGmailStage(record: FollowUpRecord): FollowUpStage | null {
   const mapped = mappedSentCount(record);
-  const gmail = record.check?.outbound.length || 0;
-  if (gmail >= 3 && mapped < 3) return 3;
-  if (gmail >= 2 && mapped < 2) return 2;
+  const outbound = record.check?.outbound.length || 0;
+  if (outbound >= 3 && mapped < 3) return 3;
+  if (outbound >= 2 && mapped < 2) return 2;
   return null;
 }
 
@@ -274,13 +293,13 @@ function followUpStatus(record: FollowUpRecord) {
   }
   if (record.checkError) return { tone: 'danger', title: '检查失败', detail: record.checkError };
   if (record.check && record.check.outbound.length === 0) {
-    return { tone: 'warning', title: '未找到初次开发信', detail: '请到 Gmail 人工核对后再继续' };
+    return { tone: 'warning', title: '未找到初次开发信', detail: '请到对应邮箱人工核对后再继续' };
   }
   const unsyncedStage = unsyncedGmailStage(record);
   if (unsyncedStage) {
     return {
       tone: 'warning',
-      title: `Gmail 检测到${stageLabel(unsyncedStage)}已发送`,
+      title: `${getMailProviderLabel(record.provider || 'gmail')} 检测到${stageLabel(unsyncedStage)}已发送`,
       detail: '请确认后补写飞书状态和实际日期',
     };
   }
@@ -364,13 +383,15 @@ function FollowUpReviewEditor({
     chineseBody: task.chineseBody,
     chineseDirty: task.chineseDirty,
     gmailDraftId: task.gmailDraftId,
+    draftRef: task.draftRef,
   });
+  const providerLabel = getMailProviderLabel(task.source.provider || 'gmail');
 
   return (
     <div className="flex min-h-0 flex-col gap-4">
       <Field>
         <FieldLabel>目标语言邮件正文</FieldLabel>
-        <FieldDescription>这是最终准备写入 Gmail 草稿的正文；修改中文并确认翻译后会自动更新。</FieldDescription>
+        <FieldDescription>这是最终准备写入{providerLabel}草稿的正文；修改中文并确认翻译后会自动更新。</FieldDescription>
         <ScrollArea className="h-52 rounded-lg border bg-muted/30 p-4">
           <p className="whitespace-pre-wrap text-sm leading-6">{task.body || '尚未生成外文正文。'}</p>
         </ScrollArea>
@@ -404,7 +425,7 @@ function FollowUpReviewEditor({
           onChange={(event) => onChineseChange(event.target.value)}
         />
         {task.chineseDirty ? (
-          <FieldDescription className="text-amber-700">中文已修改；更新外文成功前不能保存 Gmail 草稿。</FieldDescription>
+          <FieldDescription className="text-amber-700">中文已修改；更新外文成功前不能保存邮件草稿。</FieldDescription>
         ) : null}
         <FieldError>{task.error}</FieldError>
       </Field>
@@ -419,7 +440,7 @@ function FollowUpReviewEditor({
 
       <div className="flex flex-wrap items-center justify-between gap-3 rounded-lg border bg-muted/30 p-3">
         <p className="max-w-xl text-xs leading-5 text-muted-foreground">
-          保存成功后会自动把飞书中的对应 Follow Up 标记为“已发”并写入今天日期；Gmail 邮件仍不会自动发送。
+          保存成功后会自动把飞书中的对应 Follow Up 标记为“已发”并写入今天日期；邮件仍不会自动发送。
         </p>
         <div className="flex flex-wrap justify-end gap-2">
           {!saved && !feishuError ? (
@@ -439,7 +460,7 @@ function FollowUpReviewEditor({
                 ? '重试写回飞书'
                 : saved
                   ? '已保存并写回飞书'
-                  : '保存到 Gmail 草稿'}
+                  : `保存到${providerLabel}草稿`}
           </Button>
         </div>
       </div>
@@ -469,7 +490,7 @@ function StageActionCell({
     'human_reply',
     'delivery_failure',
     'missing_initial_email',
-    'already_sent_in_gmail',
+    'already_sent_in_mail',
     'stage_already_complete',
   ].includes(task.errorCode || '');
   const progressLabel = task?.status === 'checking'
@@ -556,6 +577,8 @@ function StatusCell({ record }: { record: FollowUpRecord }) {
 }
 
 export function OutreachFollowUpTab({ settings, auth, onAuthRefresh }: Props) {
+  const { accounts } = useMailAccounts();
+  const { data: accountData, save: saveAccountData } = useUserDataStore();
   const {
     tasks,
     batchProgress: draftBatchProgress,
@@ -599,6 +622,50 @@ export function OutreachFollowUpTab({ settings, auth, onAuthRefresh }: Props) {
     [settings.feishuFieldMapping],
   );
   const canLoad = Boolean(settings.feishuProspectingUrl && mapping.developmentDate);
+  const mailBindings = useMemo(
+    () => parseMailAccountBindings(accountData[USER_DATA_KEYS.MAIL_ACCOUNT_BINDINGS]),
+    [accountData],
+  );
+  const connectedMailAccounts = useMemo(
+    () => accounts.filter((account) => account.connectionStatus === 'connected' && account.capabilities.receive),
+    [accounts],
+  );
+  const resolveRecordMailbox = useCallback((recordId: string, email: string) => {
+    const binding = resolveMailAccountBinding(mailBindings, { feishuRecordId: recordId, contactEmail: email });
+    if (binding) {
+      const account = connectedMailAccounts.find((item) => item.mailAccountId === binding.mailAccountId);
+      if (account) return { account, status: 'bound' as const };
+      return { account: undefined, status: 'disconnected' as const };
+    }
+    if (connectedMailAccounts.length === 1) return { account: connectedMailAccounts[0], status: 'legacy' as const };
+    return { account: undefined, status: 'unconfirmed' as const };
+  }, [connectedMailAccounts, mailBindings]);
+  const chooseRecordMailbox = useCallback((recordId: string, mailAccountId: string) => {
+    const account = connectedMailAccounts.find((item) => item.mailAccountId === mailAccountId);
+    if (!account) return;
+    const record = records.find((item) => item.recordId === recordId);
+    if (!record) return;
+    const existing = resolveMailAccountBinding(mailBindings, { feishuRecordId: record.recordId, contactEmail: record.email });
+    const nextBindings = upsertMailAccountBinding(mailBindings, {
+      prospectId: existing?.prospectId,
+      feishuRecordId: record.recordId,
+      contactEmail: record.email,
+      mailAccountId: account.mailAccountId,
+      provider: account.provider,
+      mailAddress: account.email,
+      draftRef: existing?.draftRef,
+      initialMessageRef: existing?.initialMessageRef,
+      folderRef: existing?.folderRef,
+      threadRef: existing?.threadRef,
+    });
+    saveAccountData(USER_DATA_KEYS.MAIL_ACCOUNT_BINDINGS, nextBindings);
+    clearTask(followUpTaskKey(record.recordId, 2));
+    clearTask(followUpTaskKey(record.recordId, 3));
+    setRecords((current) => current.map((item) => item.recordId === recordId
+      ? { ...item, mailAccountId: account.mailAccountId, provider: account.provider, mailAddress: account.email, mailBindingStatus: 'bound' }
+      : item));
+    toast.success(`已将 ${record.channelName} 的 Follow Up 邮箱设为${getMailProviderLabel(account.provider)}。`);
+  }, [clearTask, connectedMailAccounts, mailBindings, records, saveAccountData]);
   const customStartAt = dateInputTimestamp(customStartDate);
   const customEndAt = dateInputTimestamp(customEndDate, true);
   const hasCustomRange = Boolean(customStartAt && customEndAt);
@@ -664,11 +731,14 @@ export function OutreachFollowUpTab({ settings, auth, onAuthRefresh }: Props) {
       });
       const result = await response.json();
       if (!response.ok || !result.success) throw new Error(String(result.error || '读取飞书开发记录失败。'));
-      const next = ((result.data?.items || []) as FeishuRecord[]).map((record) => ({
+      const next = ((result.data?.items || []) as FeishuRecord[]).map((record) => {
+        const email = mappedValue(record, mapping, 'email').toLowerCase();
+        const mailbox = resolveRecordMailbox(record.record_id, email);
+        return {
         recordId: record.record_id,
         channelName: mappedValue(record, mapping, 'channelName') || '未填写红人名称',
         avatarUrl: getFeishuImageUrl(mapping.avatar ? record.fields[mapping.avatar] : undefined),
-        email: mappedValue(record, mapping, 'email').toLowerCase(),
+        email,
         channelUrl: extractMappedFeishuChannelUrl(record.fields, mapping),
         channelId: mappedValue(record, mapping, 'channelId'),
         developmentDate: parseFeishuDate(record.fields[mapping.developmentDate || '']),
@@ -682,7 +752,12 @@ export function OutreachFollowUpTab({ settings, auth, onAuthRefresh }: Props) {
         targetProduct: mappedValue(record, mapping, 'targetProduct'),
         cooperationType: mappedValue(record, mapping, 'cooperationType'),
         cooperationIdea: mappedValue(record, mapping, 'cooperationIdea'),
-      })).filter((record) => (
+        mailAccountId: mailbox.account?.mailAccountId,
+        provider: mailbox.account?.provider,
+        mailAddress: mailbox.account?.email,
+        mailBindingStatus: mailbox.status,
+      };
+      }).filter((record) => (
         record.developmentDate >= rangeStartAt
         && record.developmentDate <= rangeEndAt
       ))
@@ -695,7 +770,7 @@ export function OutreachFollowUpTab({ settings, auth, onAuthRefresh }: Props) {
     } finally {
       setLoading(false);
     }
-  }, [fieldNames, mapping, rangeEndAt, rangeStartAt, settings.feishuProspectingUrl]);
+  }, [fieldNames, mapping, rangeEndAt, rangeStartAt, resolveRecordMailbox, settings.feishuProspectingUrl]);
 
   useEffect(() => {
     void loadRecords();
@@ -823,16 +898,18 @@ export function OutreachFollowUpTab({ settings, auth, onAuthRefresh }: Props) {
   ]);
 
   const requestCheck = useCallback(async (record: FollowUpRecord) => {
-    if (!record.email) throw new Error('该红人没有可用于 Gmail 检查的邮箱。');
+    if (!record.email) throw new Error('该红人没有可用于检查的邮箱。');
+    if (!record.mailAccountId || !record.provider) throw new Error('尚未确认该红人的邮件账号，请先在首封开发信中选择邮箱。');
     const query = new URLSearchParams({
-      action: 'outreachFollowUp',
+      action: record.provider === 'tencent_exmail' ? 'followUp' : 'outreachFollowUp',
       email: record.email,
       sentAt: String(record.developmentDate),
     });
-    const response = await fetch(`/api/gmail?${query}`);
+    if (record.provider === 'tencent_exmail') query.set('mailAccountId', record.mailAccountId);
+    const response = await fetch(`${record.provider === 'tencent_exmail' ? '/api/mail/tencent' : '/api/gmail'}?${query}`);
     const result = await response.json();
     if (!response.ok || !result.success) {
-      throw new Error([result.error, result.details].filter(Boolean).join(' ') || '检查 Gmail 回复失败。');
+      throw new Error([result.error, result.details].filter(Boolean).join(' ') || '检查对应邮箱回复失败。');
     }
     return result.data as FollowUpCheck;
   }, []);
@@ -850,14 +927,15 @@ export function OutreachFollowUpTab({ settings, auth, onAuthRefresh }: Props) {
   }, [onAuthRefresh]);
 
   const checkRecord = useCallback(async (record: FollowUpRecord, showFeedback = true) => {
-    if (!auth?.accessToken) throw new Error('请先在“设置 > Gmail 邮件”连接 Gmail。');
+    if (record.provider === 'gmail' && !auth?.accessToken) throw new Error('请先在“设置 > Gmail 邮件”连接 Gmail。');
+    if (!record.mailAccountId || !record.provider) throw new Error('尚未确认该红人的邮件账号，请先选择邮箱。');
     setCheckingIds((current) => Array.from(new Set([...current, record.recordId])));
     try {
       let check: FollowUpCheck;
       try {
         check = await requestCheck(record);
       } catch (error) {
-        if (!isGmailAuthError(error)) throw error;
+        if (record.provider !== 'gmail' || !isGmailAuthError(error)) throw error;
         await refreshGmailAuth();
         check = await requestCheck(record);
       }
@@ -873,7 +951,7 @@ export function OutreachFollowUpTab({ settings, auth, onAuthRefresh }: Props) {
       }
       return check;
     } catch (error) {
-      const checkError = error instanceof Error ? error.message : '检查 Gmail 回复失败。';
+      const checkError = error instanceof Error ? error.message : '检查对应邮箱回复失败。';
       setRecords((current) => current.map((item) => (
         item.recordId === record.recordId ? { ...item, checkError } : item
       )));
@@ -884,11 +962,7 @@ export function OutreachFollowUpTab({ settings, auth, onAuthRefresh }: Props) {
   }, [auth?.accessToken, refreshGmailAuth, requestCheck]);
 
   const handleCheckAll = async () => {
-    if (!auth?.accessToken) {
-      toast.error('请先在“设置 > Gmail 邮件”连接 Gmail。');
-      return;
-    }
-    const targets = records.filter((record) => Boolean(record.email));
+    const targets = records.filter((record) => Boolean(record.email && record.mailAccountId && record.provider));
     if (!targets.length) {
       toast.error('当前筛选范围内没有可检查邮箱的红人。');
       return;
@@ -917,19 +991,25 @@ export function OutreachFollowUpTab({ settings, auth, onAuthRefresh }: Props) {
   };
 
   const handleGenerate = async (record: FollowUpRecord, stage: FollowUpStage) => {
-    if (!auth?.accessToken) {
+    if (record.provider === 'gmail' && !auth?.accessToken) {
       toast.error('请先在“设置 > Gmail 邮件”连接 Gmail。');
+      return;
+    }
+    if (!record.mailAccountId || !record.provider) {
+      toast.error('尚未确认该红人的邮件账号，请先选择邮箱。');
       return;
     }
     await generateTask(record, stage);
   };
 
   const handleGenerateAll = async (stage: FollowUpStage) => {
-    if (!auth?.accessToken) {
-      toast.error('请先在“设置 > Gmail 邮件”连接 Gmail。');
-      return;
-    }
-    await generateMany(records.filter((record) => canGenerateStage(record, stage, tasks)), stage);
+    const eligible = records.filter((record) => (
+      record.mailAccountId
+      && record.provider
+      && (record.provider !== 'gmail' || auth?.accessToken)
+      && canGenerateStage(record, stage, tasks)
+    ));
+    await generateMany(eligible, stage);
   };
 
   const confirmRegenerate = async () => {
@@ -944,12 +1024,12 @@ export function OutreachFollowUpTab({ settings, auth, onAuthRefresh }: Props) {
 
   const openWritePreview = (record: FollowUpRecord) => {
     if (!record.check || record.check.outbound.length === 0) {
-      toast.error('请先成功检查 Gmail，并确认已找到初次开发信。');
+      toast.error(`请先成功检查${recordMailboxLabel(record)}，并确认已找到初次开发信。`);
       return;
     }
     const preview = buildWritePreview(record, mapping);
     if (!preview) {
-      toast.info('Gmail 检查结果与飞书现有内容一致，无需写回；若字段未配置，请检查飞书映射。');
+      toast.info('检查结果与飞书现有内容一致，无需写回；若字段未配置，请检查飞书映射。');
       return;
     }
     setWritePreview(preview);
@@ -1263,10 +1343,11 @@ export function OutreachFollowUpTab({ settings, auth, onAuthRefresh }: Props) {
 
       <section className="flex min-h-0 flex-1 flex-col overflow-hidden rounded-lg border border-border/70 bg-background">
         <div className="min-h-0 flex-1 overflow-auto">
-          <table className="w-full min-w-[1280px] text-left text-sm">
+          <table className="w-full min-w-[1360px] text-left text-sm">
             <thead className="sticky top-0 z-10 bg-slate-50 text-xs text-muted-foreground">
               <tr className="border-b border-border/70">
                 <th className="px-4 py-3 font-medium">红人</th>
+                <th className="px-4 py-3 font-medium">邮件账号</th>
                 <th className="px-4 py-3 font-medium">初次开发信</th>
                 <th className="px-4 py-3 font-medium">
                   <div className="flex items-center gap-2">
@@ -1350,10 +1431,10 @@ export function OutreachFollowUpTab({ settings, auth, onAuthRefresh }: Props) {
             </thead>
             <tbody className="divide-y divide-border/70">
               {loading ? (
-                <tr><td colSpan={6} className="px-4 py-12 text-center text-muted-foreground"><Loader2 className="mx-auto mb-2 h-5 w-5 animate-spin" />正在读取飞书开发记录…</td></tr>
+                <tr><td colSpan={7} className="px-4 py-12 text-center text-muted-foreground"><Loader2 className="mx-auto mb-2 h-5 w-5 animate-spin" />正在读取飞书开发记录…</td></tr>
               ) : null}
               {!loading && !loadError && canLoad && records.length === 0 ? (
-                <tr><td colSpan={6} className="px-4 py-12 text-center text-muted-foreground">当前筛选时间范围内没有开发记录。</td></tr>
+                <tr><td colSpan={7} className="px-4 py-12 text-center text-muted-foreground">当前筛选时间范围内没有开发记录。</td></tr>
               ) : null}
               {!loading ? records.map((record) => {
                 const checking = checkingIds.includes(record.recordId);
@@ -1388,6 +1469,32 @@ export function OutreachFollowUpTab({ settings, auth, onAuthRefresh }: Props) {
                       </div>
                     </td>
                     <td className="px-4 py-4">
+                      <div className="min-w-[210px] space-y-1.5">
+                        <Select
+                          value={record.mailAccountId || ''}
+                          onValueChange={(value) => chooseRecordMailbox(record.recordId, value)}
+                        >
+                          <SelectTrigger className="h-8 w-[220px] text-xs">
+                            <SelectValue placeholder="选择邮箱" />
+                          </SelectTrigger>
+                          <SelectContent>
+                            {connectedMailAccounts.map((account) => (
+                              <SelectItem key={account.mailAccountId} value={account.mailAccountId}>
+                                {getMailProviderLabel(account.provider)} · {account.email}
+                              </SelectItem>
+                            ))}
+                          </SelectContent>
+                        </Select>
+                        <p className={`text-xs ${record.mailBindingStatus === 'unconfirmed' || record.mailBindingStatus === 'disconnected' ? 'text-amber-700' : 'text-muted-foreground'}`}>
+                          {record.mailBindingStatus === 'disconnected'
+                            ? '原绑定邮箱已断开，请重新选择'
+                            : record.mailBindingStatus === 'unconfirmed'
+                              ? '需要先选择邮箱'
+                              : recordMailboxLabel(record)}
+                        </p>
+                      </div>
+                    </td>
+                    <td className="px-4 py-4">
                       <StageCell label="初次开发信" sentAt={record.check?.outbound[0]?.date || record.developmentDate} sent />
                     </td>
                     <td className="px-4 py-4">
@@ -1396,7 +1503,7 @@ export function OutreachFollowUpTab({ settings, auth, onAuthRefresh }: Props) {
                         sentAt={firstSentAt}
                         sent={Boolean(record.check?.outbound[1]) || isSent(record.secondOutreach)}
                         task={firstTask}
-                        canGenerate={canGenerateStage(record, 2, tasks)}
+                        canGenerate={Boolean(record.mailAccountId) && canGenerateStage(record, 2, tasks)}
                         onGenerate={() => void handleGenerate(record, 2)}
                         onOpenTask={() => setResultDraftKey(firstDraftKey)}
                       />
@@ -1407,7 +1514,7 @@ export function OutreachFollowUpTab({ settings, auth, onAuthRefresh }: Props) {
                         sentAt={secondSentAt}
                         sent={Boolean(record.check?.outbound[2]) || isSent(record.thirdOutreach)}
                         task={secondTask}
-                        canGenerate={canGenerateStage(record, 3, tasks)}
+                        canGenerate={Boolean(record.mailAccountId) && canGenerateStage(record, 3, tasks)}
                         onGenerate={() => void handleGenerate(record, 3)}
                         onOpenTask={() => setResultDraftKey(secondDraftKey)}
                       />
@@ -1418,8 +1525,8 @@ export function OutreachFollowUpTab({ settings, auth, onAuthRefresh }: Props) {
                         <Button
                           variant="outline"
                           size="sm"
-                          onClick={() => void checkRecord(record).catch((error) => toast.error(error instanceof Error ? error.message : '检查 Gmail 回复失败。'))}
-                          disabled={checking || !record.email}
+                          onClick={() => void checkRecord(record).catch((error) => toast.error(error instanceof Error ? error.message : '检查邮箱回复失败。'))}
+                          disabled={checking || !record.email || !record.mailAccountId}
                         >
                           {checking ? <Loader2 className="h-4 w-4 animate-spin" /> : <MailCheck className="h-4 w-4" />}
                           {record.check ? '重新检查回复' : '检查回复'}
@@ -1459,14 +1566,14 @@ export function OutreachFollowUpTab({ settings, auth, onAuthRefresh }: Props) {
               <DialogTitle>{resultDraft ? `${resultDraft.source.channelName} · ${stageLabel(resultDraft.stage)}` : '审核 Follow Up 邮件'}</DialogTitle>
               <Badge variant="outline">
                 {resultDraft?.status === 'feishu_error'
-                  ? 'Gmail 草稿已保存 · 飞书待重试'
+                  ? '邮件草稿已保存 · 飞书待重试'
                   : resultDraft?.status === 'saved'
                     ? '草稿已保存 · 飞书已标记'
-                    : '待确认 · 未写入 Gmail'}
+                    : '待确认 · 未写入邮箱'}
               </Badge>
             </div>
             <DialogDescription>
-              {resultDraft ? `${resultDraft.source.email} · 原线程主题：${resultDraft.subject || '未读取'}` : '审核后再保存 Gmail 草稿。'}
+              {resultDraft ? `${resultDraft.source.email} · ${recordMailboxLabel(resultDraft.source)} · 原线程主题：${resultDraft.subject || '未读取'}` : '审核后再保存邮件草稿。'}
             </DialogDescription>
           </DialogHeader>
           {resultDraft ? (
@@ -1503,7 +1610,7 @@ export function OutreachFollowUpTab({ settings, auth, onAuthRefresh }: Props) {
               <Badge variant="secondary">待处理 {batchReviewTasks.length} 封</Badge>
             </div>
             <DialogDescription>
-              每封邮件需要单独确认并保存；飞书写回失败的项目只会重试飞书，不会重复创建 Gmail 草稿。
+              每封邮件需要单独确认并保存；飞书写回失败的项目只会重试飞书，不会重复创建邮件草稿。
             </DialogDescription>
           </DialogHeader>
           {selectedBatchTask ? (
@@ -1521,7 +1628,7 @@ export function OutreachFollowUpTab({ settings, auth, onAuthRefresh }: Props) {
                       <span className="min-w-0">
                         <span className="block truncate text-sm font-medium">{index + 1}. {task.source.channelName}</span>
                         <span className="block truncate text-xs text-muted-foreground">
-                          {task.status === 'feishu_error' ? 'Gmail 已保存 · 飞书待重试' : task.source.email}
+                          {task.status === 'feishu_error' ? '邮件已保存 · 飞书待重试' : task.source.email}
                         </span>
                       </span>
                     </Button>
@@ -1573,7 +1680,7 @@ export function OutreachFollowUpTab({ settings, auth, onAuthRefresh }: Props) {
             <div className="flex min-h-0 flex-1 flex-col items-center justify-center gap-3 border-t p-8 text-center">
               <CheckCircle2 className="size-8 text-emerald-600" />
               <p className="font-medium">当前批次已全部处理</p>
-              <p className="text-sm text-muted-foreground">已保存的 Gmail 草稿不会在待审核列表中重复出现。</p>
+              <p className="text-sm text-muted-foreground">已保存的邮件草稿不会在待审核列表中重复出现。</p>
               <Button type="button" onClick={() => setBatchReviewStage(null)}>完成</Button>
             </div>
           )}
@@ -1584,7 +1691,7 @@ export function OutreachFollowUpTab({ settings, auth, onAuthRefresh }: Props) {
         <AlertDialogContent>
           <AlertDialogHeader>
             <AlertDialogTitle>重新生成这封 Follow Up？</AlertDialogTitle>
-            <AlertDialogDescription>当前外文和中文修改都会被新的 AI 结果替换，此操作不会创建 Gmail 草稿或写入飞书。</AlertDialogDescription>
+            <AlertDialogDescription>当前外文和中文修改都会被新的 AI 结果替换，此操作不会创建邮件草稿或写入飞书。</AlertDialogDescription>
           </AlertDialogHeader>
           <AlertDialogFooter>
             <AlertDialogCancel>继续审核</AlertDialogCancel>
@@ -1603,7 +1710,7 @@ export function OutreachFollowUpTab({ settings, auth, onAuthRefresh }: Props) {
           <AlertDialogHeader>
             <AlertDialogTitle>确认写回全部检查结果</AlertDialogTitle>
             <AlertDialogDescription>
-              将把当前日期范围内已完成 Gmail 检查的 {writeAllTargets.length} 条结果同步到“红人开发情况表”。
+              将把当前日期范围内已完成邮箱检查的 {writeAllTargets.length} 条结果同步到“红人开发情况表”。
               与飞书现有内容完全一致、未检查、检查失败或没有找到初次开发信的记录不会写入。
             </AlertDialogDescription>
           </AlertDialogHeader>
@@ -1655,7 +1762,7 @@ export function OutreachFollowUpTab({ settings, auth, onAuthRefresh }: Props) {
           <AlertDialogHeader>
             <AlertDialogTitle>确认写回飞书开发记录</AlertDialogTitle>
             <AlertDialogDescription>
-              将把 Gmail 检查结果写入 {writePreview?.record.channelName || '当前红人'} 的开发记录。此操作不会发送邮件。
+              将把邮箱检查结果写入 {writePreview?.record.channelName || '当前红人'} 的开发记录。此操作不会发送邮件。
             </AlertDialogDescription>
           </AlertDialogHeader>
           <div className="space-y-2 rounded-md border border-border bg-slate-50 p-3 text-sm">
@@ -1677,7 +1784,7 @@ export function OutreachFollowUpTab({ settings, auth, onAuthRefresh }: Props) {
           <AlertDialogHeader>
             <AlertDialogTitle>确认{markSentPreview ? stageLabel(markSentPreview.stage) : ''}已实际发送</AlertDialogTitle>
             <AlertDialogDescription>
-              请确认你已经在 Gmail 中真实发送邮件。系统只会更新飞书记录，不会代你发送邮件。
+              请确认你已经在对应邮箱中真实发送邮件。系统只会更新飞书记录，不会代你发送邮件。
             </AlertDialogDescription>
           </AlertDialogHeader>
           <div className="space-y-2 rounded-md border border-border bg-slate-50 p-3 text-sm">

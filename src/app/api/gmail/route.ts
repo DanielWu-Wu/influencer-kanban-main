@@ -161,6 +161,7 @@ function parseHistoryMessage(message: Record<string, unknown>) {
       : [],
     mimeType: String(payload.mimeType || ''),
     rfcMessageId: getHeader(headers, 'Message-ID'),
+    inReplyTo: getHeader(headers, 'In-Reply-To'),
     references: getHeader(headers, 'References'),
     subject: getHeader(headers, 'Subject') || '无主题',
     from: getHeader(headers, 'From'),
@@ -382,6 +383,27 @@ export async function GET(request: NextRequest) {
       }
       const data = await res.json();
       return NextResponse.json({ success: true, data });
+    }
+
+    if (action === 'projectConversation') {
+      const threadId = searchParams.get('threadId');
+      if (!threadId) {
+        return NextResponse.json({ error: '缺少项目会话 threadId' }, { status: 400 });
+      }
+      const res = await fetch(
+        `https://gmail.googleapis.com/gmail/v1/users/me/threads/${threadId}?format=full`,
+        { headers },
+      );
+      if (!res.ok) {
+        const details = await res.text();
+        return NextResponse.json({ error: '项目绑定的 Gmail 会话已失效', details }, { status: res.status });
+      }
+      const data = await res.json() as { messages?: Array<Record<string, unknown>> };
+      return NextResponse.json({
+        success: true,
+        data: (data.messages || []).map(parseHistoryMessage)
+          .sort((left, right) => Date.parse(left.date || '') - Date.parse(right.date || '')),
+      });
     }
 
     if (action === 'contactHistory') {

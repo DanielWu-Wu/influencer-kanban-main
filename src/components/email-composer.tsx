@@ -60,7 +60,15 @@ import { useEmailGenerationTasks } from './email-generation-task-provider';
 import {
   buildGmailEmailGenerationTaskKey,
   buildGmailEmailTranslationTaskKey,
+  buildMailEmailGenerationTaskKey,
 } from '@/lib/email-generation-tasks';
+import type { MailAccount, MailDraftLocator } from '@/lib/mail-accounts';
+import {
+  createTencentClientMessageId,
+  saveTencentMailDraft,
+  sendTencentMailNow,
+  verifyTencentSmtp,
+} from '@/lib/tencent-mail-transport';
 import {
   EMAIL_TRANSLATION_RETRY_OPERATION,
   canApplyEmailTranslationResult,
@@ -80,6 +88,7 @@ interface EmailComposerProps {
   onDraftSaved?: (content: string) => void;
   autoRetryRequest?: { taskId: string; retryInput?: unknown };
   avatarUrl?: string;
+  mailAccount?: MailAccount;
 }
 
 type CollaborationAnalysis = {
@@ -185,6 +194,7 @@ export function EmailComposer({
   onDraftSaved,
   autoRetryRequest,
   avatarUrl,
+  mailAccount,
 }: EmailComposerProps) {
   const { addSuggestion } = useEmailAISuggestions();
   const { addDraft } = useEmailDrafts();
@@ -209,7 +219,12 @@ export function EmailComposer({
   const [suggestion, setSuggestion] = useState<AISuggestion | null>(null);
   const [savingDraft, setSavingDraft] = useState(false);
   const [sending, setSending] = useState(false);
+  const [smtpChecking, setSmtpChecking] = useState(false);
+  const [smtpReady, setSmtpReady] = useState(
+    () => mailAccount?.provider !== 'tencent_exmail' || Boolean(mailAccount.capabilities.send),
+  );
   const [completion, setCompletion] = useState<'draft' | 'scheduled' | 'sent' | null>(null);
+  const [tencentDraft, setTencentDraft] = useState<MailDraftLocator | undefined>();
   const [copied, setCopied] = useState(false);
   const [attachments, setAttachments] = useState<File[]>([]);
   const [attachmentError, setAttachmentError] = useState('');
@@ -233,6 +248,10 @@ export function EmailComposer({
   const targetLangLockedRef = useRef(false);
   const handledAutoRetryTaskRef = useRef('');
   const targetContextKeyRef = useRef('');
+  const isTencent = mailAccount?.provider === 'tencent_exmail';
+  const providerLabel = isTencent ? '腾讯企业邮箱' : 'Gmail';
+  const ownEmail = mailAccount?.email || auth?.email || '';
+  const mailAccountId = mailAccount?.mailAccountId || `gmail:${ownEmail.toLowerCase()}`;
 
   const threadMessages = useMemo(() => buildGmailAIThreadMessages(
     thread,
@@ -242,26 +261,54 @@ export function EmailComposer({
   const externalMessage = replyTarget?.message;
   const recipientEmail = replyTarget?.recipientEmail || '';
   const targetContextKey = `${thread.id}:${replyTarget?.messageId || ''}`;
-  const generationTaskKey = buildGmailEmailGenerationTaskKey({
-    kind: 'gmail_ai_reply',
-    threadId: thread.id,
-    messageId: replyTarget?.messageId,
-  });
+  const generationTaskKey = isTencent
+    ? buildMailEmailGenerationTaskKey({
+        kind: 'tencent_ai_reply',
+        mailAccountId,
+        threadId: thread.id,
+        messageId: replyTarget?.messageId,
+      })
+    : buildGmailEmailGenerationTaskKey({
+        kind: 'gmail_ai_reply',
+        threadId: thread.id,
+        messageId: replyTarget?.messageId,
+      });
   const generationTask = getLatestTaskByKey(generationTaskKey);
-  const translationTaskKey = buildGmailEmailTranslationTaskKey({
-    composerMode: 'ai',
-    threadId: thread.id,
-    messageId: replyTarget?.messageId,
-  });
+  const translationTaskKey = isTencent
+    ? `email_translation:${mailAccountId}:ai:${thread.id}:${replyTarget?.messageId || ''}`
+    : buildGmailEmailTranslationTaskKey({
+        composerMode: 'ai',
+        threadId: thread.id,
+        messageId: replyTarget?.messageId,
+      });
   const translationTask = getLatestTaskByKey(translationTaskKey);
 
+  useEffect(() => {
+    if (!isTencent || !mailAccount || smtpReady) return undefined;
+    const controller = new AbortController();
+    setSmtpChecking(true);
+    void verifyTencentSmtp(mailAccount, controller.signal)
+      .then(() => {
+        setSmtpReady(true);
+        setAiError('');
+      })
+      .catch((caught) => {
+        if (controller.signal.aborted) return;
+        setAiError(caught instanceof Error ? caught.message : '腾讯企业邮箱 SMTP 验证失败。');
+      })
+      .finally(() => {
+        if (!controller.signal.aborted) setSmtpChecking(false);
+      });
+    return () => controller.abort();
+  }, [isTencent, mailAccount, smtpReady]);
+
   const latestExternalMessage = useMemo(() => {
-    const normalizedAccountEmail = String(auth?.email || '').trim().toLowerCase();
+    const normalizedAccountEmail = ownEmail.trim().toLowerCase();
     return [...threadMessages].reverse().find((message) => (
       !normalizedAccountEmail
       || !String(message.from || '').toLowerCase().includes(normalizedAccountEmail)
     )) || threadMessages.at(-1);
-  }, [auth?.email, threadMessages]);
+  }, [ownEmail, threadMessages]);
   const detectedReplyLanguage = latestExternalMessage?.body
     ? detectReplyLanguage(emailHtmlToText(latestExternalMessage.body))
     : '';
@@ -325,6 +372,32 @@ export function EmailComposer({
   };
 
   const loadContactHistory = async (force = false) => {
+    if (isTencent) {
+      if (!mailAccount || !recipientEmail) {
+        return { messages: threadMessages, historyKey: `${mailAccountId}:${thread.id}` };
+      }
+      const params = new URLSearchParams({
+        action: 'contactHistory',
+        mailAccountId,
+        email: recipientEmail,
+        maxResults: '10',
+      });
+      const response = await fetch(`/api/mail/tencent?${params.toString()}`, {
+        cache: force ? 'reload' : 'no-store',
+      });
+      const result = await response.json().catch(() => ({})) as {
+        success?: boolean;
+        data?: GmailAIHistoryMessage[];
+        error?: string;
+      };
+      if (!response.ok || !result.success) {
+        throw new Error(result.error || '读取腾讯邮箱联系人历史失败。');
+      }
+      return {
+        messages: result.data?.length ? result.data : threadMessages,
+        historyKey: `${mailAccountId}:${recipientEmail}:${replyTarget?.messageId || thread.id}`,
+      };
+    }
     const loaded = await loadGmailAIContactHistory({
       accountEmail: auth?.email,
       thread,
@@ -333,7 +406,7 @@ export function EmailComposer({
       targetMessageDate: replyTarget?.date,
       force,
     });
-    return { messages: loaded.messages, historyKey: loaded.historyKey };
+    return { messages: loaded.messages, historyKey: `${mailAccountId}:${loaded.historyKey}` };
   };
 
   const analyzeThread = async (force = false) => {
@@ -361,7 +434,7 @@ export function EmailComposer({
       );
       if (runId !== analysisRunRef.current) return;
       const result = loaded.value;
-      console.info('[Gmail AI client analysis timing]', {
+      console.info('[Mail AI client analysis timing]', {
         cacheHit: loaded.cacheHit,
         totalMs: Math.round(performance.now() - analysisStartedAt),
       });
@@ -635,17 +708,30 @@ export function EmailComposer({
       .trim() || recipientEmail || '邮件联系人';
     const taskId = enqueueTask({
       key: generationTaskKey,
-      kind: 'gmail_ai_reply',
+      kind: isTencent ? 'tencent_ai_reply' : 'gmail_ai_reply',
       title: senderLabel,
       description: 'AI 辅助回复',
       avatarUrl,
-      navigation: {
-        view: 'gmail',
-        threadId: thread.id,
-        messageId: replyTarget?.messageId,
-        composerMode: 'ai',
-      },
+      navigation: isTencent
+        ? {
+            view: 'tencent',
+            mailAccountId,
+            folderRef: externalMessage?.folderRef || '',
+            providerMessageRef: externalMessage?.providerMessageRef || '',
+            composerMode: 'ai',
+          }
+        : {
+            view: 'gmail',
+            threadId: thread.id,
+            messageId: replyTarget?.messageId,
+            composerMode: 'ai',
+          },
       initialStage: '等待生成',
+      mailContext: {
+        provider: isTencent ? 'tencent_exmail' : 'gmail',
+        mailAccountId,
+        mailAddress: ownEmail,
+      },
       rollbackResult: {
         suggestion: previousSuggestion,
         replyContent: previousReplyContent,
@@ -730,7 +816,7 @@ export function EmailComposer({
             targetLang: generationTargetLang,
             targetLangName: generationTargetLangName,
             replyTone,
-            gmailAccountEmail: auth?.email || '',
+            gmailAccountEmail: ownEmail,
             targetMessageId: replyTarget?.messageId || '',
             draftPrompt: settings.aiDraftPrompt || settings.aiEmailPrompt || '',
             modelProvider: settings.modelProvider || 'builtin',
@@ -983,7 +1069,7 @@ export function EmailComposer({
         targetLang,
         targetLangName,
         replyTone,
-        gmailAccountEmail: auth?.email || '',
+        gmailAccountEmail: ownEmail,
       }, generationMessages) as AISuggestion;
       if (runId !== optimizationRunRef.current) return;
       const cleanSuggestedReply = stripConfiguredEmailSignature(
@@ -1035,7 +1121,7 @@ export function EmailComposer({
       .trim() || recipientEmail || '邮件联系人';
     const retryInput: EmailTranslationRetryInput = {
       operation: EMAIL_TRANSLATION_RETRY_OPERATION,
-      source: 'gmail_ai_reply',
+      source: isTencent ? 'tencent_ai_reply' : 'gmail_ai_reply',
       chineseBody: normalizedChineseBody,
       targetLang: nextTargetLang,
       targetLangName: nextTargetLangName,
@@ -1046,13 +1132,26 @@ export function EmailComposer({
       title: senderLabel,
       description: '根据中文更新外文',
       avatarUrl,
-      navigation: {
-        view: 'gmail',
-        threadId: thread.id,
-        messageId: replyTarget?.messageId,
-        composerMode: 'ai',
-      },
+      navigation: isTencent
+        ? {
+            view: 'tencent',
+            mailAccountId,
+            folderRef: externalMessage?.folderRef || '',
+            providerMessageRef: externalMessage?.providerMessageRef || '',
+            composerMode: 'ai',
+          }
+        : {
+            view: 'gmail',
+            threadId: thread.id,
+            messageId: replyTarget?.messageId,
+            composerMode: 'ai',
+          },
       initialStage: `等待翻译为${nextTargetLangName}`,
+      mailContext: {
+        provider: isTencent ? 'tencent_exmail' : 'gmail',
+        mailAccountId,
+        mailAddress: ownEmail,
+      },
       retryInput,
       run: async ({ signal, report }) => {
         report(`正在翻译为${nextTargetLangName}`);
@@ -1066,7 +1165,7 @@ export function EmailComposer({
           signal,
         });
         return {
-          source: 'gmail_ai_reply' as const,
+          source: isTencent ? 'tencent_ai_reply' as const : 'gmail_ai_reply' as const,
           chineseBody: normalizedChineseBody,
           targetLang: nextTargetLang,
           targetLangName: nextTargetLangName,
@@ -1093,7 +1192,7 @@ export function EmailComposer({
   useEffect(() => {
     if (!autoRetryRequest || handledAutoRetryTaskRef.current === autoRetryRequest.taskId) return;
     if (!isEmailTranslationRetryInput(autoRetryRequest.retryInput)) return;
-    if (autoRetryRequest.retryInput.source !== 'gmail_ai_reply') return;
+    if (autoRetryRequest.retryInput.source !== (isTencent ? 'tencent_ai_reply' : 'gmail_ai_reply')) return;
     if (settingsLoading || aiLoading || !suggestion) return;
     const retryInput = autoRetryRequest.retryInput;
     handledAutoRetryTaskRef.current = autoRetryRequest.taskId;
@@ -1144,9 +1243,13 @@ export function EmailComposer({
         'regular',
       ),
     );
-    const accessToken = await getAccessToken();
     const references = buildGmailReplyReferences(replyTarget);
     const subject = buildGmailReplySubject(replyTarget);
+    if (isTencent) {
+      if (!mailAccount) throw new Error('腾讯企业邮箱账号不可用。');
+      return { finalReply, subject, references };
+    }
+    const accessToken = await getAccessToken();
     const rawEmail = await buildRichRawEmail({
       to: recipientEmail,
       subject,
@@ -1155,52 +1258,69 @@ export function EmailComposer({
       references,
       attachments,
     });
-    return { accessToken, finalReply, rawEmail, subject };
+    return { accessToken, finalReply, rawEmail, subject, references };
   };
 
   const saveToGmailDrafts = async () => {
     if (mode === 'ai' && !bilingualDraftTranslationCurrent) {
-      setAiError('中文或回复语言已发生变化，请先点击“根据中文更新外文”，再保存 Gmail 草稿。');
+      setAiError(`中文或回复语言已发生变化，请先点击“根据中文更新外文”，再保存${providerLabel}草稿。`);
       return;
     }
     setSavingDraft(true);
     setAiError('');
 
     try {
-      const { accessToken, finalReply, rawEmail, subject } = await createOutgoingEmail();
-      const response = await fetch('https://gmail.googleapis.com/gmail/v1/users/me/drafts', {
-        method: 'POST',
-        headers: {
-          Authorization: `Bearer ${accessToken}`,
-          'Content-Type': 'application/json',
-        },
-        body: JSON.stringify({
-          message: {
-            raw: toBase64Url(rawEmail),
-            threadId: thread.id,
+      const outgoing = await createOutgoingEmail();
+      if (isTencent) {
+        if (!mailAccount || !replyTarget) throw new Error('腾讯企业邮箱回复目标不可用。');
+        const saved = await saveTencentMailDraft(mailAccount, {
+          to: recipientEmail,
+          subject: outgoing.subject,
+          html: outgoing.finalReply,
+          text: emailHtmlToText(outgoing.finalReply),
+          inReplyTo: externalMessage?.rfcMessageId,
+          references: outgoing.references,
+          attachments,
+        }, tencentDraft);
+        setTencentDraft(saved);
+        if (saved.cleanupWarning) setAiError(saved.cleanupWarning);
+      } else {
+        const response = await fetch('https://gmail.googleapis.com/gmail/v1/users/me/drafts', {
+          method: 'POST',
+          headers: {
+            Authorization: `Bearer ${outgoing.accessToken}`,
+            'Content-Type': 'application/json',
           },
-        }),
-      });
-      const result = await response.json();
-      if (!response.ok) {
-        throw new Error(result.error?.message || '保存 Gmail 草稿失败');
+          body: JSON.stringify({
+            message: {
+              raw: toBase64Url(outgoing.rawEmail || ''),
+              threadId: thread.id,
+            },
+          }),
+        });
+        const result = await response.json();
+        if (!response.ok) throw new Error(result.error?.message || '保存 Gmail 草稿失败');
       }
 
       addDraft({
         to: recipientEmail,
-        subject,
-        body: emailHtmlToText(finalReply),
+        subject: outgoing.subject,
+        body: emailHtmlToText(outgoing.finalReply),
       });
-      onDraftSaved?.(finalReply);
+      onDraftSaved?.(outgoing.finalReply);
       setCompletion('draft');
     } catch (error) {
-      setAiError(error instanceof Error ? error.message : '保存 Gmail 草稿失败');
+      setAiError(error instanceof Error ? error.message : `保存${providerLabel}草稿失败`);
     } finally {
       setSavingDraft(false);
     }
   };
 
   const sendEmail = async () => {
+    if (isTencent && !smtpReady) {
+      setAiError(smtpChecking ? '正在验证腾讯企业邮箱发信能力，请稍候。' : '腾讯企业邮箱发信能力尚未通过验证，请检查连接设置。');
+      return;
+    }
     if (isEmailContentEmpty(replyContent)) return;
     if (mode === 'ai' && !translationUpdated) {
       setAiError('直接发送前，请先点击“修改中文”，再点击“根据中文更新外文”完成人工确认。');
@@ -1222,23 +1342,39 @@ export function EmailComposer({
     setSending(true);
     setAiError('');
     try {
-      const { accessToken, finalReply, rawEmail, subject } = await createOutgoingEmail();
+      const outgoing = await createOutgoingEmail();
+      const messageId = isTencent ? createTencentClientMessageId(mailAccount?.email || '') : '';
       scheduleEmail({
-        accessToken,
-        raw: toBase64Url(rawEmail),
-        threadId: thread.id,
+        accessToken: outgoing.accessToken,
+        raw: outgoing.rawEmail ? toBase64Url(outgoing.rawEmail) : undefined,
+        threadId: isTencent ? undefined : thread.id,
         recipient,
         delaySeconds,
+        providerLabel,
+        sourceEmail: ownEmail,
+        execute: isTencent && mailAccount
+          ? async (signal) => {
+              await sendTencentMailNow(mailAccount, {
+                to: recipient,
+                subject: outgoing.subject,
+                html: outgoing.finalReply,
+                text: emailHtmlToText(outgoing.finalReply),
+                inReplyTo: externalMessage?.rfcMessageId,
+                references: outgoing.references,
+                attachments,
+              }, { messageId, signal });
+            }
+          : undefined,
         onSent: () => {
           captureEvent({
             type: 'email_sent',
-            source: 'gmail',
+            source: isTencent ? 'tencent_exmail' : 'gmail',
             title: `已发送回复给 ${recipient}`,
-            summary: `主题：${subject}`,
+            summary: `主题：${outgoing.subject}`,
             email: {
               to: recipient,
-              subject,
-              body: emailHtmlToText(finalReply),
+              subject: outgoing.subject,
+              body: emailHtmlToText(outgoing.finalReply),
             },
           });
           setCompletion('sent');
@@ -1292,7 +1428,7 @@ export function EmailComposer({
         <div>
           <p className="font-medium">
             {completion === 'draft'
-              ? '已保存到 Gmail 官方草稿箱'
+              ? `已保存到${providerLabel}草稿箱`
               : completion === 'scheduled'
                 ? '邮件已进入发送倒计时'
                 : '邮件已发送'}
@@ -1661,7 +1797,7 @@ export function EmailComposer({
                   <h3 className="text-sm font-semibold text-blue-950">当前版与画像优化版</h3>
                   <Badge variant="outline" className="border-blue-200 bg-white font-normal text-blue-700">等待你选择</Badge>
                 </div>
-                <p className="mt-1 text-xs text-blue-800">先看中文差异；选定版本后如未再修改，可以直接保存 Gmail 草稿。直接发送仍需人工确认。</p>
+                <p className="mt-1 text-xs text-blue-800">先看中文差异；选定版本后如未再修改，可以直接保存{providerLabel}草稿。直接发送仍需人工确认。</p>
               </div>
               <div className="grid lg:grid-cols-2">
                 <DraftComparisonCard
@@ -1804,8 +1940,8 @@ export function EmailComposer({
                     <p className={`text-xs ${bilingualDraftTranslationCurrent ? 'text-emerald-700' : 'text-amber-700'}`}>
                       {bilingualDraftTranslationCurrent
                         ? bilingualDraftForeignEdited
-                          ? '外文已手动调整，中文依据未变化，可以直接保存 Gmail 草稿。'
-                          : '中文依据已同步；满意时可以直接保存 Gmail 草稿。'
+                          ? `外文已手动调整，中文依据未变化，可以直接保存${providerLabel}草稿。`
+                          : `中文依据已同步；满意时可以直接保存${providerLabel}草稿。`
                         : '中文或回复语言已发生变化，请根据中文更新外文后再保存草稿。'}
                     </p>
                     <Button
@@ -1900,14 +2036,14 @@ export function EmailComposer({
                 <Button
                   variant="outline"
                   onClick={sendEmail}
-                  disabled={!recipientEmail || !translationUpdated || aiLoading || optimizationLoading || Boolean(optimizedSuggestion) || translatingEditedReply || translationEditing || sending || savingDraft || isEmailContentEmpty(replyContent)}
+                  disabled={!recipientEmail || !translationUpdated || aiLoading || optimizationLoading || Boolean(optimizedSuggestion) || translatingEditedReply || translationEditing || sending || savingDraft || smtpChecking || (isTencent && !smtpReady) || isEmailContentEmpty(replyContent)}
                 >
-                  {sending ? <Loader2 className="animate-spin" data-icon="inline-start" /> : <Send data-icon="inline-start" />}
-                  直接发送
+                  {sending || smtpChecking ? <Loader2 className="animate-spin" data-icon="inline-start" /> : <Send data-icon="inline-start" />}
+                  {smtpChecking ? '正在验证发信能力' : '直接发送'}
                 </Button>
                 <Button onClick={saveToGmailDrafts} disabled={!recipientEmail || !bilingualDraftTranslationCurrent || aiLoading || optimizationLoading || Boolean(optimizedSuggestion) || translatingEditedReply || translationEditing || savingDraft || sending || isEmailContentEmpty(replyContent)}>
                   {savingDraft ? <Loader2 className="animate-spin" data-icon="inline-start" /> : <Save data-icon="inline-start" />}
-                  保存 Gmail 草稿
+                  保存{providerLabel}草稿
                 </Button>
               </div>
             </div>
@@ -1951,9 +2087,9 @@ export function EmailComposer({
         回复收件人：{recipientEmail || '尚未确认；AI 仍可正常生成内容'}
       </p>
       <div className="grid grid-cols-2 gap-2">
-        <Button variant="outline" onClick={sendEmail} disabled={!recipientEmail || sending || savingDraft || isEmailContentEmpty(replyContent)}>
-          {sending ? <Loader2 className="animate-spin" data-icon="inline-start" /> : <Send data-icon="inline-start" />}
-          直接发送
+        <Button variant="outline" onClick={sendEmail} disabled={!recipientEmail || sending || savingDraft || smtpChecking || (isTencent && !smtpReady) || isEmailContentEmpty(replyContent)}>
+          {sending || smtpChecking ? <Loader2 className="animate-spin" data-icon="inline-start" /> : <Send data-icon="inline-start" />}
+          {smtpChecking ? '正在验证发信能力' : '直接发送'}
         </Button>
         <Button onClick={saveToGmailDrafts} disabled={!recipientEmail || savingDraft || sending || isEmailContentEmpty(replyContent)}>
           {savingDraft ? <Loader2 className="animate-spin" data-icon="inline-start" /> : <ArrowRight data-icon="inline-start" />}

@@ -9,6 +9,18 @@ export const APP_RELEASE_LAST_SEEN_STORAGE_KEY = 'influencer-board-last-seen-rel
 
 export const APP_RELEASES: readonly AppRelease[] = [
   {
+    version: '1.2.0',
+    releasedAt: '2026-08-23',
+    title: 'Gmail 与腾讯企业邮箱双邮箱升级',
+    highlights: [
+      '新增腾讯企业邮箱完整工作台。',
+      'Gmail 与腾讯企业邮箱可快速切换。',
+      '腾讯邮箱全面支持翻译、AI 辅助回复、AI 模板回复和中外文同步更新',
+      'Gmail 与腾讯草稿支持无损编辑，保留收件人、抄送、密送、附件、内嵌图片和原有签名',
+      '每日待办同时读取 Gmail 和腾讯来信，并显示完整来源邮箱',
+    ],
+  },
+  {
     version: '1.1.6',
     releasedAt: '2026-08-19',
     title: '邮件中文同步外文后台翻译',

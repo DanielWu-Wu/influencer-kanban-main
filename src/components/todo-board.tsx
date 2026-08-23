@@ -14,7 +14,7 @@ import {
 } from 'lucide-react';
 import { formatLocalDateKey, parseLocalDateKey } from '@/lib/local-date';
 import { getDailyGmailTaskKey, isCompletedToday } from '@/lib/daily-gmail-todos';
-import type { DailyGmailTodo } from '@/lib/use-daily-gmail-todos';
+import type { DailyGmailTodo, DailyMailboxStatus } from '@/lib/use-daily-gmail-todos';
 import { YouTubeChannelAvatar } from '@/components/youtube-channel-avatar';
 
 interface TodoBoardProps {
@@ -27,8 +27,9 @@ interface TodoBoardProps {
   gmailLoading: boolean;
   gmailRefreshing: boolean;
   gmailError: string;
+  sourceStatus: DailyMailboxStatus[];
   onRefreshGmail: () => void;
-  onOpenGmail: (threadId: string) => void;
+  onOpenGmail: (item: DailyGmailTodo) => void;
   onToggleGmail: (messageId: string) => void;
 }
 
@@ -69,6 +70,17 @@ function toTimestamp(value?: string) {
   return Number.isNaN(timestamp) ? 0 : timestamp;
 }
 
+function dailyMailTaskKey(item: DailyGmailTodo) {
+  return getDailyGmailTaskKey(
+    item.threadId,
+    item.messageId,
+    item.mailAccountId,
+    item.provider,
+    item.folderRef,
+    item.providerMessageRef,
+  );
+}
+
 export function TodoBoard({
   todos,
   onAdd,
@@ -79,6 +91,7 @@ export function TodoBoard({
   gmailLoading,
   gmailRefreshing,
   gmailError,
+  sourceStatus,
   onRefreshGmail,
   onOpenGmail,
   onToggleGmail,
@@ -107,7 +120,7 @@ export function TodoBoard({
     ...(filterPriority === 'all'
       ? gmailItems.filter((item) => !item.completed).map((item) => ({
           kind: 'gmail' as const,
-          key: `gmail-${getDailyGmailTaskKey(item.threadId, item.messageId)}`,
+          key: `gmail-${dailyMailTaskKey(item)}`,
           sortTime: toTimestamp(item.date),
           item,
         }))
@@ -122,7 +135,7 @@ export function TodoBoard({
     })),
     ...gmailItems.filter((item) => item.completed).map((item) => ({
       kind: 'gmail' as const,
-      key: `gmail-${getDailyGmailTaskKey(item.threadId, item.messageId)}`,
+      key: `gmail-${dailyMailTaskKey(item)}`,
       sortTime: toTimestamp(item.completedAt || item.date),
       item,
     })),
@@ -235,9 +248,12 @@ export function TodoBoard({
           <div className="min-w-0 flex-1">
             <div className="flex min-w-0 items-center gap-2">
               <p className="truncate text-xs line-through">{entry.item.channelName}</p>
-              <Badge variant="outline" className="h-5 shrink-0 px-1.5 text-[9px]">Gmail</Badge>
+              <Badge variant="outline" className="h-5 shrink-0 px-1.5 text-[9px]">{entry.item.provider === 'tencent_exmail' ? '腾讯邮箱' : 'Gmail'}</Badge>
               <span className="min-w-0 flex-1 truncate text-[10px] line-through">{entry.item.subject || '无主题'}</span>
             </div>
+            <p className="mt-0.5 truncate text-[10px] text-slate-400 line-through" title={entry.item.mailAddress}>
+              来源邮箱：{entry.item.mailAddress || '未记录'}
+            </p>
             <p className="mt-1 truncate text-[11px] text-slate-500 line-through">
               {entry.item.summary}
               {entry.item.summaryPending && <span className="ml-2 text-[10px] text-blue-500">AI 正在优化摘要…</span>}
@@ -250,13 +266,13 @@ export function TodoBoard({
             type="button"
             variant="ghost"
             size="icon-sm"
-            onClick={() => onToggleGmail(getDailyGmailTaskKey(entry.item.threadId, entry.item.messageId))}
+            onClick={() => onToggleGmail(dailyMailTaskKey(entry.item))}
             aria-label={`将“${entry.item.channelName}”的来信恢复为待完成`}
             title="恢复为待完成"
           >
             <RotateCcw />
           </Button>
-          <button type="button" onClick={() => onOpenGmail(entry.item.threadId)} className="flex h-7 w-7 shrink-0 items-center justify-center rounded-md text-blue-600 hover:bg-blue-50" aria-label={`查看“${entry.item.channelName}”的邮件线程`} title="打开该邮件线程"><ArrowRight className="h-3.5 w-3.5" /></button>
+          <button type="button" onClick={() => onOpenGmail(entry.item)} className="flex h-7 w-7 shrink-0 items-center justify-center rounded-md text-blue-600 hover:bg-blue-50" aria-label={`查看“${entry.item.channelName}”的邮件线程`} title="打开该邮件线程"><ArrowRight className="h-3.5 w-3.5" /></button>
         </div>
       ))}
     </div>
@@ -284,7 +300,7 @@ export function TodoBoard({
             size="sm"
             onClick={onRefreshGmail}
             disabled={gmailRefreshing}
-            title="刷新近 72 小时 Gmail 来信"
+            title="刷新近 72 小时已连接邮箱来信"
           >
             <RefreshCw className={`mr-1 h-3.5 w-3.5 ${gmailRefreshing ? 'animate-spin' : ''}`} />
             刷新来信
@@ -321,9 +337,22 @@ export function TodoBoard({
             待完成 ({pendingItems.length})
           </button>
           {gmailLoading && (
-            <span className="text-xs text-muted-foreground">正在读取近 72 小时 Gmail 来信…</span>
+            <span className="text-xs text-muted-foreground">正在读取已连接邮箱近 72 小时来信…</span>
           )}
         </div>
+
+        {sourceStatus.length > 0 && (
+          <div className="mb-2 flex flex-wrap items-center gap-2 rounded-lg border border-blue-100 bg-blue-50/55 px-3 py-2 text-[11px] text-blue-800">
+            <span className="font-medium">邮箱读取状态：</span>
+            {sourceStatus.map((source) => (
+              <span key={`${source.provider}:${source.mailAccountId}`} className={source.state === 'fresh' ? '' : 'text-amber-700'} title={source.mailAddress}>
+                {source.provider === 'tencent_exmail' ? '腾讯企业邮箱' : 'Gmail'}（{source.mailAddress}）
+                {source.state === 'fresh' ? '实时' : source.state === 'cached' ? '缓存' : source.state === 'disconnected' ? '已断开' : '失败'}：
+                {source.loadedCount} 封，匹配红人 {source.matchedCount} 条{source.error ? `（${source.error}）` : ''}
+              </span>
+            ))}
+          </div>
+        )}
 
         {pendingExpanded && gmailError && (
           <div className="flex items-center justify-between gap-3 rounded-xl border border-amber-200 bg-amber-50/70 px-4 py-3 text-sm text-amber-800">
@@ -388,9 +417,12 @@ export function TodoBoard({
                 <div className="min-w-0 flex-1">
                   <div className="flex min-w-0 items-center gap-2">
                     <p className="max-w-[300px] truncate text-[13px] font-semibold text-foreground">{entry.item.channelName}</p>
-                    <Badge variant="outline" className="h-5 shrink-0 border-blue-100 bg-blue-50 px-1.5 text-[9px] font-medium text-blue-600"><Mail className="mr-1 h-2.5 w-2.5" />Gmail</Badge>
+                    <Badge variant="outline" className="h-5 shrink-0 border-blue-100 bg-blue-50 px-1.5 text-[9px] font-medium text-blue-600"><Mail className="mr-1 h-2.5 w-2.5" />{entry.item.provider === 'tencent_exmail' ? '腾讯邮箱' : 'Gmail'}</Badge>
                     <span className="min-w-0 truncate text-[11px] text-muted-foreground">{entry.item.subject || '无主题'}</span>
                   </div>
+                  <p className="mt-0.5 truncate text-[10px] text-slate-400" title={entry.item.mailAddress}>
+                    来源邮箱：{entry.item.mailAddress || '未记录'}
+                  </p>
                   <p className="mt-1 truncate text-[11px] text-slate-600">{entry.item.summary}{entry.item.summaryPending && <span className="ml-2 text-[10px] text-blue-500">AI 正在优化摘要…</span>}</p>
                 </div>
                 <span className="w-12 shrink-0 text-right text-[10px] text-muted-foreground">{new Date(entry.item.date).toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit' })}</span>
@@ -398,13 +430,13 @@ export function TodoBoard({
                   type="button"
                   variant="ghost"
                   size="icon-sm"
-                  onClick={() => onToggleGmail(getDailyGmailTaskKey(entry.item.threadId, entry.item.messageId))}
+                  onClick={() => onToggleGmail(dailyMailTaskKey(entry.item))}
                   aria-label={`将“${entry.item.channelName}”的来信标记为已完成`}
                   title="标记为已完成"
                 >
                   <Check />
                 </Button>
-                <button type="button" onClick={() => onOpenGmail(entry.item.threadId)} className="flex h-7 w-7 shrink-0 items-center justify-center rounded-md text-blue-600 opacity-45 transition-[opacity,background-color] duration-150 ease-out hover:bg-blue-50 group-hover:opacity-100 group-focus-within:opacity-100 motion-reduce:transition-none" aria-label={`查看“${entry.item.channelName}”的邮件线程`} title="打开该邮件线程">
+                <button type="button" onClick={() => onOpenGmail(entry.item)} className="flex h-7 w-7 shrink-0 items-center justify-center rounded-md text-blue-600 opacity-45 transition-[opacity,background-color] duration-150 ease-out hover:bg-blue-50 group-hover:opacity-100 group-focus-within:opacity-100 motion-reduce:transition-none" aria-label={`查看“${entry.item.channelName}”的邮件线程`} title="打开该邮件线程">
                   <ArrowRight className="h-3.5 w-3.5" />
                 </button>
               </article>

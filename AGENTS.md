@@ -14,7 +14,7 @@
 - Drag/drop: @dnd-kit
 - Backend/API: Next.js Route Handlers under `src/app/api/**`
 - Auth/storage: Supabase Auth, Supabase tables/RPC for cloud settings and user secrets
-- External integrations: Gmail API, Feishu Open Platform/Base API, YouTube Data API, OpenAI-compatible AI APIs
+- External integrations: Gmail API, Tencent Exmail IMAP/SMTP, Feishu Open Platform/Base API, YouTube Data API, OpenAI-compatible AI APIs
 - Main folders:
   - `src/app`: app shell, pages, API routes
   - `src/components`: feature UI components
@@ -33,7 +33,7 @@ AI 的角色是辅助判断、起草、翻译、提取信息、生成写回预�
 - 保持小步、可验证、低风险改动；不要顺手重构无关模块。
 - 优先沿用现有组件、数据结构、样式变量和 API 约定。
 - 不要改变业务逻辑，除非用户明确要求。
-- 涉及外部写入时必须保留用户确认步骤，尤其是 Gmail 发送、Gmail 草稿、飞书写回、AI Agent 操作。
+- 涉及外部写入时必须保留用户确认步骤，尤其是 Gmail/腾讯邮箱发送、邮件草稿、飞书写回、AI Agent 操作。
 - UI 修改要保持桌面工作台的信息密度，偏清爽、现代、轻 Glassmorphism，不做花哨落地页风格。
 - 用户界面主要使用中文；避免新增乱码文案。
 - 不要把 DeepSeek 描述为项目内置服务；模型 API 由用户自己配置，项目只提供 OpenAI-compatible 接口适配。
@@ -48,6 +48,7 @@ AI 的角色是辅助判断、起草、翻译、提取信息、生成写回预�
   - 业务类型：`src/lib/types.ts`
   - 数据/设置：`src/lib/data.ts`
   - Gmail：`src/components/gmail-page.tsx`, `src/components/gmail-inbox.tsx`, `src/components/email-detail.tsx`
+  - 双邮箱/腾讯企业邮箱：`src/components/mail-account-provider.tsx`, `src/components/tencent-exmail-page.tsx`, `src/app/api/mail/**`, `src/lib/tencent-exmail-messages.ts`
   - 红人开发台：`src/components/creator-prospecting-page.tsx`
   - 飞书：`src/components/feishu-settings.tsx`, `src/lib/feishu-base.ts`, `src/lib/feishu-mapping.ts`
   - AI Agent/记录助手：`src/components/record-assistant-provider.tsx`, `src/lib/record-assistant.ts`, `src/lib/agent-assistant.ts`
@@ -59,7 +60,7 @@ AI 的角色是辅助判断、起草、翻译、提取信息、生成写回预�
 
 - 不要使用 `git reset --hard`、`git checkout --` 等破坏性命令，除非用户明确要求。
 - 不要删除或覆盖用户未提交的本地修改。
-- 不要自动发送邮件、自动群发开发信、自动写飞书，除非用户明确确认。
+- 不要自动发送邮件、自动群发开发信、自动写飞书；直接发送或写回必须由用户在对应操作中明确确认。
 - 不要硬编码飞书字段名；写飞书必须使用用户保存的字段映射。
 - 不要假设 YouTube API 能拿到隐藏邮箱；只能从公开简介中提取邮箱。
 - 不要把手动标记的 Gmail 未读邮件当作异常状态；它应被视为正常未读。

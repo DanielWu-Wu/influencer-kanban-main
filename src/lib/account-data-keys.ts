@@ -13,8 +13,11 @@ export const USER_DATA_KEYS = {
   DAILY_GMAIL_SUMMARIES: 'daily_gmail_summaries',
   DAILY_GMAIL_COMPLETIONS: 'daily_gmail_completions',
   DAILY_GMAIL_TASKS: 'daily_gmail_tasks',
+  DAILY_MAIL_TASKS_V3: 'daily_mail_tasks_v3',
   OUTREACH_DRAFTS: 'outreach_drafts',
   EMAIL_GENERATION_TASKS: 'email_generation_tasks',
+  MAIL_ACCOUNTS: 'mail_accounts',
+  MAIL_ACCOUNT_BINDINGS: 'mail_account_bindings',
   DELETED_CREATOR_PROSPECTS: 'deleted_creator_prospects',
   LEGACY_BACKUP: '_legacy_backup_v1',
 } as const;
@@ -36,7 +39,10 @@ export const PUBLIC_USER_DATA_KEYS = new Set<UserDataKey>([
   USER_DATA_KEYS.DAILY_GMAIL_SUMMARIES,
   USER_DATA_KEYS.DAILY_GMAIL_COMPLETIONS,
   USER_DATA_KEYS.DAILY_GMAIL_TASKS,
+  USER_DATA_KEYS.DAILY_MAIL_TASKS_V3,
   USER_DATA_KEYS.OUTREACH_DRAFTS,
   USER_DATA_KEYS.EMAIL_GENERATION_TASKS,
+  USER_DATA_KEYS.MAIL_ACCOUNTS,
+  USER_DATA_KEYS.MAIL_ACCOUNT_BINDINGS,
   USER_DATA_KEYS.DELETED_CREATOR_PROSPECTS,
 ]);

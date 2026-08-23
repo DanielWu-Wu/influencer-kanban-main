@@ -56,9 +56,9 @@ import {
 import { useRecordAssistant } from './record-assistant-provider';
 import { useEmailGenerationTasks } from './email-generation-task-provider';
 import { GmailReplyTargetBar } from './gmail-reply-target-bar';
-import type { GmailThreadOpenRequest } from './gmail-page';
 import {
   getGmailTranslationScopeKey,
+  getMailTranslationStorageMessageId,
   prioritizeGmailTranslationPrefetch,
   requestGmailTranslation,
 } from '@/lib/gmail-translation-prefetch';
@@ -69,6 +69,7 @@ import {
   setManualGmailUnreadPreference,
   waitForAutomaticGmailRead,
 } from '@/lib/gmail-read-state';
+import type { MailAccount } from '@/lib/mail-accounts';
 
 interface EmailDetailProps {
   thread: GmailThread;
@@ -76,7 +77,15 @@ interface EmailDetailProps {
   loadError?: string;
   onBack: () => void;
   onThreadUpdated?: (thread: GmailThread) => void;
-  openComposerRequest?: GmailThreadOpenRequest;
+  openComposerRequest?: {
+    requestId: number;
+    taskId?: string;
+    retryRequested?: boolean;
+    retryInput?: unknown;
+    messageId?: string;
+    composerMode?: 'ai' | 'template';
+  };
+  mailAccount?: MailAccount;
 }
 
 type FeishuCreatorProfile = {
@@ -233,6 +242,7 @@ export function EmailDetail({
   onBack,
   onThreadUpdated,
   openComposerRequest,
+  mailAccount,
 }: EmailDetailProps) {
   const [expandedMessages, setExpandedMessages] = useState<Set<string>>(() => {
     const newestMessage = sortMessagesNewestFirst(thread.messages)[0];
@@ -257,17 +267,21 @@ export function EmailDetail({
   } | null>(null);
   const { addTranslation, getTranslation } = useEmailTranslations();
   const { auth, connect } = useGmailAuth();
-  const remoteContentPermissionScope = `${auth?.email || ''}:${thread.id}`;
+  const isTencent = mailAccount?.provider === 'tencent_exmail' || thread.provider === 'tencent_exmail';
+  const ownEmail = mailAccount?.email || auth?.email || '';
+  const mailScope = mailAccount?.mailAccountId || `gmail:${ownEmail.toLowerCase()}`;
+  const providerLabel = isTencent ? '腾讯企业邮箱' : 'Gmail';
+  const remoteContentPermissionScope = `${mailScope}:${thread.id}`;
   const [remoteContentPermission, setRemoteContentPermission] = useState<{
     scope: string;
     messageIds: Set<string>;
   }>(() => ({ scope: remoteContentPermissionScope, messageIds: new Set() }));
-  const replyAnchorScopeRef = useRef(`${auth?.email || ''}:${thread.id}`);
+  const replyAnchorScopeRef = useRef(`${mailScope}:${thread.id}`);
   const defaultReplyMessageId = useMemo(
     () => getDefaultGmailReplyMessage(thread)?.id || '',
     [thread],
   );
-  const replyAnchorScope = `${auth?.email || ''}:${thread.id}`;
+  const replyAnchorScope = `${mailScope}:${thread.id}`;
 
   useEffect(() => {
     const scopeChanged = replyAnchorScopeRef.current !== replyAnchorScope;
@@ -325,7 +339,7 @@ export function EmailDetail({
   const toggleMessageReadState = async (message: GmailMessage) => {
     if (changingReadStateId) return;
     const markAsUnread = message.isRead;
-    const readScopeKey = getGmailReadScopeKey(auth?.email);
+    const readScopeKey = getGmailReadScopeKey(mailScope);
     const hadManualUnreadPreference = hasManualGmailUnreadPreference(readScopeKey, thread.id);
     beginGmailReadStateOperation(readScopeKey, thread.id);
     setManualGmailUnreadPreference(readScopeKey, thread.id, markAsUnread);
@@ -334,10 +348,25 @@ export function EmailDetail({
 
     try {
       await waitForAutomaticGmailRead(readScopeKey, thread.id);
-      const accessToken = await getAccessToken();
-      const response = await fetch(
-        `https://gmail.googleapis.com/gmail/v1/users/me/messages/${message.id}/modify`,
-        {
+      let response: Response;
+      if (isTencent) {
+        if (!mailAccount || !message.folderRef || !message.providerMessageRef) {
+          throw new Error('腾讯邮件定位信息不完整，请刷新邮箱后重试。');
+        }
+        response = await fetch('/api/mail/tencent', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            action: 'flags',
+            mailAccountId: mailAccount.mailAccountId,
+            folder: message.folderRef,
+            uid: message.providerMessageRef,
+            read: !markAsUnread,
+          }),
+        });
+      } else {
+        const accessToken = await getAccessToken();
+        response = await fetch(`https://gmail.googleapis.com/gmail/v1/users/me/messages/${message.id}/modify`, {
           method: 'POST',
           headers: {
             Authorization: `Bearer ${accessToken}`,
@@ -347,12 +376,12 @@ export function EmailDetail({
             addLabelIds: markAsUnread ? ['UNREAD'] : [],
             removeLabelIds: markAsUnread ? [] : ['UNREAD'],
           }),
-        },
-      );
+        });
+      }
       if (!response.ok) {
         const result = await response.json().catch(() => ({}));
         throw new Error(
-          result.error?.message || (markAsUnread ? '\u6807\u8bb0\u672a\u8bfb\u5931\u8d25' : '\u6807\u8bb0\u5df2\u8bfb\u5931\u8d25'),
+          result.error?.message || result.error || (markAsUnread ? '\u6807\u8bb0\u672a\u8bfb\u5931\u8d25' : '\u6807\u8bb0\u5df2\u8bfb\u5931\u8d25'),
         );
       }
 
@@ -451,13 +480,13 @@ export function EmailDetail({
   const replyTarget = useMemo(() => resolveGmailReplyTarget({
     thread,
     messageId: selectedReplyMessageId,
-    ownEmail: auth?.email,
+    ownEmail,
     selectedRecipient: recipientOverrides[selectedReplyMessageId],
     suggestedCreatorEmail: creatorProfile?.email,
-  }), [auth?.email, creatorProfile?.email, recipientOverrides, selectedReplyMessageId, thread]);
+  }), [creatorProfile?.email, ownEmail, recipientOverrides, selectedReplyMessageId, thread]);
   const threadParticipants = useMemo(
-    () => collectGmailThreadParticipants(thread, auth?.email, creatorProfile?.email),
-    [auth?.email, creatorProfile?.email, thread],
+    () => collectGmailThreadParticipants(thread, ownEmail, creatorProfile?.email),
+    [creatorProfile?.email, ownEmail, thread],
   );
   const messageLanguageLabels = useMemo(() => new Map(
     displayMessages.map((message) => {
@@ -538,8 +567,8 @@ export function EmailDetail({
   }, [newestDisplayMessageId, thread.id]);
 
   const profileContactEmails = useMemo(() => {
-    return getGmailThreadContact(thread, auth?.email).emails;
-  }, [auth?.email, thread]);
+    return getGmailThreadContact(thread, ownEmail).emails;
+  }, [ownEmail, thread]);
 
   useEffect(() => {
     let cancelled = false;
@@ -696,14 +725,14 @@ export function EmailDetail({
         id: 'mark-follow-up',
         label: '记录待跟进',
         description: '在飞书合作进度中记录需要继续跟进。',
-        fields: { collaborationProgress: '需要跟进：已从 Gmail 邮件确认后续需要处理。' },
+        fields: { collaborationProgress: `需要跟进：已从${providerLabel}邮件确认后续需要处理。` },
       },
     ];
 
     return actions.filter((action) =>
       (Object.keys(action.fields) as FeishuFieldKey[]).some((fieldKey) => Boolean(mapping[fieldKey])),
     );
-  }, [settings.feishuFieldMapping]);
+  }, [providerLabel, settings.feishuFieldMapping]);
 
   const executeProfileAction = async () => {
     if (!creatorProfile || !pendingProfileAction) return;
@@ -794,12 +823,22 @@ export function EmailDetail({
     onProgress?: (translatedText: string) => void,
   ) => {
     return requestGmailTranslation({
-      scopeKey: getGmailTranslationScopeKey(auth?.email),
+      scopeKey: getGmailTranslationScopeKey(mailScope),
       messageId,
       text,
       settings,
       onProgress,
     });
+  };
+
+  const getTranslationStorageMessageId = (messageId: string) =>
+    getMailTranslationStorageMessageId(getGmailTranslationScopeKey(mailScope), messageId);
+
+  const getScopedTranslation = (message: GmailMessage) => {
+    const translation = getTranslation(getTranslationStorageMessageId(message.id));
+    return translation?.originalText === repairTextEncoding(message.body)
+      ? translation
+      : undefined;
   };
 
   const handleTranslateLegacy = async (message: GmailMessage) => {
@@ -812,7 +851,7 @@ export function EmailDetail({
       return;
     }
 
-    if (getTranslation(message.id)) {
+    if (getScopedTranslation(message)) {
       setShowingTranslationIds((current) => new Set(current).add(message.id));
       return;
     }
@@ -842,8 +881,8 @@ export function EmailDetail({
       }
 
       addTranslation({
-        messageId: message.id,
-        originalText: message.body,
+        messageId: getTranslationStorageMessageId(message.id),
+        originalText: repairTextEncoding(message.body),
         translatedText: result.data.translatedText,
         sourceLang: result.data.sourceLang,
         targetLang: 'zh',
@@ -873,10 +912,10 @@ export function EmailDetail({
       return;
     }
 
-    const translationScopeKey = getGmailTranslationScopeKey(auth?.email);
+    const translationScopeKey = getGmailTranslationScopeKey(mailScope);
     prioritizeGmailTranslationPrefetch(message.id, translationScopeKey);
 
-    if (getTranslation(message.id)) {
+    if (getScopedTranslation(message)) {
       setShowingTranslationIds((current) => new Set(current).add(message.id));
       return;
     }
@@ -915,7 +954,7 @@ export function EmailDetail({
         : currentResult.translatedText;
 
       addTranslation({
-        messageId: message.id,
+        messageId: getTranslationStorageMessageId(message.id),
         originalText,
         translatedText: currentTranslation,
         sourceLang: currentResult.sourceLang,
@@ -957,7 +996,7 @@ export function EmailDetail({
     && !translatedText.includes('引用历史暂时翻译失败');
 
   const handleTranslateQuotedHistory = async (message: GmailMessage) => {
-    const existingTranslation = getTranslation(message.id);
+    const existingTranslation = getScopedTranslation(message);
     if (!existingTranslation || hasCompletedQuotedTranslation(existingTranslation.translatedText)) return;
 
     const originalText = repairTextEncoding(message.body);
@@ -992,7 +1031,7 @@ export function EmailDetail({
       });
 
       addTranslation({
-        messageId: message.id,
+        messageId: getTranslationStorageMessageId(message.id),
         originalText,
         translatedText: `${baseTranslation}\n\n---\n【引用历史翻译】\n${quotedResult.translatedText}`,
         sourceLang: existingTranslation.sourceLang || quotedResult.sourceLang,
@@ -1035,7 +1074,32 @@ export function EmailDetail({
 
   const loadAttachmentDataUrl = async (messageId: string, attachment: GmailAttachment) => {
     if (attachment.dataUrl) return attachment.dataUrl;
-    if (!attachment.id) throw new Error('附件缺少 Gmail 文件标识。');
+    if (!attachment.id) throw new Error('附件缺少文件标识。');
+
+    if (isTencent) {
+      if (!mailAccount) throw new Error('腾讯企业邮箱账号不可用。');
+      const sourceMessage = thread.messages.find((message) => message.id === messageId);
+      if (!sourceMessage?.folderRef || !sourceMessage.providerMessageRef) {
+        throw new Error('腾讯邮件附件定位信息不完整。');
+      }
+      const params = new URLSearchParams({
+        action: 'attachment',
+        mailAccountId: mailAccount.mailAccountId,
+        folder: sourceMessage.folderRef,
+        uid: sourceMessage.providerMessageRef,
+        attachmentId: attachment.id,
+      });
+      const response = await fetch(`/api/mail/tencent?${params.toString()}`, { cache: 'no-store' });
+      const result = await response.json().catch(() => ({})) as {
+        success?: boolean;
+        data?: { url?: string };
+        error?: string;
+      };
+      if (!response.ok || !result.success || !result.data?.url) {
+        throw new Error(result.error || `下载附件失败：${attachment.filename}`);
+      }
+      return result.data.url;
+    }
 
     const accessToken = await getAccessToken();
     const response = await fetch(
@@ -1201,7 +1265,7 @@ export function EmailDetail({
               <PopoverContent align="start" className="flex w-96 flex-col gap-3">
                 <div>
                   <p className="text-sm font-medium">邮件线程参与者</p>
-                  <p className="text-xs text-muted-foreground">根据 Gmail 的发件人、收件人和抄送信息汇总。</p>
+                  <p className="text-xs text-muted-foreground">根据{providerLabel}的发件人、收件人和抄送信息汇总。</p>
                 </div>
                 <div className="flex max-h-72 flex-col gap-2 overflow-y-auto">
                   {threadParticipants.map((participant) => (
@@ -1413,9 +1477,14 @@ export function EmailDetail({
           </div>
         ) : (
         <div className="space-y-4 p-4">
+          {thread.loadWarning && (
+            <div className="rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-xs text-amber-800">
+              {thread.loadWarning}
+            </div>
+          )}
           {displayMessages.map((message, index) => {
             const sender = getDisplayEmail(message.from);
-            const translation = getTranslation(message.id);
+            const translation = getScopedTranslation(message);
             const visibleTranslationText = streamingTranslations[message.id]
               || translation?.translatedText
               || (translatingIds.has(message.id) || translatingQuotedIds.has(message.id)
@@ -1723,7 +1792,7 @@ export function EmailDetail({
         {composerState === 'expanded' && replyTarget ? (
           <GmailReplyTargetBar
             target={replyTarget}
-            ownEmail={auth?.email}
+            ownEmail={ownEmail}
             onRecipientChange={updateReplyRecipient}
             onChooseMessage={chooseAnotherReplyAnchor}
           />
@@ -1794,10 +1863,11 @@ export function EmailDetail({
             <div className={composerState === 'minimized' ? 'hidden' : 'min-h-0 flex-1'}>
               {replyMode === 'template' ? (
                 <AITemplateReplyComposer
-                  key={`template-${thread.id}-${replyTarget?.messageId || 'default'}`}
+                  key={`template-${mailScope}-${thread.id}-${replyTarget?.messageId || 'default'}`}
                   thread={thread}
                   replyTarget={replyTarget}
                   avatarUrl={creatorChannelAvatarUrl}
+                  mailAccount={mailAccount}
                   onMinimize={() => setComposerState('minimized')}
                   onClose={() => setComposerState('closed')}
                   onDraftSaved={setSavedReplyDraft}
@@ -1807,11 +1877,12 @@ export function EmailDetail({
                 />
               ) : (
                 <EmailComposer
-                  key={`${replyMode}-${replyTarget?.messageId || 'default'}`}
+                  key={`${mailScope}-${replyMode}-${replyTarget?.messageId || 'default'}`}
                   thread={thread}
                   replyTarget={replyTarget}
                   mode={replyMode}
                   avatarUrl={creatorChannelAvatarUrl}
+                  mailAccount={mailAccount}
                   onMinimize={replyMode === 'ai' ? () => setComposerState('minimized') : undefined}
                   onClose={() => setComposerState('closed')}
                   initialMessage={replyMode === 'compose' ? savedReplyDraft : undefined}
@@ -1835,6 +1906,7 @@ export function EmailDetail({
         initialSubject={forwardDraft?.subject || ''}
         initialContent={forwardDraft?.content || ''}
         initialAttachments={forwardDraft?.attachments || []}
+        mailAccount={mailAccount}
       />
     </div>
   );

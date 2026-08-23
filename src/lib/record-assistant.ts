@@ -5,7 +5,7 @@ export type RecordAssistantEventType = 'email_sent' | 'status_changed' | 'draft_
 
 export type RecordAssistantEvent = {
   type: RecordAssistantEventType;
-  source: 'gmail' | 'kanban' | 'manual';
+  source: 'gmail' | 'tencent_exmail' | 'kanban' | 'manual';
   title: string;
   summary: string;
   occurredAt?: string;

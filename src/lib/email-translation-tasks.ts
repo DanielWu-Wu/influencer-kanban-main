@@ -3,6 +3,8 @@ export const EMAIL_TRANSLATION_RETRY_OPERATION = 'translate_chinese_to_foreign';
 export type EmailTranslationSource =
   | 'gmail_ai_reply'
   | 'gmail_template_reply'
+  | 'tencent_ai_reply'
+  | 'tencent_template_reply'
   | 'outreach_email';
 
 export interface EmailTranslationRetryInput {
@@ -71,6 +73,8 @@ export function isEmailTranslationRetryInput(value: unknown): value is EmailTran
   return input.operation === EMAIL_TRANSLATION_RETRY_OPERATION
     && (input.source === 'gmail_ai_reply'
       || input.source === 'gmail_template_reply'
+      || input.source === 'tencent_ai_reply'
+      || input.source === 'tencent_template_reply'
       || input.source === 'outreach_email')
     && typeof input.chineseBody === 'string'
     && typeof input.targetLang === 'string'
@@ -82,6 +86,8 @@ export function isEmailTranslationTaskResult(value: unknown): value is EmailTran
   const result = value as Record<string, unknown>;
   return (result.source === 'gmail_ai_reply'
       || result.source === 'gmail_template_reply'
+      || result.source === 'tencent_ai_reply'
+      || result.source === 'tencent_template_reply'
       || result.source === 'outreach_email')
     && typeof result.chineseBody === 'string'
     && typeof result.targetLang === 'string'

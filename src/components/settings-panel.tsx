@@ -18,11 +18,12 @@ import {
   SelectTrigger,
   SelectValue,
 } from '@/components/ui/select';
-import { useGmailAuth, useSettings } from '@/lib/data';
+import { useSettings } from '@/lib/data';
 import { ProductDatabaseSettings } from '@/components/product-database-settings';
 import { CloudSyncSettings } from '@/components/cloud-sync-settings';
 import { FeishuSettings } from '@/components/feishu-settings';
 import { YouTubeApiSettings } from '@/components/youtube-api-settings';
+import { MailAccountSettings } from '@/components/mail-account-settings';
 import {
   AI_PROVIDER_PRESETS,
   applyAIProviderPreset,
@@ -34,10 +35,10 @@ import {
 } from '@/lib/ai-provider-config';
 import { APP_RELEASES, CURRENT_APP_RELEASE } from '@/lib/app-release';
 import {
-  Settings, Mail, Zap,
+  Settings, Zap,
   CheckCircle2, AlertTriangle,
   Plug, RefreshCw, Save, HelpCircle, Cpu,
-  ChevronDown, ChevronUp, Info, User, Clock, Heart, LogOut, KeyRound, SlidersHorizontal
+  ChevronDown, ChevronUp, Info, User, Clock, Heart, KeyRound, SlidersHorizontal
 } from 'lucide-react';
 
 const STORED_AI_KEY = '••••••••••••';
@@ -50,7 +51,6 @@ type VerifiedModelConfig = {
 
 export function SettingsPanel() {
   const { settings, saveSettings, loading: settingsLoading } = useSettings();
-  const { auth: gmailAuth, disconnect: disconnectGmail } = useGmailAuth();
   const [brandName, setBrandName] = useState(settings.brandName || '');
   const [senderName, setSenderName] = useState(settings.senderName || '');
   const modelProvider = 'custom' as const;
@@ -314,10 +314,6 @@ export function SettingsPanel() {
     }
   };
 
-  const handleConnectGmail = () => {
-    window.location.href = '/api/auth/google';
-  };
-
   return (
     <div className="flex h-full flex-col overflow-hidden">
       {/* 顶部标题栏 - 固定不滚动 */}
@@ -375,95 +371,10 @@ export function SettingsPanel() {
           onToggle={() => toggleSection('youtube')}
         />
 
-        {/* Gmail 邮件 */}
-        <Card className="overflow-hidden rounded-xl border-border/55 bg-white/84 shadow-[var(--glass-shadow-soft)] backdrop-blur-xl">
-          <button
-            type="button"
-            onClick={() => toggleSection('gmail')}
-            className="w-full text-left"
-          >
-            <CardHeader className="pb-3">
-              <div className="flex items-center justify-between">
-                <div className="flex items-center gap-3">
-                  <div className="flex h-9 w-9 items-center justify-center rounded-lg bg-red-500/10">
-                    <Mail className="w-4 h-4 text-red-500" />
-                  </div>
-                  <div>
-                    <CardTitle className="text-base">Gmail 邮件</CardTitle>
-                    <CardDescription className="mt-0.5 text-xs">连接 Gmail，查看邮件往来，AI 辅助回复</CardDescription>
-                  </div>
-                </div>
-                <div className="flex items-center gap-2">
-                  {gmailAuth?.isConnected && (
-                    <Badge variant="secondary" className="rounded-md bg-emerald-50 text-xs text-emerald-700">已连接</Badge>
-                  )}
-                  {expandedSection === 'gmail' ? (
-                    <ChevronUp className="w-4 h-4 text-muted-foreground" />
-                  ) : (
-                    <ChevronDown className="w-4 h-4 text-muted-foreground" />
-                  )}
-                </div>
-              </div>
-            </CardHeader>
-          </button>
-
-          {expandedSection === 'gmail' && (
-            <CardContent className="space-y-4 pt-0">
-              <div className="flex items-center justify-between">
-                <Badge variant="outline" className="gap-1 rounded-md border-white/70 bg-white/55 text-xs">
-                  <Info className="w-3 h-3" />
-                  用于「Gmail 邮件」页面
-                </Badge>
-              </div>
-
-              {gmailAuth?.isConnected ? (
-                <div className="flex items-center justify-between gap-4 rounded-lg border border-green-200 bg-green-50/85 p-4">
-                  <div className="min-w-0">
-                    <div className="flex items-center gap-2 text-sm font-medium text-green-800">
-                      <CheckCircle2 className="h-4 w-4" />
-                      Gmail 已连接
-                    </div>
-                    <p className="mt-1 truncate text-xs text-green-700">
-                      {gmailAuth.email || 'Google 账号'}
-                    </p>
-                  </div>
-                  <Button
-                    variant="outline"
-                    size="sm"
-                    className="shrink-0 gap-1.5 rounded-lg bg-white/75"
-                    onClick={disconnectGmail}
-                  >
-                    <LogOut className="h-4 w-4" />
-                    断开
-                  </Button>
-                </div>
-              ) : (
-                <div className="space-y-3 rounded-lg border border-white/65 bg-white/55 p-4">
-                  <div>
-                    <p className="text-sm font-medium">授权你的 Gmail 账号</p>
-                    <p className="mt-1 text-xs leading-5 text-muted-foreground">
-                      点击后跳转至 Google 官方授权页面。应用不会要求你填写或保存 Google Client Secret。
-                    </p>
-                  </div>
-                  <div className="rounded-lg bg-white/70 p-3 text-xs text-muted-foreground">
-                    授权后可读取和分类邮件、标记已读或未读、标星，以及保存 AI 回复草稿。
-                  </div>
-                  <Button
-                    className="h-10 w-full gap-2 rounded-lg bg-red-500 hover:bg-red-600"
-                    onClick={handleConnectGmail}
-                  >
-                    <Plug className="h-4 w-4" />
-                    一键连接 Gmail
-                  </Button>
-                </div>
-              )}
-
-              <div className="rounded-lg border border-white/65 bg-white/55 p-3 text-xs text-muted-foreground">
-                OAuth 密钥由项目的 Vercel 环境变量安全管理，无需在网页中重复填写。
-              </div>
-            </CardContent>
-          )}
-        </Card>
+        <MailAccountSettings
+          expanded={expandedSection === 'gmail'}
+          onToggle={() => toggleSection('gmail')}
+        />
 
         {/* 模型 API 设置 */}
         <Card className="overflow-hidden rounded-xl border-border/55 bg-white/84 shadow-[var(--glass-shadow-soft)] backdrop-blur-xl">

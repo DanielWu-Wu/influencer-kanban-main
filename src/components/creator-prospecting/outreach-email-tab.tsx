@@ -37,6 +37,7 @@ import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { Textarea } from '@/components/ui/textarea';
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import {
   countryLabel,
   formatCompactNumber,
@@ -60,6 +61,11 @@ import {
   isEmailTranslationRetryInput,
   normalizeEmailTranslationText,
 } from '@/lib/email-translation-tasks';
+import { useMailAccounts } from '@/components/mail-account-provider';
+import { getMailProviderLabel } from '@/lib/mail-accounts';
+import { useUserDataStore } from '@/components/user-data-provider';
+import { USER_DATA_KEYS } from '@/lib/account-data-keys';
+import { parseMailAccountBindings, resolveMailAccountBinding } from '@/lib/mail-account-bindings';
 
 type Props = {
   prospects: Prospect[];
@@ -73,7 +79,7 @@ type Props = {
   onGenerate: (prospect: Prospect) => void;
   onRegeneratePart: (prospect: Prospect, part: 'subject' | 'body') => void;
   onTranslateChinese: (prospectId: string, chineseBody: string, targetLang?: string) => Promise<boolean>;
-  onSaveDraft: (prospect: Prospect) => void;
+  onSaveDraft: (prospect: Prospect, mailAccountId: string) => void;
   onBack: (prospect: Prospect) => void;
   onSkip: (prospect: Prospect) => void;
   openProspectRequest?: { prospectId: string; requestId: number; retryRequested?: boolean; retryInput?: unknown };
@@ -322,8 +328,15 @@ export function OutreachEmailTab({
     prospects[0] ? [prospects[0].id] : []
   ));
   const [confirmDraftId, setConfirmDraftId] = useState<string | null>(null);
+  const [confirmMailAccountId, setConfirmMailAccountId] = useState('');
   const handledOpenRequestRef = useRef(0);
   const { getLatestTaskByKey } = useEmailGenerationTasks();
+  const { accounts, activeAccount } = useMailAccounts();
+  const { data: accountData } = useUserDataStore();
+  const mailBindings = parseMailAccountBindings(accountData[USER_DATA_KEYS.MAIL_ACCOUNT_BINDINGS]);
+  const draftAccounts = accounts.filter((account) => (
+    account.connectionStatus === 'connected' && account.capabilities.drafts
+  ));
   const prospectIdsKey = prospects.map((prospect) => prospect.id).join('\u0000');
   const filtered = useMemo(() => {
     const normalized = query.trim().toLowerCase();
@@ -846,7 +859,24 @@ export function OutreachEmailTab({
                       </>
                     )}
                     <Button
-                      onClick={() => setConfirmDraftId(prospect.id)}
+                      onClick={() => {
+                        const binding = resolveMailAccountBinding(mailBindings, {
+                          prospectId: prospect.id,
+                          feishuRecordId: prospect.feishuRecordId,
+                          contactEmail: prospect.publicEmail,
+                        });
+                        const boundAccount = binding
+                          ? draftAccounts.find((account) => account.mailAccountId === binding.mailAccountId)
+                          : undefined;
+                        setConfirmMailAccountId(
+                          binding
+                            ? boundAccount?.mailAccountId || ''
+                            : activeAccount?.capabilities.drafts
+                              ? activeAccount.mailAccountId
+                              : draftAccounts[0]?.mailAccountId || '',
+                        );
+                        setConfirmDraftId(prospect.id);
+                      }}
                       disabled={!hasDraft || !prospect.publicEmail || savingDraftId === prospect.id || translationUnsynced}
                     >
                       {savingDraftId === prospect.id || translationBusy ? <Loader2 className="mr-1 h-4 w-4 animate-spin" /> : <MailPlus className="mr-1 h-4 w-4" />}
@@ -854,7 +884,7 @@ export function OutreachEmailTab({
                         ? '等待中文同步'
                          : translationTask?.status === 'failed' || translationTask?.status === 'interrupted'
                            ? '中文同步失败'
-                          : '保存 Gmail 草稿'}
+                          : '保存邮件草稿'}
                     </Button>
                     <Button variant="ghost" onClick={() => onBack(prospect)}>
                       <ArrowLeft className="mr-1 h-4 w-4" />
@@ -875,17 +905,47 @@ export function OutreachEmailTab({
       <AlertDialog open={Boolean(confirmProspect)} onOpenChange={(open) => !open && setConfirmDraftId(null)}>
         <AlertDialogContent>
           <AlertDialogHeader>
-            <AlertDialogTitle>确认写入 Gmail 草稿箱</AlertDialogTitle>
+            <AlertDialogTitle>确认保存邮件草稿</AlertDialogTitle>
             <AlertDialogDescription>
-              将为 {confirmProspect?.title || '该红人'} 创建一封收件人为 {confirmProspect?.publicEmail} 的 Gmail 草稿。
-              系统不会发送邮件，保存后仍需你前往 Gmail 手动检查和发送。
+              将为 {confirmProspect?.title || '该红人'} 创建一封收件人为 {confirmProspect?.publicEmail} 的草稿。
+              系统不会发送邮件，保存后仍需你前往对应邮箱手动检查和发送。
             </AlertDialogDescription>
           </AlertDialogHeader>
+          <div className="space-y-2">
+            <Label>保存到邮箱</Label>
+            {confirmProspect && (() => {
+              const binding = resolveMailAccountBinding(mailBindings, {
+                prospectId: confirmProspect.id,
+                feishuRecordId: confirmProspect.feishuRecordId,
+                contactEmail: confirmProspect.publicEmail,
+              });
+              const available = binding && draftAccounts.some((account) => account.mailAccountId === binding.mailAccountId);
+              return binding && !available
+                ? <p className="text-xs text-amber-700">原绑定邮箱 {binding.mailAddress} 已断开，请人工重新选择。</p>
+                : null;
+            })()}
+            <Select value={confirmMailAccountId} onValueChange={setConfirmMailAccountId}>
+              <SelectTrigger><SelectValue placeholder="请选择已连接邮箱" /></SelectTrigger>
+              <SelectContent>
+                {draftAccounts.map((account) => (
+                  <SelectItem key={account.mailAccountId} value={account.mailAccountId}>
+                    {getMailProviderLabel(account.provider)} · {account.email}
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+            {confirmMailAccountId && (
+              <p className="text-xs text-muted-foreground">
+                发件邮箱：{draftAccounts.find((account) => account.mailAccountId === confirmMailAccountId)?.email}
+              </p>
+            )}
+          </div>
           <AlertDialogFooter>
             <AlertDialogCancel>继续检查</AlertDialogCancel>
             <AlertDialogAction
+              disabled={!confirmMailAccountId}
               onClick={() => {
-                if (confirmProspect) onSaveDraft(confirmProspect);
+                if (confirmProspect && confirmMailAccountId) onSaveDraft(confirmProspect, confirmMailAccountId);
                 setConfirmDraftId(null);
               }}
             >

@@ -18,6 +18,7 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@
 import { Separator } from '@/components/ui/separator';
 import { useEmailGenerationTasks } from '@/components/email-generation-task-provider';
 import type { EmailGenerationTask } from '@/lib/email-generation-tasks';
+import { getMailProviderLabel } from '@/lib/mail-accounts';
 
 function taskInitial(title: string) {
   return title.trim().slice(0, 1).toUpperCase() || '邮';
@@ -62,16 +63,19 @@ function TaskRow({
           {taskStatusIcon(task)}
         </div>
         <p className="mt-0.5 truncate text-xs text-muted-foreground">{task.description}</p>
+        <p className="mt-0.5 truncate text-[11px] text-blue-700">
+          {getMailProviderLabel(task.provider)} · {task.mailAddress || task.gmailEmail || '未记录来源邮箱'}
+        </p>
         <p className="mt-0.5 truncate text-xs text-muted-foreground/80">{task.stage}</p>
       </button>
-      {task.status === 'queued' ? (
+      {task.status === 'queued' || task.status === 'running' ? (
         <Button
           type="button"
           variant="ghost"
           size="icon-sm"
           className="shrink-0 text-muted-foreground"
-          title="取消排队"
-          aria-label="取消排队"
+          title={task.status === 'running' ? '取消当前任务' : '取消排队'}
+          aria-label={task.status === 'running' ? '取消当前任务' : '取消排队'}
           onClick={() => cancelTask(task.id)}
         >
           <X className="h-3.5 w-3.5" />

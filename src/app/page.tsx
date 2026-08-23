@@ -43,6 +43,10 @@ import { SettingsPanel } from '@/components/settings-panel';
 import { TodoBoard } from '@/components/todo-board';
 import { WorkCalendar } from '@/components/work-calendar';
 import { GmailPage, type GmailThreadOpenRequest } from '@/components/gmail-page';
+import { MailAccountSwitcher } from '@/components/mail-account-switcher';
+import { useMailAccounts } from '@/components/mail-account-provider';
+import { TencentExmailPage, type TencentExmailOpenRequest } from '@/components/tencent-exmail-page';
+import type { DailyGmailTodo } from '@/lib/use-daily-gmail-todos';
 import {
   CreatorProspectingPage,
   type CreatorProspectingOpenRequest,
@@ -63,6 +67,7 @@ import {
 } from '@/lib/email-generation-tasks';
 import { AppUpdateNotice } from '@/components/app-update-notice';
 import { useGmailTranslationPrefetch } from '@/lib/use-gmail-translation-prefetch';
+import { toast } from 'sonner';
 
 type View = 'kanban' | 'list' | 'email' | 'reminders' | 'settings' | 'accounts' | 'todo' | 'calendar' | 'prospecting' | 'gmail' | 'prompts' | 'draft-prompts';
 
@@ -75,7 +80,7 @@ const label = {
   todo: '\u6bcf\u65e5\u5f85\u529e',
   calendar: '\u5de5\u4f5c\u65e5\u5386',
   prospecting: '\u7ea2\u4eba\u5f00\u53d1\u53f0',
-  gmail: 'Gmail \u90ae\u4ef6',
+  gmail: '\u90ae\u7bb1',
   kanban: '\u5408\u4f5c\u9879\u76ee',
   list: '\u7ea2\u4eba\u5217\u8868',
   emailTemplates: '\u90ae\u4ef6\u6a21\u677f',
@@ -132,6 +137,7 @@ export default function DashboardPage() {
   const [currentView, setCurrentView] = useState<View>('todo');
   const [gmailHasMounted, setGmailHasMounted] = useState(false);
   const [gmailThreadOpenRequest, setGmailThreadOpenRequest] = useState<GmailThreadOpenRequest>();
+  const [tencentMessageOpenRequest, setTencentMessageOpenRequest] = useState<TencentExmailOpenRequest>();
   const [prospectingHasMounted, setProspectingHasMounted] = useState(false);
   const [prospectingOpenRequest, setProspectingOpenRequest] = useState<CreatorProspectingOpenRequest>();
   const [cooperationHasMounted, setCooperationHasMounted] = useState(false);
@@ -203,6 +209,7 @@ export default function DashboardPage() {
   const { todos, addTodo, updateTodo, toggleTodo, deleteTodo } = useTodos();
   const { events, addEvent, deleteEvent } = useCalendarEvents();
   const { settings, loading: settingsLoading } = useSettings();
+  const { accounts: mailAccounts, activeAccount, selectAccount } = useMailAccounts();
   const { unreadCount } = useGmailThreads();
   useGmailTranslationPrefetch(Boolean(user && account?.status === 'active' && !account.mustChangePassword));
   const dailyGmail = useDailyGmailTodos(settings, currentView === 'todo');
@@ -225,16 +232,50 @@ export default function DashboardPage() {
     }));
     changeView('gmail');
   }, [changeView]);
+  const handleOpenDailyMail = useCallback((item: DailyGmailTodo) => {
+    const targetAccount = mailAccounts.find((mailAccount) => mailAccount.mailAccountId === item.mailAccountId);
+    if (!targetAccount || targetAccount.connectionStatus !== 'connected') {
+      toast.error(`来源邮箱（${item.mailAddress || '地址未记录'}）已断开，请先重新连接。`);
+      return;
+    }
+    if (item.provider === 'tencent_exmail') {
+      if (!item.folderRef || !item.providerMessageRef) {
+        toast.error('这条腾讯邮箱待办缺少邮件定位信息，无法安全打开相似邮件。');
+        return;
+      }
+      selectAccount(targetAccount.mailAccountId);
+      setTencentMessageOpenRequest((current) => ({
+        requestId: (current?.requestId || 0) + 1,
+        folderRef: item.folderRef || '',
+        providerMessageRef: item.providerMessageRef || '',
+        rfcMessageId: item.rfcMessageId,
+      }));
+      changeView('gmail');
+      return;
+    }
+    selectAccount(targetAccount.mailAccountId);
+    handleOpenGmailThread(item.threadId);
+  }, [changeView, handleOpenGmailThread, mailAccounts, selectAccount]);
 
   useEffect(() => {
     const handleOpenGenerationTask = (event: Event) => {
       const detail = (event as CustomEvent<{
         taskId: string;
+        mailAccountId?: string;
+        mailAddress?: string;
         navigation: EmailGenerationTaskNavigation;
         retryRequested?: boolean;
         retryInput?: unknown;
       }>).detail;
       if (!detail?.navigation) return;
+      if (detail.mailAccountId) {
+        const targetAccount = mailAccounts.find((item) => item.mailAccountId === detail.mailAccountId);
+        if (!targetAccount || targetAccount.connectionStatus !== 'connected') {
+          toast.error(`原任务邮箱${detail.mailAddress ? `（${detail.mailAddress}）` : ''}已断开，请先重新连接。`);
+          return;
+        }
+        selectAccount(targetAccount.mailAccountId);
+      }
       if (detail.navigation.view === 'gmail') {
         const { threadId, messageId, composerMode } = detail.navigation;
         setGmailThreadOpenRequest((current) => ({
@@ -249,6 +290,25 @@ export default function DashboardPage() {
         changeView('gmail');
         return;
       }
+      if (detail.navigation.view === 'tencent') {
+        const { mailAccountId, folderRef, providerMessageRef, composerMode } = detail.navigation;
+        selectAccount(mailAccountId);
+        setTencentMessageOpenRequest((current) => ({
+          requestId: (current?.requestId || 0) + 1,
+          folderRef,
+          providerMessageRef,
+          composerMode,
+          taskId: detail.taskId,
+          retryRequested: detail.retryRequested,
+          retryInput: detail.retryInput,
+        }));
+        changeView('gmail');
+        return;
+      }
+      if (detail.navigation.view === 'cooperation') {
+        handleOpenCooperationProject(detail.navigation.projectId);
+        return;
+      }
       const { prospectId } = detail.navigation;
       setProspectingOpenRequest((current) => ({
         prospectId,
@@ -260,7 +320,7 @@ export default function DashboardPage() {
     };
     window.addEventListener(EMAIL_GENERATION_TASK_OPEN_EVENT, handleOpenGenerationTask);
     return () => window.removeEventListener(EMAIL_GENERATION_TASK_OPEN_EVENT, handleOpenGenerationTask);
-  }, [changeView]);
+  }, [changeView, handleOpenCooperationProject, mailAccounts, selectAccount]);
   const handleOpenCooperationProjectHandled = useCallback(() => {
     setOpenCooperationProjectId(undefined);
   }, []);
@@ -426,6 +486,9 @@ export default function DashboardPage() {
           </div>
 
           <div className="flex items-center gap-2 md:gap-3">
+            <div className="md:hidden">
+              <MailAccountSwitcher onManage={() => changeView('settings')} />
+            </div>
             <EmailGenerationProgress />
             {stats.todayTodos > 0 && (
               <button
@@ -659,8 +722,9 @@ export default function DashboardPage() {
                 gmailLoading={dailyGmail.loading}
                 gmailRefreshing={dailyGmail.refreshing}
                 gmailError={dailyGmail.error}
+                sourceStatus={dailyGmail.sourceStatus}
                 onRefreshGmail={dailyGmail.refresh}
-                onOpenGmail={handleOpenGmailThread}
+                onOpenGmail={handleOpenDailyMail}
                 onToggleGmail={dailyGmail.toggleCompleted}
               />
             </div>
@@ -698,10 +762,21 @@ export default function DashboardPage() {
                 ? 'min-h-0 flex-1 overflow-hidden rounded-xl'
                 : 'hidden'}
             >
-              <GmailPage
-                active={currentView === 'gmail'}
-                openThreadRequest={gmailThreadOpenRequest}
-              />
+              {activeAccount?.provider === 'tencent_exmail' ? (
+                <TencentExmailPage
+                  key={activeAccount.mailAccountId}
+                  account={activeAccount}
+                  active={currentView === 'gmail'}
+                  openMessageRequest={tencentMessageOpenRequest}
+                  onManageMailAccounts={() => changeView('settings')}
+                />
+              ) : (
+                <GmailPage
+                  active={currentView === 'gmail'}
+                  openThreadRequest={gmailThreadOpenRequest}
+                  onManageMailAccounts={() => changeView('settings')}
+                />
+              )}
             </div>
           )}
         </main>

@@ -20,7 +20,6 @@ import {
 import {
   EMAIL_GENERATION_TASK_OPEN_EVENT,
   EMAIL_GENERATION_TOASTER_ID,
-  buildEmailGenerationTaskScopeKey,
   markInterruptedEmailGenerationTasks,
   normalizeEmailGenerationConcurrency,
   readEmailGenerationTaskSnapshot,
@@ -28,12 +27,13 @@ import {
   pruneExpiredEmailGenerationTasks,
   serializeEmailGenerationTasks,
   selectStartableEmailTaskIds,
-  updateEmailGenerationTaskAvatar,
   type EmailGenerationTask,
   type EmailGenerationTaskKind,
   type EmailGenerationTaskNavigation,
 } from '@/lib/email-generation-tasks';
 import { USER_DATA_KEYS } from '@/lib/account-data-keys';
+import { useMailAccounts } from '@/components/mail-account-provider';
+import type { MailProvider } from '@/lib/mail-accounts';
 
 interface EmailGenerationTaskRunContext {
   signal: AbortSignal;
@@ -50,6 +50,11 @@ interface EnqueueEmailGenerationTaskInput {
   initialStage?: string;
   rollbackResult?: unknown;
   retryInput?: unknown;
+  mailContext?: {
+    provider: MailProvider;
+    mailAccountId: string;
+    mailAddress: string;
+  };
   run: (context: EmailGenerationTaskRunContext) => Promise<unknown>;
 }
 
@@ -78,6 +83,8 @@ function dispatchOpenTask(task: EmailGenerationTask, retryRequested = false) {
   window.dispatchEvent(new CustomEvent(EMAIL_GENERATION_TASK_OPEN_EVENT, {
     detail: {
       taskId: task.id,
+      mailAccountId: task.mailAccountId,
+      mailAddress: task.mailAddress,
       navigation: task.navigation,
       retryRequested,
       retryInput: retryRequested ? task.retryInput : undefined,
@@ -95,10 +102,12 @@ function completionMessage(task: EmailGenerationTask) {
 export function EmailGenerationTaskProvider({ children }: { children: ReactNode }) {
   const { account } = useAuth();
   const { auth: gmailAuth } = useGmailAuth();
+  const { accounts, activeAccount } = useMailAccounts();
   const { data: userData, loading: userDataLoading, save: saveUserData } = useUserDataStore();
   const accountUserId = account?.userId || '';
   const gmailEmail = gmailAuth?.email?.trim().toLowerCase() || '';
-  const scopeKey = buildEmailGenerationTaskScopeKey(accountUserId, gmailEmail);
+  const activeMailAccountId = activeAccount?.mailAccountId || '';
+  const scopeKey = accountUserId;
   const scopeKeyRef = useRef(scopeKey);
   const tasksRef = useRef<EmailGenerationTask[]>([]);
   const persistedTasksRef = useRef<EmailGenerationTask[]>([]);
@@ -171,6 +180,32 @@ export function EmailGenerationTaskProvider({ children }: { children: ReactNode 
     controllersRef.current.forEach((controller) => controller.abort());
     controllersRef.current.clear();
     runnersRef.current.clear();
+    persistCloudTasks(true);
+  }, [mergeVisibleTasksIntoCloud, persistCloudTasks]);
+
+  const interruptGmailTasks = useCallback(() => {
+    const now = Date.now();
+    const gmailTaskIds = new Set(tasksRef.current
+      .filter((task) => task.provider === 'gmail' && (task.status === 'queued' || task.status === 'running'))
+      .map((task) => task.id));
+    if (!gmailTaskIds.size) return;
+    const interrupted = tasksRef.current.map((task) => gmailTaskIds.has(task.id)
+      ? {
+          ...task,
+          status: 'interrupted' as const,
+          stage: 'Gmail 授权已变化，可重新连接后重试',
+          completedAt: now,
+          error: undefined,
+        }
+      : task);
+    gmailTaskIds.forEach((taskId) => {
+      controllersRef.current.get(taskId)?.abort();
+      controllersRef.current.delete(taskId);
+      runnersRef.current.delete(taskId);
+    });
+    mergeVisibleTasksIntoCloud(interrupted);
+    tasksRef.current = interrupted;
+    setTasks(interrupted);
     persistCloudTasks(true);
   }, [mergeVisibleTasksIntoCloud, persistCloudTasks]);
 
@@ -269,8 +304,17 @@ export function EmailGenerationTaskProvider({ children }: { children: ReactNode 
 
   const enqueueTask = useCallback((input: EnqueueEmailGenerationTaskInput) => {
     if (disposedRef.current || !accountUserId) return null;
+    const inferredGmailAccount = accounts.find((mailAccount) => (
+      mailAccount.provider === 'gmail'
+      && mailAccount.email.trim().toLowerCase() === gmailEmail
+    ));
+    const mailContext = input.mailContext
+      || (input.navigation.view === 'gmail' ? inferredGmailAccount : undefined)
+      || activeAccount;
+    if (!mailContext) return null;
     const activeDuplicate = tasksRef.current.find((task) => (
       task.key === input.key
+      && task.mailAccountId === mailContext.mailAccountId
       && (task.status === 'queued' || task.status === 'running')
     ));
     if (activeDuplicate) return activeDuplicate.id;
@@ -283,6 +327,9 @@ export function EmailGenerationTaskProvider({ children }: { children: ReactNode 
       status: 'queued',
       accountUserId,
       gmailEmail,
+      provider: mailContext.provider,
+      mailAccountId: mailContext.mailAccountId,
+      mailAddress: 'mailAddress' in mailContext ? mailContext.mailAddress : mailContext.email,
       title: input.title.trim() || '未命名频道',
       description: input.description,
       avatarUrl: input.avatarUrl,
@@ -299,11 +346,13 @@ export function EmailGenerationTaskProvider({ children }: { children: ReactNode 
     ));
     window.queueMicrotask(drainQueue);
     return id;
-  }, [accountUserId, drainQueue, gmailEmail, replaceTasks]);
+  }, [accountUserId, accounts, activeAccount, drainQueue, gmailEmail, replaceTasks]);
 
   const cancelTask = useCallback((taskId: string) => {
     const task = tasksRef.current.find((item) => item.id === taskId);
-    if (!task || task.status !== 'queued') return;
+    if (!task || (task.status !== 'queued' && task.status !== 'running')) return;
+    controllersRef.current.get(taskId)?.abort();
+    controllersRef.current.delete(taskId);
     runnersRef.current.delete(taskId);
     replaceTasks((current) => current.map((item) => item.id === taskId
       ? { ...item, status: 'cancelled', stage: '已取消', completedAt: Date.now() }
@@ -346,18 +395,29 @@ export function EmailGenerationTaskProvider({ children }: { children: ReactNode 
   const getLatestTaskByKey = useCallback((key: string) => {
     return [...tasksRef.current]
       .reverse()
-      .find((task) => task.key === key && task.status !== 'cancelled');
-  }, []);
+      .find((task) => (
+        task.key === key
+        && (!activeMailAccountId || task.mailAccountId === activeMailAccountId)
+        && task.status !== 'cancelled'
+      ));
+  }, [activeMailAccountId]);
 
   const updateTaskAvatarByKey = useCallback((key: string, avatarUrl: string) => {
     const normalizedAvatarUrl = avatarUrl.trim();
     if (!key || !normalizedAvatarUrl) return;
     const hasTarget = tasksRef.current.some((task) => (
-      task.key === key && task.avatarUrl !== normalizedAvatarUrl
+      task.key === key
+      && (!activeMailAccountId || task.mailAccountId === activeMailAccountId)
+      && task.avatarUrl !== normalizedAvatarUrl
     ));
     if (!hasTarget) return;
-    replaceTasks((current) => updateEmailGenerationTaskAvatar(current, key, normalizedAvatarUrl));
-  }, [replaceTasks]);
+    replaceTasks((current) => current.map((task) => (
+      task.key === key
+      && (!activeMailAccountId || task.mailAccountId === activeMailAccountId)
+        ? { ...task, avatarUrl: normalizedAvatarUrl }
+        : task
+    )));
+  }, [activeMailAccountId, replaceTasks]);
 
   const setConcurrency = useCallback((value: number) => {
     const normalized = normalizeEmailGenerationConcurrency(value);
@@ -370,9 +430,7 @@ export function EmailGenerationTaskProvider({ children }: { children: ReactNode 
     if (scopeKeyRef.current === scopeKey) return;
     interruptVisibleTasks();
     scopeKeyRef.current = scopeKey;
-    const visible = persistedTasksRef.current.filter((task) => (
-      buildEmailGenerationTaskScopeKey(task.accountUserId, task.gmailEmail) === scopeKey
-    ));
+    const visible = persistedTasksRef.current.filter((task) => task.accountUserId === scopeKey);
     tasksRef.current = visible;
     setTasks(visible);
   }, [interruptVisibleTasks, scopeKey]);
@@ -398,17 +456,17 @@ export function EmailGenerationTaskProvider({ children }: { children: ReactNode 
     persistedTasksRef.current = recovered;
     hydratedAccountIdRef.current = accountUserId;
     scopeKeyRef.current = scopeKey;
-    const visible = recovered.filter((task) => buildEmailGenerationTaskScopeKey(task.accountUserId, task.gmailEmail) === scopeKey);
+    const visible = recovered;
     tasksRef.current = visible;
     setTasks(visible);
     if (hadInterruptedTasks) persistCloudTasks(true);
   }, [accountUserId, clearTasks, persistCloudTasks, scopeKey, userData, userDataLoading]);
 
   useEffect(() => {
-    const handleReset = () => interruptVisibleTasks();
+    const handleReset = () => interruptGmailTasks();
     window.addEventListener(GMAIL_AUTH_CACHE_RESET_EVENT, handleReset);
     return () => window.removeEventListener(GMAIL_AUTH_CACHE_RESET_EVENT, handleReset);
-  }, [interruptVisibleTasks]);
+  }, [interruptGmailTasks]);
 
   useEffect(() => {
     const timer = window.setInterval(() => {

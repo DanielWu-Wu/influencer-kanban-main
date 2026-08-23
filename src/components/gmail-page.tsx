@@ -15,6 +15,8 @@ import { EmailDetail } from './email-detail';
 import { GmailInbox } from './gmail-inbox';
 import { GmailSignatureSettings } from './gmail-signature-settings';
 import { NewEmailComposer } from './new-email-composer';
+import { getEditableMailDraft, type EditableMailDraft } from '@/lib/mail-draft-edit';
+import { MailAccountSwitcher } from './mail-account-switcher';
 import {
   clampGmailThreadListWidth,
   getGmailThreadListDoubleClickWidth,
@@ -58,15 +60,18 @@ export type GmailThreadOpenRequest = {
 export function GmailPage({
   active = true,
   openThreadRequest,
+  onManageMailAccounts,
 }: {
   active?: boolean;
   openThreadRequest?: GmailThreadOpenRequest;
+  onManageMailAccounts?: () => void;
 }) {
   const [selectedThread, setSelectedThread] = useState<GmailThread | null>(null);
   const [mailbox, setMailbox] = useState<GmailMailbox>('inbox');
   const [category, setCategory] = useState<GmailCategory>('primary');
   const [showSettings, setShowSettings] = useState(false);
   const [showNewEmail, setShowNewEmail] = useState(false);
+  const [editDraft, setEditDraft] = useState<EditableMailDraft | null>(null);
   const [mailboxRefreshKey, setMailboxRefreshKey] = useState(0);
   const [detailExpanded, setDetailExpanded] = useState(false);
   const [threadLoadState, setThreadLoadState] = useState<{
@@ -238,10 +243,24 @@ export function GmailPage({
     return () => window.cancelAnimationFrame(frame);
   }, [detailExpanded, selectedThread, showSettings]);
 
-  const handleSelectThread = (thread: GmailThread) => {
+  const handleSelectThread = (thread: GmailThread, options?: { detailLoaded?: boolean }) => {
     if (closeDetailTimerRef.current !== null) {
       window.clearTimeout(closeDetailTimerRef.current);
       closeDetailTimerRef.current = null;
+    }
+    if (mailbox === 'drafts' && options?.detailLoaded) {
+      const editableDraft = getEditableMailDraft(
+        thread,
+        'gmail',
+        thread.mailAccountId || 'gmail-current-account',
+      );
+      if (editableDraft) {
+        setEditDraft(editableDraft);
+        setShowNewEmail(true);
+        setSelectedThread(null);
+        setDetailExpanded(false);
+        return;
+      }
     }
     setSelectedThread(thread);
     setShowSettings(false);
@@ -276,15 +295,12 @@ export function GmailPage({
           ? 'w-0 border-r-0 border-transparent px-0 opacity-0 xl:w-44 xl:border-r xl:border-white/55 xl:px-3 xl:opacity-100'
           : 'w-44 border-r border-white/55 px-3 opacity-100'
       }`}>
-        <div className="mb-3 flex items-center gap-2 px-2 text-sm font-semibold">
-          <span className="flex h-8 w-8 items-center justify-center rounded-lg border border-red-100/80 bg-red-50/85 text-red-600 shadow-sm">
-            <Mail className="h-4 w-4" />
-          </span>
-          <span>Gmail</span>
+        <div className="mb-3">
+          <MailAccountSwitcher placement="mailbox-sidebar" onManage={onManageMailAccounts} />
         </div>
         <Button
           className="mb-3 h-11 w-full justify-start gap-3 rounded-lg px-3 shadow-apple"
-          onClick={() => setShowNewEmail(true)}
+          onClick={() => { setEditDraft(null); setShowNewEmail(true); }}
         >
           <FilePenLine className="h-4 w-4" />
           写信
@@ -341,7 +357,7 @@ export function GmailPage({
           <Button
             size="sm"
             className="shrink-0 gap-2 rounded-lg"
-            onClick={() => setShowNewEmail(true)}
+            onClick={() => { setEditDraft(null); setShowNewEmail(true); }}
           >
             <FilePenLine className="h-4 w-4" />
             写信
@@ -465,7 +481,15 @@ export function GmailPage({
       </div>
       <NewEmailComposer
         open={showNewEmail}
-        onOpenChange={setShowNewEmail}
+        onOpenChange={(nextOpen) => {
+          setShowNewEmail(nextOpen);
+          if (!nextOpen) setEditDraft(null);
+        }}
+        initialSubject={editDraft?.subject}
+        initialContent={editDraft?.content}
+        editDraft={editDraft}
+        title={editDraft ? '编辑 Gmail 草稿' : '写新邮件'}
+        description={editDraft ? '修改后会更新原 Gmail 草稿，不会另建一封' : '向新的红人或联系人发送邮件'}
         onDraftSaved={() => {
           setMailbox('drafts');
           setDetailExpanded(false);

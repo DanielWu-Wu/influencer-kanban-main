@@ -1,4 +1,5 @@
 import type { FeishuFieldMapping } from '@/lib/feishu-mapping';
+import type { MailProvider } from '@/lib/mail-accounts';
 
 export type FollowUpStage = 2 | 3;
 
@@ -7,12 +8,15 @@ export type FollowUpMessage = {
   threadId: string;
   labelIds?: string[];
   rfcMessageId: string;
+  inReplyTo?: string;
   references: string;
   subject: string;
   from: string;
   to: string;
   date: string;
   body: string;
+  providerMessageRef?: string;
+  folderRef?: string;
 };
 
 export type FollowUpCheck = {
@@ -36,6 +40,12 @@ export type FollowUpSourceRecord = {
   targetProduct: string;
   cooperationType: string;
   cooperationIdea: string;
+  mailAccountId?: string;
+  provider?: MailProvider;
+  mailAddress?: string;
+  draftRef?: string;
+  folderRef?: string;
+  threadRef?: string;
 };
 
 export type FollowUpEligibility = {
@@ -48,9 +58,9 @@ export type FollowUpEligibility = {
     | 'not_due'
     | 'stage_already_complete'
     | 'previous_stage_incomplete'
-    | 'needs_gmail_check'
+    | 'needs_mail_check'
     | 'missing_initial_email'
-    | 'already_sent_in_gmail'
+    | 'already_sent_in_mail'
     | 'human_reply'
     | 'delivery_failure'
     | 'missing_previous_body';
@@ -118,7 +128,7 @@ export function evaluateFollowUpEligibility({
     return { allowed: false, dueAt, code: 'previous_stage_incomplete', reason: '请先完成第1次跟进。' };
   }
   if (!check) {
-    return { allowed: true, dueAt, code: 'needs_gmail_check', reason: '生成前需要重新检查 Gmail。' };
+    return { allowed: true, dueAt, code: 'needs_mail_check', reason: '生成前需要重新检查对应邮箱。' };
   }
   if (check.reply) {
     return { allowed: false, dueAt, code: 'human_reply', reason: '已收到对方回信，无需跟进开发信' };
@@ -127,10 +137,10 @@ export function evaluateFollowUpEligibility({
     return { allowed: false, dueAt, code: 'delivery_failure', reason: '检测到退信，请修正邮箱后再继续。' };
   }
   if (!check.outbound[0]) {
-    return { allowed: false, dueAt, code: 'missing_initial_email', reason: 'Gmail 中没有找到初次开发信。' };
+    return { allowed: false, dueAt, code: 'missing_initial_email', reason: '对应邮箱中没有找到初次开发信。' };
   }
   if (check.outbound.length >= stage) {
-    return { allowed: false, dueAt, code: 'already_sent_in_gmail', reason: 'Gmail 已存在该阶段邮件，不会重复生成。' };
+    return { allowed: false, dueAt, code: 'already_sent_in_mail', reason: '对应邮箱已存在该阶段邮件，不会重复生成。' };
   }
   if (stage === 3 && !check.outbound[1]?.body?.trim() && !previousBody?.trim()) {
     return { allowed: false, dueAt, code: 'missing_previous_body', reason: '没有找到第1次跟进正文，不能生成第2次跟进。' };
@@ -150,18 +160,20 @@ export function canSaveFollowUpDraft({
   chineseBody,
   chineseDirty,
   gmailDraftId,
+  draftRef,
 }: {
   status: string;
   body: string;
   chineseBody: string;
   chineseDirty: boolean;
   gmailDraftId?: string;
+  draftRef?: string;
 }) {
   return (status === 'generated' || status === 'ready')
     && Boolean(body.trim())
     && Boolean(chineseBody.trim())
     && !chineseDirty
-    && !gmailDraftId;
+    && !(draftRef || gmailDraftId);
 }
 
 export function followUpTaskKey(recordId: string, stage: FollowUpStage) {
@@ -182,13 +194,15 @@ export function buildFollowUpSentPayload(
 export function followUpSaveMode({
   status,
   gmailDraftId,
+  draftRef,
   canSave,
 }: {
   status: string;
   gmailDraftId?: string;
+  draftRef?: string;
   canSave: boolean;
-}): 'create_gmail' | 'retry_feishu' | 'blocked' {
-  if (status === 'feishu_error' && gmailDraftId) return 'retry_feishu';
-  if (!gmailDraftId && canSave) return 'create_gmail';
+}): 'create_draft' | 'retry_feishu' | 'blocked' {
+  if (status === 'feishu_error' && (draftRef || gmailDraftId)) return 'retry_feishu';
+  if (!(draftRef || gmailDraftId) && canSave) return 'create_draft';
   return 'blocked';
 }

@@ -112,6 +112,14 @@ import {
 } from '@/lib/outreach-context';
 import type { GmailAuth } from '@/lib/types';
 import { useEmailGenerationTasks } from '@/components/email-generation-task-provider';
+import { useMailAccounts } from '@/components/mail-account-provider';
+import { useUserDataStore } from '@/components/user-data-provider';
+import { USER_DATA_KEYS } from '@/lib/account-data-keys';
+import {
+  parseMailAccountBindings,
+  upsertMailAccountBinding,
+} from '@/lib/mail-account-bindings';
+import { getMailProviderLabel } from '@/lib/mail-accounts';
 import {
   buildOutreachEmailGenerationTaskKey,
   buildOutreachEmailTranslationTaskKey,
@@ -839,6 +847,8 @@ export function CreatorProspectingPage({
   const { settings } = useSettings();
   const { products } = useProducts();
   const { auth, connect } = useGmailAuth();
+  const { accounts } = useMailAccounts();
+  const { data: accountData, save: saveAccountData } = useUserDataStore();
   const { enqueueTask, getLatestTaskByKey, tasks: emailGenerationTasks } = useEmailGenerationTasks();
   const [activeTab, setActiveTab] = useState<ProspectingTab>('import');
   const [input, setInput] = useState('');
@@ -3428,8 +3438,13 @@ export function CreatorProspectingPage({
     return Boolean(taskId);
   };
 
-  const handleSaveGmailDraft = async (prospect: Prospect) => {
-    if (!auth?.accessToken) {
+  const handleSaveGmailDraft = async (prospect: Prospect, mailAccountId: string) => {
+    const targetAccount = accounts.find((account) => account.mailAccountId === mailAccountId);
+    if (!targetAccount || targetAccount.connectionStatus !== 'connected' || !targetAccount.capabilities.drafts) {
+      toast.error('所选邮箱当前不能保存草稿，请重新选择。');
+      return;
+    }
+    if (targetAccount.provider === 'gmail' && !auth?.accessToken) {
       toast.error('请先连接 Gmail，再保存草稿。');
       return;
     }
@@ -3492,42 +3507,79 @@ export function CreatorProspectingPage({
         }
         return result;
       };
-      let result;
-      try {
-        result = await createGmailDraft(auth.accessToken);
-      } catch (error) {
-        if (!isGmailAuthError(error)) throw error;
-        toast.info('Gmail 授权已过期，正在自动刷新后重试。');
-        const refreshResponse = await fetch('/api/auth/refresh?force=1', { method: 'POST' });
-        const refreshResult = await refreshResponse.json();
-        if (!refreshResponse.ok || !refreshResult.success || !refreshResult.data?.accessToken) {
-          throw new Error('Gmail 授权已失效，请到“设置 > Gmail 邮件”重新连接 Gmail。');
+      let result: { success?: boolean; data?: { id?: string; message?: { id?: string }; draftRef?: string; folderRef?: string } };
+      if (targetAccount.provider === 'gmail') {
+        try {
+          result = await createGmailDraft(auth?.accessToken || '');
+        } catch (error) {
+          if (!isGmailAuthError(error)) throw error;
+          toast.info('Gmail 授权已过期，正在自动刷新后重试。');
+          const refreshResponse = await fetch('/api/auth/refresh?force=1', { method: 'POST' });
+          const refreshResult = await refreshResponse.json();
+          if (!refreshResponse.ok || !refreshResult.success || !refreshResult.data?.accessToken) {
+            throw new Error('Gmail 授权已失效，请到“设置 > 邮箱账号管理”重新连接 Gmail。');
+          }
+          const freshAuth = refreshResult.data as GmailAuth;
+          connect(freshAuth);
+          result = await createGmailDraft(freshAuth.accessToken || '');
         }
-        const freshAuth = refreshResult.data as GmailAuth;
-        connect(freshAuth);
-        result = await createGmailDraft(freshAuth.accessToken || '');
+      } else {
+        const response = await fetch('/api/mail/tencent', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            action: 'draft',
+            mailAccountId: targetAccount.mailAccountId,
+            to: prospect.publicEmail,
+            subject: draft.subject,
+            text: applyPlainTextEmailSignature(draft.body, emailSignature),
+            html: appendEmailSignature(renderedBodyHtml, emailSignature),
+            inlineImages: inlineProductImage ? [{
+              filename: inlineProductImage.fileName,
+              mimeType: inlineProductImage.mimeType,
+              contentId: inlineProductImage.contentId,
+              data: inlineProductImage.dataUrl.replace(/^data:[^;]+;base64,/, ''),
+            }] : [],
+          }),
+        });
+        result = await response.json();
+        if (!response.ok || !result.success) {
+          throw new Error((result as { error?: string }).error || '保存腾讯企业邮箱草稿失败。');
+        }
       }
-      if (!result.success) throw new Error('保存 Gmail 草稿失败。');
-      const gmailDraftId = String(result.data?.id || result.data?.message?.id || '');
+      if (!result.success) throw new Error('保存邮件草稿失败。');
+      const draftRef = String(result.data?.draftRef || result.data?.id || result.data?.message?.id || '');
+      const gmailDraftId = targetAccount.provider === 'gmail' ? draftRef : '';
       const patch: Partial<Prospect> = {
         workflowStatus: 'gmail_draft_saved',
-        gmailDraftId,
+        ...(targetAccount.provider === 'gmail' ? { gmailDraftId } : {}),
         error: undefined,
       };
       updateProspect(prospect.id, patch);
+      const currentBindings = parseMailAccountBindings(accountData[USER_DATA_KEYS.MAIL_ACCOUNT_BINDINGS]);
+      saveAccountData(USER_DATA_KEYS.MAIL_ACCOUNT_BINDINGS, upsertMailAccountBinding(currentBindings, {
+        prospectId: prospect.id,
+        feishuRecordId: prospect.feishuRecordId,
+        contactEmail: prospect.publicEmail.trim().toLowerCase(),
+        mailAccountId: targetAccount.mailAccountId,
+        provider: targetAccount.provider,
+        mailAddress: targetAccount.email,
+        draftRef,
+        folderRef: result.data?.folderRef,
+      }));
       const synced = await syncFeishuProspect(prospect, patch);
       const firstOutreachResult = await writeFirstOutreachSent(prospect, patch);
       if (firstOutreachResult.success) {
         toast.success(
-          `红人 ${prospect.title || '该红人'} 的开发信已保存到 Gmail 草稿箱，并已在飞书双表标记为“已发”。请前往 Gmail 手动检查和发送。`,
+          `红人 ${prospect.title || '该红人'} 的开发信已保存到${getMailProviderLabel(targetAccount.provider)}草稿箱，并已在飞书双表标记为“已发”。邮件尚未发送。`,
         );
       } else {
         toast.warning(
-          `Gmail 草稿已保存，但飞书“已发”标记失败：${firstOutreachResult.error || (synced ? '未知原因' : '飞书状态同步失败')}。邮件没有被自动发送。`,
+          `${getMailProviderLabel(targetAccount.provider)}草稿已保存，但飞书“已发”标记失败：${firstOutreachResult.error || (synced ? '未知原因' : '飞书状态同步失败')}。邮件没有被自动发送。`,
         );
       }
     } catch (error) {
-      toast.error(error instanceof Error ? error.message : '保存 Gmail 草稿失败。');
+      toast.error(error instanceof Error ? error.message : '保存邮件草稿失败。');
     } finally {
       setSavingDraftId(null);
     }

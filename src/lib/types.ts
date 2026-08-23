@@ -255,8 +255,15 @@ export interface GmailMessage {
   labels: string[];
   hasAttachments: boolean;
   rfcMessageId?: string;
+  inReplyTo?: string;
   references?: string;
+  provider?: 'gmail' | 'tencent_exmail';
+  mailAccountId?: string;
+  providerMessageRef?: string;
+  folderRef?: string;
 }
+
+export type MailMessage = GmailMessage;
 
 export interface GmailAttachment {
   id: string;
@@ -268,6 +275,8 @@ export interface GmailAttachment {
   inline: boolean;
 }
 
+export type MailAttachment = GmailAttachment;
+
 export interface GmailThread {
   id: string;
   subject: string;
@@ -278,7 +287,13 @@ export interface GmailThread {
   hasUnread: boolean;
   labels: string[];
   isStarred: boolean;
+  provider?: 'gmail' | 'tencent_exmail';
+  mailAccountId?: string;
+  folderRef?: string;
+  loadWarning?: string;
 }
+
+export type MailThread = GmailThread;
 
 export type GmailMailbox = 'inbox' | 'unread' | 'starred' | 'sent' | 'drafts';
 export type GmailCategory = 'primary' | 'promotions' | 'social';

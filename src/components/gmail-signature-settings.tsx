@@ -8,6 +8,7 @@ import { Slider } from '@/components/ui/slider';
 import { Textarea } from '@/components/ui/textarea';
 import { RadioGroup, RadioGroupItem } from '@/components/ui/radio-group';
 import { useSettings } from '@/lib/data';
+import type { MailAccount } from '@/lib/mail-accounts';
 import { sanitizeEmailHtml, type EmailSignatureScope } from '@/lib/email-content';
 
 function clampDelay(value: number) {
@@ -21,7 +22,8 @@ function normalizeLinkUrl(value: string) {
   return /^https?:\/\//i.test(trimmed) ? trimmed : `https://${trimmed}`;
 }
 
-export function GmailSignatureSettings({ onBack }: { onBack: () => void }) {
+export function GmailSignatureSettings({ onBack, mailAccount }: { onBack: () => void; mailAccount?: MailAccount }) {
+  const providerLabel = mailAccount?.provider === 'tencent_exmail' ? '腾讯企业邮箱' : 'Gmail';
   const { settings, updateSettings, loading } = useSettings();
   const [signature, setSignature] = useState('');
   const [signatureScope, setSignatureScope] = useState<EmailSignatureScope>('both');
@@ -82,7 +84,7 @@ export function GmailSignatureSettings({ onBack }: { onBack: () => void }) {
                 <span className="sr-only">返回邮箱</span>
               </Button>
               <Mail className="h-5 w-5 text-red-500" />
-              <h2 className="text-lg font-semibold">Gmail 设置</h2>
+              <h2 className="text-lg font-semibold">{providerLabel}设置</h2>
             </div>
             <p className="mt-1 text-sm text-muted-foreground">
               管理通过红人工作台发送的邮件行为。
@@ -137,7 +139,7 @@ export function GmailSignatureSettings({ onBack }: { onBack: () => void }) {
             <div className="mb-4">
               <h3 className="font-medium">邮件签名</h3>
               <p className="mt-1 text-sm text-muted-foreground">
-                发送邮件或保存 Gmail 草稿时，签名会自动添加在正文末尾。链接格式会自动转成可点击链接。
+                发送邮件或保存{providerLabel}草稿时，签名会自动添加在正文末尾。链接格式会自动转成可点击链接。
               </p>
             </div>
 
@@ -156,7 +158,7 @@ export function GmailSignatureSettings({ onBack }: { onBack: () => void }) {
                 {
                   value: 'regular',
                   title: '仅正常邮件',
-                  description: 'Gmail 写信、回复和合作项目告知邮件',
+                  description: `${providerLabel}写信、回复和合作项目告知邮件`,
                 },
                 {
                   value: 'both',
@@ -234,7 +236,7 @@ export function GmailSignatureSettings({ onBack }: { onBack: () => void }) {
           <div className="sticky bottom-0 flex justify-end border-t border-white/60 bg-white/65 py-4 backdrop-blur-xl">
             <Button onClick={handleSave} className="h-10 gap-2 rounded-lg shadow-apple">
               {saved ? <Check className="h-4 w-4" /> : <Save className="h-4 w-4" />}
-              {saved ? '已保存' : '保存 Gmail 设置'}
+              {saved ? '已保存' : `保存${providerLabel}设置`}
             </Button>
           </div>
         </div>

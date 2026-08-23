@@ -58,6 +58,7 @@ export type FollowUpDraftTask = {
   revision: number;
   generatedAt?: number;
   gmailDraftId?: string;
+  draftRef?: string;
   feishuSentAt?: number;
   warning?: string;
   error?: string;
@@ -167,14 +168,19 @@ function loadTaskCache(accountId: string) {
 }
 
 async function requestFollowUpCheck(source: FollowUpSourceRecord) {
+  const provider = source.provider || 'gmail';
   const query = new URLSearchParams({
-    action: 'outreachFollowUp',
+    action: provider === 'tencent_exmail' ? 'followUp' : 'outreachFollowUp',
     email: source.email,
     sentAt: String(source.developmentDate),
   });
-  const response = await fetch(`/api/gmail?${query}`);
+  if (provider === 'tencent_exmail') {
+    if (!source.mailAccountId) throw new Error('尚未确定该红人的腾讯企业邮箱账号。');
+    query.set('mailAccountId', source.mailAccountId);
+  }
+  const response = await fetch(`${provider === 'tencent_exmail' ? '/api/mail/tencent' : '/api/gmail'}?${query}`);
   const result = await response.json().catch(() => ({}));
-  if (!response.ok || !result.success) throw new Error(getResultError(result, '检查 Gmail 回复失败。'));
+  if (!response.ok || !result.success) throw new Error(getResultError(result, '检查对应邮箱回复失败。'));
   return result.data as FollowUpCheck;
 }
 
@@ -241,7 +247,7 @@ export function FollowUpDraftProvider({ children }: { children: ReactNode }) {
     const currentTask = tasksRef.current[key];
     if (generationLocksRef.current.has(key)) return 'skipped';
     if (!options.force && currentTask && ['generated', 'ready', 'saved', 'feishu_error'].includes(currentTask.status)) return 'skipped';
-    if (currentTask?.gmailDraftId) return 'skipped';
+    if (currentTask?.gmailDraftId || currentTask?.draftRef) return 'skipped';
 
     const priorTask = tasksRef.current[followUpTaskKey(source.recordId, 2)];
     const initialEligibility = evaluateFollowUpEligibility({
@@ -415,7 +421,7 @@ export function FollowUpDraftProvider({ children }: { children: ReactNode }) {
   const updateChinese = useCallback((key: string, value: string) => {
     commitTasks((current) => {
       const task = current[key];
-      if (!task || task.gmailDraftId) return current;
+      if (!task || task.gmailDraftId || task.draftRef) return current;
       return {
         ...current,
         [key]: {
@@ -432,7 +438,7 @@ export function FollowUpDraftProvider({ children }: { children: ReactNode }) {
 
   const translateTask = useCallback(async (key: string) => {
     const task = tasksRef.current[key];
-    if (!task || !task.chineseBody.trim() || task.gmailDraftId) return false;
+    if (!task || !task.chineseBody.trim() || task.gmailDraftId || task.draftRef) return false;
     const revision = task.revision;
     const previousStatus = task.status === 'ready' ? 'ready' : 'generated';
     patchTask(key, { status: 'translating', error: undefined });
@@ -494,12 +500,12 @@ export function FollowUpDraftProvider({ children }: { children: ReactNode }) {
 
   const retryFeishu = useCallback(async (key: string) => {
     const task = tasksRef.current[key];
-    if (!task?.gmailDraftId || !task.feishuSentAt) return false;
+    if (!(task?.draftRef || task?.gmailDraftId) || !task.feishuSentAt) return false;
     patchTask(key, { status: 'saving', error: undefined });
     try {
       await writeFeishu(task, task.feishuSentAt);
       patchTask(key, { status: 'saved', error: undefined });
-      toast.success('Gmail 草稿未重复创建，飞书状态已补写成功。');
+      toast.success('邮件草稿未重复创建，飞书状态已补写成功。');
       return true;
     } catch (error) {
       const message = error instanceof Error ? error.message : '写回飞书失败。';
@@ -513,7 +519,7 @@ export function FollowUpDraftProvider({ children }: { children: ReactNode }) {
     const task = tasksRef.current[key];
     if (!task) return false;
     const canSave = canSaveFollowUpDraft(task);
-    const saveMode = followUpSaveMode({ status: task.status, gmailDraftId: task.gmailDraftId, canSave });
+    const saveMode = followUpSaveMode({ status: task.status, gmailDraftId: task.gmailDraftId, draftRef: task.draftRef, canSave });
     if (saveMode === 'retry_feishu') return retryFeishu(key);
     if (saveMode === 'blocked') return false;
     const mapping = settings.feishuProspectingFieldMapping || {};
@@ -538,45 +544,58 @@ export function FollowUpDraftProvider({ children }: { children: ReactNode }) {
       if (!eligibility.allowed) throw new Error(eligibility.reason);
       const initialEmail = check.outbound[0];
       const latestOutbound = check.outbound.at(-1);
-      if (!initialEmail || !latestOutbound?.threadId) throw new Error('原 Gmail 邮件线程不完整，请重新生成。');
+      if (!initialEmail || !latestOutbound?.rfcMessageId) throw new Error('原邮件引用不完整，请重新检查邮箱后生成。');
       const references = [latestOutbound.references, latestOutbound.rfcMessageId].filter(Boolean).join(' ');
       const subject = /^re:/i.test(initialEmail.subject) ? initialEmail.subject : `Re: ${initialEmail.subject}`;
       const cleanBody = stripConfiguredEmailSignature(task.body, settings.emailSignature);
       const signature = getEmailSignatureForContext(settings.emailSignature, settings.emailSignatureScope, 'outreach');
-      const response = await fetch('/api/gmail', {
+      const provider = task.source.provider || 'gmail';
+      const response = await fetch(provider === 'tencent_exmail' ? '/api/mail/tencent' : '/api/gmail', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           action: 'draft',
+          ...(provider === 'tencent_exmail' ? { mailAccountId: task.source.mailAccountId } : {}),
           to: task.source.email,
           subject,
-          body: applyPlainTextEmailSignature(cleanBody, signature),
-          bodyHtml: appendEmailSignature(textToEmailHtml(cleanBody), signature),
-          threadId: latestOutbound.threadId,
+          ...(provider === 'tencent_exmail'
+            ? {
+                text: applyPlainTextEmailSignature(cleanBody, signature),
+                html: appendEmailSignature(textToEmailHtml(cleanBody), signature),
+              }
+            : {
+                body: applyPlainTextEmailSignature(cleanBody, signature),
+                bodyHtml: appendEmailSignature(textToEmailHtml(cleanBody), signature),
+                threadId: latestOutbound.threadId,
+              }),
           inReplyTo: latestOutbound.rfcMessageId,
           references,
         }),
       });
       const result = await response.json().catch(() => ({}));
-      if (!response.ok || !result.success) throw new Error(getResultError(result, '保存 Gmail 草稿失败。'));
-      const gmailDraftId = String(result.data?.id || result.data?.message?.id || '');
+      if (!response.ok || !result.success) throw new Error(getResultError(result, `保存${provider === 'tencent_exmail' ? '腾讯企业邮箱' : 'Gmail'}草稿失败。`));
+      const gmailDraftId = provider === 'gmail' ? String(result.data?.id || result.data?.message?.id || '') : undefined;
+      const draftRef = provider === 'tencent_exmail'
+        ? String(result.data?.draftRef || '')
+        : gmailDraftId;
       const sentAt = Date.now();
-      patchTask(key, { gmailDraftId, feishuSentAt: sentAt });
+      patchTask(key, { gmailDraftId, draftRef, feishuSentAt: sentAt });
       try {
-        await writeFeishu({ ...task, gmailDraftId, feishuSentAt: sentAt }, sentAt);
-        patchTask(key, { status: 'saved', gmailDraftId, feishuSentAt: sentAt, error: undefined });
-        toast.success('已保存到 Gmail 草稿，并已标记飞书跟进状态。邮件尚未发送。');
+        await writeFeishu({ ...task, gmailDraftId, draftRef, feishuSentAt: sentAt }, sentAt);
+        patchTask(key, { status: 'saved', gmailDraftId, draftRef, feishuSentAt: sentAt, error: undefined });
+        toast.success(`已保存到${provider === 'tencent_exmail' ? '腾讯企业邮箱' : 'Gmail'}草稿，并已标记飞书跟进状态。邮件尚未发送。`);
         return true;
       } catch (error) {
         const message = error instanceof Error ? error.message : '写回飞书失败。';
         patchTask(key, { status: 'feishu_error', gmailDraftId, feishuSentAt: sentAt, error: message });
-        toast.warning(`Gmail 草稿已保存，但飞书写回失败：${message}`);
+        toast.warning(`${provider === 'tencent_exmail' ? '腾讯企业邮箱' : 'Gmail'}草稿已保存，但飞书写回失败：${message}`);
         return false;
       }
     } catch (error) {
-      const message = error instanceof Error ? error.message : '保存 Gmail 草稿失败。';
+      const provider = task.source.provider || 'gmail';
+      const message = error instanceof Error ? error.message : `保存${provider === 'tencent_exmail' ? '腾讯企业邮箱' : 'Gmail'}草稿失败。`;
       const current = tasksRef.current[key];
-      if (current?.gmailDraftId) {
+      if (current?.gmailDraftId || current?.draftRef) {
         patchTask(key, { status: 'feishu_error', error: message });
       } else {
         patchTask(key, { status: task.status === 'ready' ? 'ready' : 'generated', error: message });

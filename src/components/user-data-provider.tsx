@@ -100,6 +100,7 @@ export function UserDataProvider({ children }: { children: React.ReactNode }) {
   const accountMustChangePassword = account?.mustChangePassword;
   const accountIsAdmin = account?.isAdmin;
   const [data, setData] = useState<Record<string, unknown>>({});
+  const [dataOwnerId, setDataOwnerId] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
   const writeQueues = useRef(new Map<string, Promise<void>>());
@@ -114,6 +115,7 @@ export function UserDataProvider({ children }: { children: React.ReactNode }) {
     if (!accountUserId || accountStatus !== 'active' || accountMustChangePassword) {
       writeQueues.current.clear();
       setData({});
+      setDataOwnerId(null);
       setLoading(false);
       setError('');
       return;
@@ -123,6 +125,8 @@ export function UserDataProvider({ children }: { children: React.ReactNode }) {
     const load = async () => {
       setLoading(true);
       setError('');
+      setData({});
+      setDataOwnerId(null);
       try {
         if (accountIsAdmin) {
           copyLegacyScopedCaches(accountUserId);
@@ -146,12 +150,16 @@ export function UserDataProvider({ children }: { children: React.ReactNode }) {
         const response = await fetch('/api/user-data', { cache: 'no-store' });
         const result = await response.json();
         if (!response.ok || !result.success) throw new Error(result.error || '账号数据读取失败。');
-        if (active) setData(result.data || {});
+        if (active) {
+          setData(result.data || {});
+          setDataOwnerId(accountUserId);
+        }
       } catch (loadError) {
         if (active) {
           const message = loadError instanceof Error ? loadError.message : '账号数据读取失败。';
           setError(message);
           setData({});
+          setDataOwnerId(accountUserId);
         }
       } finally {
         if (active) setLoading(false);
@@ -193,7 +201,11 @@ export function UserDataProvider({ children }: { children: React.ReactNode }) {
   }, [accountUserId]);
 
   const value = useMemo<UserDataContextValue>(() => ({ data, loading, error, save }), [data, error, loading, save]);
-  if (account?.status === 'active' && !account.mustChangePassword && loading) {
+  if (
+    account?.status === 'active'
+    && !account.mustChangePassword
+    && (loading || dataOwnerId !== account.userId)
+  ) {
     return (
       <div className="workspace-shell flex min-h-screen items-center justify-center p-6">
         <div className="flex items-center gap-3 text-sm text-muted-foreground">

@@ -622,10 +622,16 @@ ${previousFollowUp.body}` : ''}`;
     }
 
     if (action === 'polishCooperationNotice') {
-      const noticeType = body.noticeType === 'discount' ? 'discount' : 'logistics';
+      const noticeType = body.noticeType === 'discount'
+        ? 'discount'
+        : body.noticeType === 'reply'
+          ? 'reply'
+          : 'logistics';
       const defaultPrompt = noticeType === 'logistics'
         ? DEFAULT_LOGISTICS_NOTICE_PROMPT
-        : DEFAULT_DISCOUNT_NOTICE_PROMPT;
+        : noticeType === 'discount'
+          ? DEFAULT_DISCOUNT_NOTICE_PROMPT
+          : '根据用户确认的中文内容，生成准确、自然、专业的红人合作回复邮件。不得增加用户未提供的合作条件或承诺。';
       const chineseBody = String(body.chineseBody || '').trim();
       if (!chineseBody) {
         return NextResponse.json({ error: '缺少需要转换的中文邮件内容。' }, { status: 400 });
@@ -690,11 +696,21 @@ ${JSON.stringify(project, null, 2)}`;
     }
 
     if (action === 'cooperationNotice') {
-      const noticeType = body.noticeType === 'discount' ? 'discount' : 'logistics';
+      const noticeType = body.noticeType === 'discount'
+        ? 'discount'
+        : body.noticeType === 'reply'
+          ? 'reply'
+          : 'logistics';
       const defaultPrompt = noticeType === 'logistics'
         ? DEFAULT_LOGISTICS_NOTICE_PROMPT
-        : DEFAULT_DISCOUNT_NOTICE_PROMPT;
-      const noticeLabel = noticeType === 'logistics' ? '包裹物流告知' : '折扣信息告知';
+        : noticeType === 'discount'
+          ? DEFAULT_DISCOUNT_NOTICE_PROMPT
+          : '结合最近邮件往来和合作项目资料，起草一封自然、专业、克制的合作回复邮件。不得新增未确认的价格、时间、物流、折扣、佣金或其他承诺。';
+      const noticeLabel = noticeType === 'logistics'
+        ? '包裹物流告知'
+        : noticeType === 'discount'
+          ? '折扣信息告知'
+          : '项目回复';
       const project = normalizeCooperationNoticeProject(body.project);
       const historyMessages = safeArray(body.historyMessages)
         .slice(-6)
