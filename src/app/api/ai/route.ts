@@ -12,6 +12,7 @@ import {
 import {
   buildCompactGmailAIConversation,
   selectRelevantGmailAIDraftMessages,
+  validateMailAIThreadContext,
   type GmailAIHistoryMessage,
 } from '@/lib/gmail-ai-reply';
 import { validateChineseTranslation } from '@/lib/ai-chinese-translation';
@@ -19,6 +20,7 @@ import { buildGmailTemplateDraftResult } from '@/lib/gmail-bilingual-draft';
 import { normalizeAIReplyTemplate } from '@/lib/ai-reply-templates';
 import { formatCooperationNoticeDate } from '@/lib/cooperation-projects';
 import { sanitizeOutreachEmailBody } from '@/lib/outreach-draft-sanitizer';
+import { requireOwnedMailAccount } from '@/lib/mail-account-server';
 import { getRequestUser } from '@/lib/supabase/server';
 import { getUserSecret } from '@/lib/user-private-storage';
 
@@ -56,6 +58,8 @@ type OutreachChannel = {
   recentAverageViews?: number | null;
   recentVideos?: OutreachVideo[];
 };
+
+const STRICT_MAIL_REPLY_ACTIONS = new Set(['analyze', 'draft', 'optimizeDraft', 'templateDraft']);
 
 function resolveChatOptions(options: ChatOptions): Required<Omit<ChatOptions, 'requestLabel'>> {
   const apiKey =
@@ -191,9 +195,36 @@ export async function POST(request: NextRequest) {
 
     const action = String(body.action || 'draft');
     const threadSubject = String(body.threadSubject || '无主题');
-    const threadMessages = Array.isArray(body.threadMessages)
+    let threadMessages = Array.isArray(body.threadMessages)
       ? body.threadMessages as GmailAIHistoryMessage[]
       : [];
+    if (STRICT_MAIL_REPLY_ACTIONS.has(action)) {
+      let validatedContext: ReturnType<typeof validateMailAIThreadContext>;
+      try {
+        validatedContext = validateMailAIThreadContext({
+          identity: body.replyContext,
+          messages: threadMessages,
+        });
+      } catch (contextError) {
+        return NextResponse.json({
+          error: contextError instanceof Error ? contextError.message : '邮件会话校验失败。',
+        }, { status: 400 });
+      }
+      try {
+        const ownedAccount = await requireOwnedMailAccount(
+          appAuth.supabase,
+          validatedContext.identity.mailAccountId,
+          validatedContext.identity.provider,
+        );
+        body.targetMessageId = validatedContext.identity.targetMessageId;
+        body.gmailAccountEmail = ownedAccount.email;
+      } catch (accountError) {
+        return NextResponse.json({
+          error: accountError instanceof Error ? accountError.message : '邮箱账号校验失败。',
+        }, { status: 403 });
+      }
+      threadMessages = validatedContext.messages;
+    }
 
     if (action === 'dailyGmailSummaries') {
       const emails = safeArray(body.emails)
@@ -967,7 +998,7 @@ ${String(body.userPreference || '').trim() || '无'}
       const conversation = buildCompactGmailAIConversation(threadMessages);
       const userPrompt = `当前邮件主题：${threadSubject}
 
-以下内容包含当前线程，以及与同一联系人最近 10 封历史邮件，已经按时间顺序排列：
+以下内容只包含当前打开的真实邮件会话，已经按时间顺序排列：
 ${conversation.text}`;
 
       const modelStartedAt = performance.now();
@@ -1044,7 +1075,7 @@ ${conversation.text}`;
       );
       const userPrompt = `当前邮件主题：${threadSubject}
 
-与该联系人最相关的邮件：
+当前真实会话中的相关邮件：
 ${conversation.text}
 
 后台红人画像分析：
@@ -1135,7 +1166,7 @@ ${replyTemplate.rules.map((rule, index) => `${index + 1}. ${rule}`).join('\n')}
       const conversation = buildCompactGmailAIConversation(threadMessages);
       const userPrompt = `当前邮件主题：${threadSubject}
 
-与该联系人的最近邮件历史：
+当前真实会话的邮件历史：
 ${conversation.text}
 
 我补充的事实和想表达的内容：
@@ -1194,7 +1225,7 @@ ${userIdeas}
     const conversation = buildCompactGmailAIConversation(threadMessages);
     const userPrompt = `当前邮件主题：${threadSubject}
 
-与该联系人的最近邮件历史：
+当前真实会话的邮件历史：
 ${conversation.text}
 
 AI 对合作状态的分析：

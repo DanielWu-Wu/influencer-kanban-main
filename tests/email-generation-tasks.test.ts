@@ -2,6 +2,7 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 import {
   EMAIL_GENERATION_TASK_RETENTION_MS,
+  MAIL_AI_TASK_CONTEXT_VERSION,
   buildEmailGenerationTaskScopeKey,
   buildGmailEmailGenerationTaskKey,
   buildGmailEmailTranslationTaskKey,
@@ -176,6 +177,7 @@ test('不同邮件线程、回复方式和开发信对象使用不同任务键',
 
   assert.notEqual(aiReply, templateReply);
   assert.notEqual(aiReply, anotherMessage);
+  assert.match(aiReply, new RegExp(MAIL_AI_TASK_CONTEXT_VERSION));
   assert.equal(buildOutreachEmailGenerationTaskKey('prospect-1'), 'outreach_email:prospect-1');
   assert.notEqual(
     buildGmailEmailTranslationTaskKey({ composerMode: 'ai', threadId: 'thread-1', messageId: 'message-1' }),

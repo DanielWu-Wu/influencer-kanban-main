@@ -8,9 +8,11 @@ import {
 import {
   buildCompactGmailAIConversation,
   selectRelevantGmailAIDraftMessages,
+  validateMailAIThreadContext,
   type GmailAIHistoryMessage,
 } from '@/lib/gmail-ai-reply';
 import { buildGmailTemplateDraftResult } from '@/lib/gmail-bilingual-draft';
+import { requireOwnedMailAccount } from '@/lib/mail-account-server';
 import { getRequestUser } from '@/lib/supabase/server';
 import { getUserSecret } from '@/lib/user-private-storage';
 
@@ -179,6 +181,30 @@ export async function POST(request: NextRequest) {
   const authMs = Math.round(performance.now() - authStartedAt);
   if (!appAuth) return NextResponse.json({ error: '未登录或账号无权使用 AI。' }, { status: 401 });
   const body = await request.json().catch(() => ({})) as Record<string, unknown>;
+  let validatedContext: ReturnType<typeof validateMailAIThreadContext>;
+  try {
+    validatedContext = validateMailAIThreadContext({
+      identity: body.replyContext,
+      messages: body.threadMessages,
+    });
+  } catch (contextError) {
+    return NextResponse.json({
+      error: contextError instanceof Error ? contextError.message : '邮件会话校验失败。',
+    }, { status: 400 });
+  }
+  try {
+    const ownedAccount = await requireOwnedMailAccount(
+      appAuth.supabase,
+      validatedContext.identity.mailAccountId,
+      validatedContext.identity.provider,
+    );
+    body.targetMessageId = validatedContext.identity.targetMessageId;
+    body.gmailAccountEmail = ownedAccount.email;
+  } catch (accountError) {
+    return NextResponse.json({
+      error: accountError instanceof Error ? accountError.message : '邮箱账号校验失败。',
+    }, { status: 403 });
+  }
   const secretStartedAt = performance.now();
   await hydrateSecrets(appAuth, body);
   const secretMs = Math.round(performance.now() - secretStartedAt);
@@ -191,9 +217,7 @@ export async function POST(request: NextRequest) {
       };
 
       try {
-        const threadMessages = Array.isArray(body.threadMessages)
-          ? body.threadMessages as GmailAIHistoryMessage[]
-          : [];
+        const threadMessages = validatedContext.messages as GmailAIHistoryMessage[];
         const userIdeas = String(body.userIdeas || '').trim();
         const threadSubject = String(body.threadSubject || '');
         const targetLang = String(body.targetLang || 'en');
@@ -251,7 +275,7 @@ ${replyTemplate.rules.map((rule, index) => `${index + 1}. ${rule}`).join('\n')}
         );
         const bodyUserPrompt = `当前邮件主题：${threadSubject}
 
-与该联系人最相关的邮件：
+当前真实会话中的相关邮件：
 ${conversation.text}
 
 ${templateReply ? '' : `AI 对合作状态的完整分析：\n${JSON.stringify(analysis)}\n`}

@@ -85,6 +85,7 @@ type FollowUpDraftContextValue = {
   saveTask: (key: string) => Promise<boolean>;
   retryFeishu: (key: string) => Promise<boolean>;
   clearTask: (key: string) => void;
+  clearTasks: (keys: string[]) => void;
 };
 
 const FollowUpDraftContext = createContext<FollowUpDraftContextValue | null>(null);
@@ -605,10 +606,17 @@ export function FollowUpDraftProvider({ children }: { children: ReactNode }) {
     }
   }, [patchTask, retryFeishu, settings, writeFeishu]);
 
-  const clearTask = useCallback((key: string) => {
-    if (generationLocksRef.current.has(key)) return;
-    commitTasks((current) => Object.fromEntries(Object.entries(current).filter(([itemKey]) => itemKey !== key)));
+  const clearTasks = useCallback((keys: string[]) => {
+    const removableKeys = new Set(keys.filter((key) => !generationLocksRef.current.has(key)));
+    if (!removableKeys.size) return;
+    commitTasks((current) => Object.fromEntries(
+      Object.entries(current).filter(([itemKey]) => !removableKeys.has(itemKey)),
+    ));
   }, [commitTasks]);
+
+  const clearTask = useCallback((key: string) => {
+    clearTasks([key]);
+  }, [clearTasks]);
 
   const value = useMemo<FollowUpDraftContextValue>(() => ({
     tasks,
@@ -620,9 +628,11 @@ export function FollowUpDraftProvider({ children }: { children: ReactNode }) {
     saveTask,
     retryFeishu,
     clearTask,
+    clearTasks,
   }), [
     batchProgress,
     clearTask,
+    clearTasks,
     generateMany,
     generateTask,
     retryFeishu,

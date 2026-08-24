@@ -3,6 +3,8 @@ import assert from 'node:assert/strict';
 import {
   buildCompactGmailAIConversation,
   buildGmailAIAnalysisCacheKey,
+  buildMailAIThreadContextCacheKey,
+  buildMailAIThreadContextIdentity,
   clearGmailAIReplyCaches,
   compactGmailAIMessageBody,
   getOrLoadGmailAIAnalysis,
@@ -10,6 +12,7 @@ import {
   GMAIL_AI_CACHE_MS,
   mergeRecentGmailAIMessages,
   selectRelevantGmailAIDraftMessages,
+  validateMailAIThreadContext,
   type GmailAIHistoryMessage,
 } from '../src/lib/gmail-ai-reply';
 
@@ -25,6 +28,103 @@ function message(index: number, overrides: Partial<GmailAIHistoryMessage> = {}):
     ...overrides,
   };
 }
+
+function strictMessage(
+  index: number,
+  overrides: Partial<GmailAIHistoryMessage> = {},
+): GmailAIHistoryMessage {
+  return message(index, {
+    threadId: 'thread-current',
+    provider: 'gmail',
+    mailAccountId: 'gmail:owner@example.com',
+    ...overrides,
+  });
+}
+
+test('普通 AI 回复只接受当前邮箱账号和当前真实线程', () => {
+  const identity = buildMailAIThreadContextIdentity({
+    provider: 'gmail',
+    mailAccountId: 'gmail:owner@example.com',
+    threadId: 'thread-current',
+    targetMessageId: 'message-2',
+  });
+  const validated = validateMailAIThreadContext({
+    identity,
+    messages: [strictMessage(0), strictMessage(1), strictMessage(2)],
+  });
+
+  assert.deepEqual(validated.messages.map((item) => item.id), [
+    'message-0',
+    'message-1',
+    'message-2',
+  ]);
+  assert.ok(validated.messages.every((item) => item.threadId === 'thread-current'));
+});
+
+test('混入其他线程、邮箱账号或邮箱类型时拒绝交给 AI', () => {
+  const identity = buildMailAIThreadContextIdentity({
+    provider: 'gmail',
+    mailAccountId: 'gmail:owner@example.com',
+    threadId: 'thread-current',
+    targetMessageId: 'message-1',
+  });
+  const base = [strictMessage(0), strictMessage(1)];
+
+  assert.throws(() => validateMailAIThreadContext({
+    identity,
+    messages: [...base, strictMessage(2, { threadId: 'thread-unrelated' })],
+  }), /其他邮件会话混入/);
+  assert.throws(() => validateMailAIThreadContext({
+    identity,
+    messages: [strictMessage(0), strictMessage(1, { mailAccountId: 'gmail:other@example.com' })],
+  }), /其他邮件会话混入/);
+  assert.throws(() => validateMailAIThreadContext({
+    identity,
+    messages: [strictMessage(0), strictMessage(1, { provider: 'tencent_exmail' })],
+  }), /其他邮件会话混入/);
+});
+
+test('回复较早邮件时不读取之后来信，并且回复目标不能丢失', () => {
+  const messages = Array.from({ length: 16 }, (_, index) => strictMessage(index));
+  const identity = buildMailAIThreadContextIdentity({
+    provider: 'gmail',
+    mailAccountId: 'gmail:owner@example.com',
+    threadId: 'thread-current',
+    targetMessageId: 'message-7',
+  });
+  const validated = validateMailAIThreadContext({ identity, messages });
+
+  assert.equal(validated.messages.at(-1)?.id, 'message-7');
+  assert.ok(validated.messages.every((item) => Number(item.id?.split('-')[1]) <= 7));
+});
+
+test('严格会话缓存按 Gmail、腾讯和不同邮箱账号隔离', () => {
+  const gmail = buildMailAIThreadContextIdentity({
+    provider: 'gmail',
+    mailAccountId: 'gmail:owner@example.com',
+    threadId: 'thread-current',
+    targetMessageId: 'message-1',
+  });
+  const otherGmail = buildMailAIThreadContextIdentity({
+    ...gmail,
+    mailAccountId: 'gmail:other@example.com',
+  });
+  const tencent = buildMailAIThreadContextIdentity({
+    ...gmail,
+    provider: 'tencent_exmail',
+    mailAccountId: 'tencent_exmail:owner@example.com',
+  });
+  const messages = [strictMessage(0), strictMessage(1)];
+
+  assert.notEqual(
+    buildMailAIThreadContextCacheKey(gmail, messages),
+    buildMailAIThreadContextCacheKey(otherGmail, messages),
+  );
+  assert.notEqual(
+    buildMailAIThreadContextCacheKey(gmail, messages),
+    buildMailAIThreadContextCacheKey(tencent, messages),
+  );
+});
 
 test('合并当前线程和 Gmail 结果后只保留最近 10 封，并复用当前正文', () => {
   const fetched = Array.from({ length: 12 }, (_, index) => message(index));

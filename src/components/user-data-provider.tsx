@@ -16,6 +16,7 @@ import type { UserDataKey } from '@/lib/account-data-keys';
 import { scopedLocalStorageKey } from '@/lib/account-cache-scope';
 import { Alert, AlertDescription, AlertTitle } from '@/components/ui/alert';
 import { Button } from '@/components/ui/button';
+import { runSafeRequestWithSessionRecovery } from '@/lib/session-recovery';
 
 const LEGACY_STORAGE_KEYS = [
   'influencer-board-influencers',
@@ -94,7 +95,7 @@ function copyLegacyScopedCaches(userId: string) {
 }
 
 export function UserDataProvider({ children }: { children: React.ReactNode }) {
-  const { account } = useAuth();
+  const { account, ensureSession } = useAuth();
   const accountUserId = account?.userId;
   const accountStatus = account?.status;
   const accountMustChangePassword = account?.mustChangePassword;
@@ -147,7 +148,10 @@ export function UserDataProvider({ children }: { children: React.ReactNode }) {
           }
         }
 
-        const response = await fetch('/api/user-data', { cache: 'no-store' });
+        const response = await runSafeRequestWithSessionRecovery(
+          ensureSession,
+          () => fetch('/api/user-data', { cache: 'no-store' }),
+        );
         const result = await response.json();
         if (!response.ok || !result.success) throw new Error(result.error || '账号数据读取失败。');
         if (active) {
@@ -167,7 +171,7 @@ export function UserDataProvider({ children }: { children: React.ReactNode }) {
     };
     void load();
     return () => { active = false; };
-  }, [accountIsAdmin, accountMustChangePassword, accountStatus, accountUserId]);
+  }, [accountIsAdmin, accountMustChangePassword, accountStatus, accountUserId, ensureSession]);
 
   const save = useCallback((key: UserDataKey, value: unknown) => {
     const ownerId = accountUserId;
@@ -178,11 +182,14 @@ export function UserDataProvider({ children }: { children: React.ReactNode }) {
       .catch(() => undefined)
       .then(async () => {
         if (currentAccountId.current !== ownerId) return;
-        const response = await fetch('/api/user-data', {
-          method: 'PUT',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ key, data: value }),
-        });
+        const response = await runSafeRequestWithSessionRecovery(
+          ensureSession,
+          () => fetch('/api/user-data', {
+            method: 'PUT',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ key, data: value }),
+          }),
+        );
         const result = await response.json().catch(() => ({}));
         if (!response.ok || !result.success) {
           throw new Error(result.error || '账号数据保存失败。');
@@ -198,7 +205,7 @@ export function UserDataProvider({ children }: { children: React.ReactNode }) {
         if (writeQueues.current.get(key) === next) writeQueues.current.delete(key);
       });
     writeQueues.current.set(key, next);
-  }, [accountUserId]);
+  }, [accountUserId, ensureSession]);
 
   const value = useMemo<UserDataContextValue>(() => ({ data, loading, error, save }), [data, error, loading, save]);
   if (

@@ -49,6 +49,12 @@ import { GmailSignatureSettings } from '@/components/gmail-signature-settings';
 import { MailAccountSwitcher } from '@/components/mail-account-switcher';
 import { NewEmailComposer } from '@/components/new-email-composer';
 import { getEditableMailDraft, type EditableMailDraft } from '@/lib/mail-draft-edit';
+import {
+  collectUnreadMailTargets,
+  setMailMessagesReadState,
+  shouldShowMailThreadUnreadStyle,
+  type MailMessageReadTarget,
+} from '@/lib/mail-read-state';
 
 const MAILBOXES: Array<{ id: GmailMailbox; label: string; icon: typeof Inbox }> = [
   { id: 'inbox', label: '收件箱', icon: Inbox },
@@ -128,8 +134,40 @@ function updateThreadMessage(
   };
 }
 
+function threadContainsAnyMessage(thread: GmailThread, messageIds: ReadonlySet<string>) {
+  return thread.messages.some((message) => messageIds.has(message.id));
+}
+
 function getCacheKey(accountId: string, mailbox: GmailMailbox, search: string, page: number) {
   return `${getAccountCacheScope()}:${accountId}:${mailbox}:${search.toLowerCase()}:${page}`;
+}
+
+function invalidateTencentThreadListCaches(accountId: string) {
+  const prefix = `${getAccountCacheScope()}:${accountId}:`;
+  for (const key of tencentThreadListCache.keys()) {
+    if (key.startsWith(prefix)) tencentThreadListCache.delete(key);
+  }
+}
+
+async function markTencentMessageRead(
+  mailAccountId: string,
+  target: MailMessageReadTarget,
+) {
+  const response = await fetch('/api/mail/tencent', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      action: 'flags',
+      mailAccountId,
+      folder: target.folderRef,
+      uid: target.providerMessageRef,
+      read: true,
+    }),
+  });
+  const result = await response.json().catch(() => ({})) as { success?: boolean; error?: string };
+  if (!response.ok || !result.success) {
+    throw new Error(result.error || '标记邮件为已读失败。');
+  }
 }
 
 export type TencentExmailOpenRequest = {
@@ -177,6 +215,12 @@ export function TencentExmailPage({
   const [threadListAvatarOnly, setThreadListAvatarOnly] = useState(false);
   const [resizingThreadList, setResizingThreadList] = useState(false);
   const runIdRef = useRef(0);
+  const detailRunIdRef = useRef(0);
+  const detailAbortControllerRef = useRef<AbortController | null>(null);
+  const automaticReadRequestsRef = useRef(new Map<string, Promise<void>>());
+  const accountIdRef = useRef(account.mailAccountId);
+  const mailboxRef = useRef(mailbox);
+  const threadsRef = useRef(threads);
   const handledOpenRequestRef = useRef(0);
   const workbenchRef = useRef<HTMLDivElement>(null);
   const threadListRef = useRef<HTMLDivElement>(null);
@@ -189,7 +233,9 @@ export function TencentExmailPage({
   const widthStorageKey = scopedLocalStorageKey(
     `tencent-thread-list-width-v1:${account.mailAccountId}`,
   );
-  const currentCacheKey = getCacheKey(account.mailAccountId, mailbox, search, page);
+  accountIdRef.current = account.mailAccountId;
+  mailboxRef.current = mailbox;
+  threadsRef.current = threads;
 
   const getAvailablePaneWidth = useCallback(() => {
     const workbench = workbenchRef.current;
@@ -370,10 +416,37 @@ export function TencentExmailPage({
     if (!active) setShowNewEmail(false);
   }, [active]);
 
+  const beginThreadDetailRequest = useCallback(() => {
+    detailAbortControllerRef.current?.abort();
+    const controller = new AbortController();
+    const runId = detailRunIdRef.current + 1;
+    detailRunIdRef.current = runId;
+    detailAbortControllerRef.current = controller;
+    return { controller, runId };
+  }, []);
+
+  const cancelThreadDetailRequest = useCallback(() => {
+    detailAbortControllerRef.current?.abort();
+    detailAbortControllerRef.current = null;
+    detailRunIdRef.current += 1;
+    setDetailLoading(false);
+  }, []);
+
+  useEffect(() => {
+    if (active && detailExpanded && !showSettings) return;
+    cancelThreadDetailRequest();
+  }, [active, cancelThreadDetailRequest, detailExpanded, showSettings]);
+
+  useEffect(() => () => {
+    detailAbortControllerRef.current?.abort();
+    detailAbortControllerRef.current = null;
+    detailRunIdRef.current += 1;
+  }, []);
+
   const loadThreadDetail = useCallback(async (
     folderRef: string,
     providerMessageRef: string,
-    options: { forceRefresh?: boolean; rfcMessageId?: string } = {},
+    options: { forceRefresh?: boolean; rfcMessageId?: string; signal?: AbortSignal } = {},
   ) => {
     const params = new URLSearchParams({
       action: 'thread',
@@ -383,7 +456,10 @@ export function TencentExmailPage({
     });
     if (options.forceRefresh) params.set('forceRefresh', '1');
     if (options.rfcMessageId) params.set('rfcMessageId', options.rfcMessageId);
-    const response = await fetch(`/api/mail/tencent?${params.toString()}`, { cache: 'no-store' });
+    const response = await fetch(`/api/mail/tencent?${params.toString()}`, {
+      cache: 'no-store',
+      signal: options.signal,
+    });
     const result = await response.json().catch(() => ({})) as {
       success?: boolean;
       data?: GmailThread;
@@ -395,9 +471,93 @@ export function TencentExmailPage({
     return result.data;
   }, [account.mailAccountId]);
 
+  const applyTencentReadResultsLocally = useCallback((
+    sourceThread: GmailThread,
+    succeededMessageIds: string[],
+  ) => {
+    const sourceAccountId = sourceThread.mailAccountId || account.mailAccountId;
+    if (accountIdRef.current !== sourceAccountId || !succeededMessageIds.length) return;
+    const messageIds = new Set(succeededMessageIds);
+    const matchesThread = (thread: GmailThread) => (
+      thread.mailAccountId === sourceAccountId
+      && (thread.id === sourceThread.id || threadContainsAnyMessage(thread, messageIds))
+    );
+    const currentListThread = threadsRef.current.find(matchesThread);
+    const removeFromUnread = Boolean(
+      currentListThread
+      && mailboxRef.current === 'unread'
+      && !setMailMessagesReadState(currentListThread, messageIds, true).hasUnread,
+    );
+
+    setThreads((current) => {
+      const updated = current.map((thread) => matchesThread(thread)
+        ? setMailMessagesReadState(thread, messageIds, true)
+        : thread);
+      const next = mailboxRef.current === 'unread'
+        ? updated.filter((thread) => !matchesThread(thread) || thread.hasUnread)
+        : updated;
+      threadsRef.current = next;
+      return next;
+    });
+    if (removeFromUnread) setTotal((current) => Math.max(0, current - 1));
+    setSelectedThread((current) => {
+      if (!current || !matchesThread(current)) return current;
+      return setMailMessagesReadState(current, messageIds, true);
+    });
+    invalidateTencentThreadListCaches(sourceAccountId);
+  }, [account.mailAccountId]);
+
+  const markTencentThreadReadAfterContentReady = useCallback((
+    thread: GmailThread,
+    runId: number,
+    controller: AbortController,
+  ) => {
+    const sourceAccountId = thread.mailAccountId || account.mailAccountId;
+    if (
+      controller.signal.aborted
+      || detailRunIdRef.current !== runId
+      || accountIdRef.current !== sourceAccountId
+    ) {
+      return Promise.resolve();
+    }
+    const { targets, unresolvedMessageIds } = collectUnreadMailTargets(thread);
+    if (!targets.length) {
+      if (unresolvedMessageIds.length) {
+        setError('部分邮件缺少定位信息，暂时无法自动标记为已读。');
+      }
+      return Promise.resolve();
+    }
+    const requestKey = `${sourceAccountId}:${thread.id}`;
+    const existing = automaticReadRequestsRef.current.get(requestKey);
+    if (existing) return existing;
+
+    const request = (async () => {
+      const results = await Promise.allSettled(
+        targets.map((target) => markTencentMessageRead(sourceAccountId, target)),
+      );
+      if (accountIdRef.current !== sourceAccountId) return;
+      const succeededMessageIds = targets
+        .filter((_, index) => results[index]?.status === 'fulfilled')
+        .map((target) => target.messageId);
+      applyTencentReadResultsLocally(thread, succeededMessageIds);
+      const failedCount = results.length - succeededMessageIds.length + unresolvedMessageIds.length;
+      if (failedCount > 0) {
+        setError('部分邮件未能标记为已读，可点击信封按钮重试。');
+      }
+    })();
+    automaticReadRequestsRef.current.set(requestKey, request);
+    void request.finally(() => {
+      if (automaticReadRequestsRef.current.get(requestKey) === request) {
+        automaticReadRequestsRef.current.delete(requestKey);
+      }
+    });
+    return request;
+  }, [account.mailAccountId, applyTencentReadResultsLocally]);
+
   const openThread = useCallback(async (thread: GmailThread) => {
     const message = getThreadMessage(thread);
     if (!message?.folderRef || !message.providerMessageRef) return;
+    const { controller, runId } = beginThreadDetailRequest();
     setSelectedThread(thread);
     setShowSettings(false);
     setDetailExpanded(true);
@@ -406,7 +566,9 @@ export function TencentExmailPage({
     try {
       const detailedThread = await loadThreadDetail(message.folderRef, message.providerMessageRef, {
         rfcMessageId: message.rfcMessageId,
+        signal: controller.signal,
       });
+      if (controller.signal.aborted || detailRunIdRef.current !== runId) return;
       const editableDraft = getEditableMailDraft(
         detailedThread,
         'tencent_exmail',
@@ -419,25 +581,33 @@ export function TencentExmailPage({
         setDetailExpanded(false);
       } else {
         setSelectedThread(detailedThread);
+        void markTencentThreadReadAfterContentReady(detailedThread, runId, controller);
       }
     } catch (caughtError) {
+      if (controller.signal.aborted || detailRunIdRef.current !== runId) return;
       setDetailError(caughtError instanceof Error ? caughtError.message : '读取邮件会话失败。');
     } finally {
-      setDetailLoading(false);
+      if (detailRunIdRef.current === runId) {
+        detailAbortControllerRef.current = null;
+        setDetailLoading(false);
+      }
     }
-  }, [account.mailAccountId, loadThreadDetail]);
+  }, [account.mailAccountId, beginThreadDetailRequest, loadThreadDetail, markTencentThreadReadAfterContentReady]);
 
   useEffect(() => {
     if (!active || !openMessageRequest || handledOpenRequestRef.current === openMessageRequest.requestId) return;
     handledOpenRequestRef.current = openMessageRequest.requestId;
+    const { controller, runId } = beginThreadDetailRequest();
     setShowSettings(false);
     setDetailExpanded(true);
     setDetailLoading(true);
     setDetailError(undefined);
     void loadThreadDetail(openMessageRequest.folderRef, openMessageRequest.providerMessageRef, {
       rfcMessageId: openMessageRequest.rfcMessageId,
+      signal: controller.signal,
     })
       .then((detailedThread) => {
+        if (controller.signal.aborted || detailRunIdRef.current !== runId) return;
         const editableDraft = getEditableMailDraft(
           detailedThread,
           'tencent_exmail',
@@ -451,29 +621,47 @@ export function TencentExmailPage({
           return;
         }
         setSelectedThread(detailedThread);
+        void markTencentThreadReadAfterContentReady(detailedThread, runId, controller);
       })
       .catch((caughtError) => {
+        if (controller.signal.aborted || detailRunIdRef.current !== runId) return;
         setDetailError(caughtError instanceof Error ? caughtError.message : '读取邮件会话失败。');
       })
-      .finally(() => setDetailLoading(false));
-  }, [account.mailAccountId, active, loadThreadDetail, openMessageRequest]);
+      .finally(() => {
+        if (detailRunIdRef.current === runId) {
+          detailAbortControllerRef.current = null;
+          setDetailLoading(false);
+        }
+      });
+  }, [account.mailAccountId, active, beginThreadDetailRequest, loadThreadDetail, markTencentThreadReadAfterContentReady, openMessageRequest]);
 
   const refreshMailbox = useCallback(() => {
     void loadThreads();
     const message = selectedThread ? getThreadMessage(selectedThread) : null;
     if (!message?.folderRef || !message.providerMessageRef) return;
+    const { controller, runId } = beginThreadDetailRequest();
     setDetailLoading(true);
     setDetailError(undefined);
     void loadThreadDetail(message.folderRef, message.providerMessageRef, {
       forceRefresh: true,
       rfcMessageId: message.rfcMessageId,
+      signal: controller.signal,
     })
-      .then((thread) => setSelectedThread(thread))
+      .then((thread) => {
+        if (controller.signal.aborted || detailRunIdRef.current !== runId) return;
+        setSelectedThread(thread);
+      })
       .catch((caughtError) => {
+        if (controller.signal.aborted || detailRunIdRef.current !== runId) return;
         setDetailError(caughtError instanceof Error ? caughtError.message : '刷新邮件会话失败。');
       })
-      .finally(() => setDetailLoading(false));
-  }, [loadThreadDetail, loadThreads, selectedThread]);
+      .finally(() => {
+        if (detailRunIdRef.current === runId) {
+          detailAbortControllerRef.current = null;
+          setDetailLoading(false);
+        }
+      });
+  }, [beginThreadDetailRequest, loadThreadDetail, loadThreads, selectedThread]);
 
   const updateFlags = async (thread: GmailThread, update: { read?: boolean; starred?: boolean }) => {
     const message = getThreadMessage(thread);
@@ -481,6 +669,13 @@ export function TencentExmailPage({
     setActionThreadId(thread.id);
     setError('');
     try {
+      if (update.read !== undefined) {
+        const accountPrefix = `${account.mailAccountId}:`;
+        const pendingReadRequests = Array.from(automaticReadRequestsRef.current.entries())
+          .filter(([key]) => key.startsWith(accountPrefix))
+          .map(([, request]) => request);
+        await Promise.allSettled(pendingReadRequests);
+      }
       const response = await fetch('/api/mail/tencent', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -494,24 +689,35 @@ export function TencentExmailPage({
       });
       const result = await response.json().catch(() => ({})) as { success?: boolean; error?: string };
       if (!response.ok || !result.success) throw new Error(result.error || '更新邮件状态失败。');
+      const targetMessageIds = new Set([message.id]);
+      const matchesThread = (item: GmailThread) => (
+        item.mailAccountId === account.mailAccountId
+        && (item.id === thread.id || threadContainsAnyMessage(item, targetMessageIds))
+      );
+      const currentListThread = threadsRef.current.find(matchesThread);
+      const removeFromUnread = Boolean(
+        currentListThread
+        && mailboxRef.current === 'unread'
+        && !updateThreadMessage(currentListThread, message, update).hasUnread,
+      );
       setThreads((current) => {
-        const next = current.map((item) => item.id === thread.id
+        const updated = current.map((item) => matchesThread(item)
           ? updateThreadMessage(item, message, update)
           : item);
-        const cached = tencentThreadListCache.get(currentCacheKey);
-        if (cached) {
-          tencentThreadListCache.set(currentCacheKey, {
-            ...cached,
-            data: { ...cached.data, threads: next },
-          });
-        }
+        const next = mailboxRef.current === 'unread'
+          ? updated.filter((item) => !matchesThread(item) || item.hasUnread)
+          : updated;
+        threadsRef.current = next;
         return next;
       });
+      if (removeFromUnread) setTotal((current) => Math.max(0, current - 1));
       setSelectedThread((current) => {
-        if (!current || current.id !== thread.id) return current;
-        const currentMessage = current.messages.find((item) => item.id === message.id) || message;
+        if (!current || !matchesThread(current)) return current;
+        const currentMessage = current.messages.find((item) => item.id === message.id);
+        if (!currentMessage) return current;
         return updateThreadMessage(current, currentMessage, update);
       });
+      invalidateTencentThreadListCaches(account.mailAccountId);
     } catch (caughtError) {
       setError(caughtError instanceof Error ? caughtError.message : '更新邮件状态失败。');
     } finally {
@@ -619,16 +825,21 @@ export function TencentExmailPage({
               const message = getThreadMessage(thread);
               const sender = displaySender(message?.from || '');
               const actionLoading = actionThreadId === thread.id;
+              const selected = selectedThread?.id === thread.id
+                || Boolean(selectedThread && thread.messages.some((item) => (
+                  selectedThread.messages.some((selectedMessage) => selectedMessage.id === item.id)
+                )));
+              const visuallyUnread = shouldShowMailThreadUnreadStyle(thread.hasUnread, selected);
               if (threadListAvatarOnly) {
-                return <button key={thread.id} type="button" title={`${sender} · ${thread.subject || '(无主题)'}`} onClick={() => void openThread(thread)} className={`flex w-full items-center justify-center border-b border-border/45 py-3 outline-none hover:bg-white/82 ${selectedThread?.id === thread.id ? 'bg-primary/[0.07]' : ''}`}><span className={`flex h-9 w-9 items-center justify-center rounded-full text-xs font-semibold ${thread.hasUnread ? 'bg-primary text-primary-foreground' : 'bg-muted text-muted-foreground'}`}>{sender.slice(0, 1).toUpperCase()}</span></button>;
+                return <button key={thread.id} type="button" title={`${sender} · ${thread.subject || '(无主题)'}`} onClick={() => void openThread(thread)} className={`flex w-full items-center justify-center border-b border-border/45 py-3 outline-none hover:bg-white/82 ${selected ? '!bg-white shadow-[inset_2px_0_0_var(--primary)]' : ''}`}><span className={`flex h-9 w-9 items-center justify-center rounded-full text-xs font-semibold ${visuallyUnread ? 'bg-primary text-primary-foreground' : 'bg-muted text-muted-foreground'}`}>{sender.slice(0, 1).toUpperCase()}</span></button>;
               }
               return (
-                <div key={thread.id} role="button" tabIndex={0} onClick={() => void openThread(thread)} onKeyDown={(event) => { if (event.key === 'Enter' || event.key === ' ') { event.preventDefault(); void openThread(thread); } }} className={`glass-list-row group cursor-pointer border-b border-border/45 px-3 py-2.5 outline-none transition-colors hover:bg-white/82 ${selectedThread?.id === thread.id ? 'bg-primary/[0.07] shadow-[inset_2px_0_0_var(--primary)]' : ''} ${thread.hasUnread ? 'bg-primary/[0.055]' : ''}`}>
+                <div key={thread.id} role="button" tabIndex={0} onClick={() => void openThread(thread)} onKeyDown={(event) => { if (event.key === 'Enter' || event.key === ' ') { event.preventDefault(); void openThread(thread); } }} className={`glass-list-row group cursor-pointer border-b border-border/45 px-3 py-2.5 outline-none transition-colors hover:bg-white/82 ${selected ? '!bg-white shadow-[inset_2px_0_0_var(--primary)]' : ''} ${visuallyUnread ? 'bg-primary/[0.055]' : ''}`}>
                   <div className="flex gap-2">
                     <Button variant="ghost" size="icon" className="mt-0.5 h-8 w-8 shrink-0 rounded-lg" title={thread.isStarred ? '取消星标' : '标星'} disabled={actionLoading} onClick={(event) => { event.stopPropagation(); void updateFlags(thread, { starred: !thread.isStarred }); }}><Star className={`h-4 w-4 ${thread.isStarred ? 'fill-amber-400 text-amber-400' : 'text-muted-foreground'}`} /></Button>
                     <div className="min-w-0 flex-1">
-                      <div className="flex items-center justify-between gap-2"><span className={`min-w-0 truncate text-sm ${thread.hasUnread ? 'font-semibold' : 'text-muted-foreground'}`}>{sender}</span><span className="shrink-0 text-xs text-muted-foreground">{formatDate(message?.date || thread.lastMessageDate)}</span></div>
-                      <p className={`mt-0.5 truncate text-sm ${thread.hasUnread ? 'font-semibold' : ''}`}>{thread.subject || '(无主题)'}</p>
+                      <div className="flex items-center justify-between gap-2"><span className={`min-w-0 truncate text-sm ${visuallyUnread ? 'font-semibold' : 'text-muted-foreground'}`}>{sender}</span><span className="shrink-0 text-xs text-muted-foreground">{formatDate(message?.date || thread.lastMessageDate)}</span></div>
+                      <p className={`mt-0.5 truncate text-sm ${visuallyUnread ? 'font-semibold' : ''}`}>{thread.subject || '(无主题)'}</p>
                       <p className="mt-0.5 truncate text-xs text-muted-foreground">{message?.snippet || thread.snippet || '打开查看正文'}</p>
                     </div>
                     <Button variant="ghost" size="icon" className="h-8 w-8 shrink-0 rounded-lg opacity-70 group-hover:opacity-100" title={thread.hasUnread ? '标记为已读' : '标记为未读'} disabled={actionLoading} onClick={(event) => { event.stopPropagation(); void updateFlags(thread, { read: thread.hasUnread }); }}>{actionLoading ? <LoaderCircle className="h-4 w-4 animate-spin" /> : thread.hasUnread ? <MailOpen className="h-4 w-4" /> : <Mail className="h-4 w-4" />}</Button>

@@ -12,6 +12,7 @@ import {
 } from 'react';
 import type { GmailAuth } from '@/lib/types';
 import { useAuth } from './auth-provider';
+import { runSafeRequestWithSessionRecovery } from '@/lib/session-recovery';
 
 export type GmailAuthStatus = 'checking' | 'connected' | 'disconnected' | 'error';
 export const GMAIL_AUTH_CACHE_RESET_EVENT = 'gmail-auth-cache-reset';
@@ -44,7 +45,7 @@ function readGmailAuthError(result: unknown, fallback: string) {
 }
 
 export function GmailAuthProvider({ children }: { children: ReactNode }) {
-  const { account } = useAuth();
+  const { account, ensureSession } = useAuth();
   const accountUserId = account?.userId;
   const accountCanUseWorkspace = account?.status === 'active' && !account.mustChangePassword;
   const authRef = useRef<GmailAuth | null>(null);
@@ -75,7 +76,10 @@ export function GmailAuthProvider({ children }: { children: ReactNode }) {
     else setStatus('checking');
     setError(null);
 
-    const request = fetch('/api/auth/session', { cache: 'no-store' })
+    const request = runSafeRequestWithSessionRecovery(
+      ensureSession,
+      () => fetch('/api/auth/session', { cache: 'no-store' }),
+    )
       .then(async (response) => {
         const result = await response.json().catch(() => null) as {
           success?: boolean;
@@ -111,7 +115,7 @@ export function GmailAuthProvider({ children }: { children: ReactNode }) {
 
     sessionRequestRef.current = request;
     return request;
-  }, [connect]);
+  }, [connect, ensureSession]);
 
   useEffect(() => {
     sessionRequestRef.current = null;
@@ -172,9 +176,12 @@ export function GmailAuthProvider({ children }: { children: ReactNode }) {
     if (tokenRequestRef.current) return tokenRequestRef.current;
 
     setRefreshing(true);
-    const request = fetch(options.force ? '/api/auth/refresh?force=1' : '/api/auth/refresh', {
-      method: 'POST',
-    })
+    const request = runSafeRequestWithSessionRecovery(
+      ensureSession,
+      () => fetch(options.force ? '/api/auth/refresh?force=1' : '/api/auth/refresh', {
+        method: 'POST',
+      }),
+    )
       .then(async (response) => {
         const result = await response.json().catch(() => null) as {
           success?: boolean;
@@ -207,7 +214,7 @@ export function GmailAuthProvider({ children }: { children: ReactNode }) {
 
     tokenRequestRef.current = request;
     return request;
-  }, [connect]);
+  }, [connect, ensureSession]);
 
   const value = useMemo<GmailAuthContextValue>(() => ({
     auth,

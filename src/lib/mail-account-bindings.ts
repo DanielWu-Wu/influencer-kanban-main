@@ -32,6 +32,21 @@ export type MailAccountBinding = {
 
 export type MailAccountBindingMap = Record<string, MailAccountBinding>;
 
+export type FeishuMailBindingTarget = {
+  recordId: string;
+  contactEmail: string;
+  currentMailAccountId?: string;
+};
+
+export type MailBindingSelectionSummary = {
+  bindings: MailAccountBindingMap;
+  changedRecordIds: string[];
+  accountChangedRecordIds: string[];
+  unselected: number;
+  same: number;
+  overwrite: number;
+};
+
 export function buildMailAccountBindingKey(options: {
   projectId?: string;
   prospectId?: string;
@@ -93,4 +108,51 @@ export function upsertMailAccountBinding(
   if (input.feishuRecordId) next[`feishu:${input.feishuRecordId}`] = binding;
   if (input.contactEmail) next[`contact:${input.contactEmail.trim().toLowerCase()}`] = binding;
   return next;
+}
+
+export function bindFeishuRecordsToMailAccount(
+  bindings: MailAccountBindingMap,
+  targets: FeishuMailBindingTarget[],
+  account: { mailAccountId: string; provider: MailProvider; email: string },
+) {
+  let nextBindings = bindings;
+  const summary: MailBindingSelectionSummary = {
+    bindings,
+    changedRecordIds: [],
+    accountChangedRecordIds: [],
+    unselected: 0,
+    same: 0,
+    overwrite: 0,
+  };
+
+  for (const target of targets) {
+    const existing = resolveMailAccountBinding(nextBindings, {
+      feishuRecordId: target.recordId,
+      contactEmail: target.contactEmail,
+    });
+    if (existing?.mailAccountId === account.mailAccountId) {
+      summary.same += 1;
+      continue;
+    }
+
+    const currentMailAccountId = existing?.mailAccountId || target.currentMailAccountId;
+    if (currentMailAccountId && currentMailAccountId !== account.mailAccountId) {
+      summary.accountChangedRecordIds.push(target.recordId);
+    }
+
+    if (existing) summary.overwrite += 1;
+    else summary.unselected += 1;
+    summary.changedRecordIds.push(target.recordId);
+    nextBindings = upsertMailAccountBinding(nextBindings, {
+      prospectId: existing?.prospectId,
+      feishuRecordId: target.recordId,
+      contactEmail: target.contactEmail,
+      mailAccountId: account.mailAccountId,
+      provider: account.provider,
+      mailAddress: account.email,
+    });
+  }
+
+  summary.bindings = nextBindings;
+  return summary;
 }

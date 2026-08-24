@@ -484,6 +484,7 @@ export function EmailDetail({
     selectedRecipient: recipientOverrides[selectedReplyMessageId],
     suggestedCreatorEmail: creatorProfile?.email,
   }), [creatorProfile?.email, ownEmail, recipientOverrides, selectedReplyMessageId, thread]);
+  const replyActionsUnavailable = loading || Boolean(loadError);
   const threadParticipants = useMemo(
     () => collectGmailThreadParticipants(thread, ownEmail, creatorProfile?.email),
     [creatorProfile?.email, ownEmail, thread],
@@ -535,7 +536,7 @@ export function EmailDetail({
   };
 
   const openReplyComposer = (mode: 'compose' | 'template' | 'ai') => {
-    if (!replyTarget) return;
+    if (!replyTarget || replyActionsUnavailable) return;
     replyAnchorManuallySelectedRef.current = true;
     setReplyMode(mode);
     setComposerState('expanded');
@@ -543,7 +544,9 @@ export function EmailDetail({
 
   useEffect(() => {
     if (
-      !openComposerRequest?.composerMode
+      replyActionsUnavailable
+      || !replyTarget
+      || !openComposerRequest?.composerMode
       || handledOpenComposerRequestRef.current === openComposerRequest.requestId
     ) return;
     handledOpenComposerRequestRef.current = openComposerRequest.requestId;
@@ -554,7 +557,7 @@ export function EmailDetail({
     }
     setReplyMode(openComposerRequest.composerMode);
     setComposerState('expanded');
-  }, [openComposerRequest]);
+  }, [openComposerRequest, replyActionsUnavailable, replyTarget]);
 
   const updateReplyRecipient = (email: string) => {
     if (!replyTarget) return;
@@ -1802,6 +1805,7 @@ export function EmailDetail({
             <Button
               variant="outline" 
               className="h-10 flex-1 rounded-lg bg-white/80"
+              disabled={replyActionsUnavailable || !replyTarget}
               onClick={() => openReplyComposer('compose')}
             >
               <Reply className="w-4 h-4 mr-2" />
@@ -1810,6 +1814,7 @@ export function EmailDetail({
             <Button
               variant="outline"
               className="h-10 flex-1 rounded-lg border-primary/25 bg-primary/5 text-primary hover:bg-primary/10"
+              disabled={replyActionsUnavailable || !replyTarget}
               onClick={() => openReplyComposer('template')}
             >
               <FileText className="w-4 h-4 mr-2" />
@@ -1817,6 +1822,7 @@ export function EmailDetail({
             </Button>
             <Button
               className="h-10 flex-1 rounded-lg shadow-apple"
+              disabled={replyActionsUnavailable || !replyTarget}
               onClick={() => openReplyComposer('ai')}
             >
               <Sparkles className="w-4 h-4 mr-2" />
@@ -1877,7 +1883,7 @@ export function EmailDetail({
                 />
               ) : (
                 <EmailComposer
-                  key={`${mailScope}-${replyMode}-${replyTarget?.messageId || 'default'}`}
+                  key={`${mailScope}-${thread.id}-${replyMode}-${replyTarget?.messageId || 'default'}`}
                   thread={thread}
                   replyTarget={replyTarget}
                   mode={replyMode}

@@ -2,6 +2,7 @@ export const EMAIL_GENERATION_TASK_RETENTION_MS = 24 * 60 * 60 * 1000;
 export const EMAIL_GENERATION_TASKS_SCHEMA_VERSION = 2;
 export const EMAIL_GENERATION_TASK_OPEN_EVENT = 'email-generation-task-open';
 export const EMAIL_GENERATION_TOASTER_ID = 'email-generation-tasks';
+export const MAIL_AI_TASK_CONTEXT_VERSION = 'thread-v2';
 
 export type EmailGenerationTaskKind =
   | 'gmail_ai_reply'
@@ -263,7 +264,13 @@ export function buildMailEmailGenerationTaskKey(input: {
   threadId: string;
   messageId?: string;
 }) {
-  return [input.kind, input.mailAccountId, input.threadId, input.messageId || 'latest'].join(':');
+  return [
+    input.kind,
+    MAIL_AI_TASK_CONTEXT_VERSION,
+    input.mailAccountId,
+    input.threadId,
+    input.messageId || 'latest',
+  ].join(':');
 }
 
 export function updateEmailGenerationTaskAvatar(
@@ -288,7 +295,12 @@ export function buildGmailEmailGenerationTaskKey(input: {
   threadId: string;
   messageId?: string;
 }) {
-  return [input.kind, input.threadId, input.messageId || 'latest'].join(':');
+  return [
+    input.kind,
+    MAIL_AI_TASK_CONTEXT_VERSION,
+    input.threadId,
+    input.messageId || 'latest',
+  ].join(':');
 }
 
 export function buildOutreachEmailGenerationTaskKey(prospectId: string) {
@@ -302,6 +314,7 @@ export function buildGmailEmailTranslationTaskKey(input: {
 }) {
   return [
     'email_translation',
+    MAIL_AI_TASK_CONTEXT_VERSION,
     input.composerMode,
     input.threadId,
     input.messageId || 'latest',

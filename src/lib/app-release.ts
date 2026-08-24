@@ -9,6 +9,19 @@ export const APP_RELEASE_LAST_SEEN_STORAGE_KEY = 'influencer-board-last-seen-rel
 
 export const APP_RELEASES: readonly AppRelease[] = [
   {
+    version: '1.2.1',
+    releasedAt: '2026-08-24',
+    title: '邮箱与工作流稳定性优化',
+    highlights: [
+      '修复 Gmail 与腾讯企业邮箱 AI 回复可能引用其他邮件会话的问题，AI 现在只读取当前打开的真实会话。',
+      '开发信跟进支持在表头统一选择写信邮箱，单行或批量修改后不再重新加载整张飞书列表。',
+      '每日待办优先显示已保存结果并在后台静默更新，切换页面不再重复读取，邮件任务显示也更加简洁。',
+      'Gmail 与腾讯邮件打开后自动标记为已读，当前邮件使用白色背景和左侧蓝线显示。',
+      '点击“根据中文更新外文”后，邮件编辑器会立即显示绿色的翻译进度提示。',
+      '优化账号登录状态恢复，长时间离开后返回页面会优先静默恢复登录。',
+    ],
+  },
+  {
     version: '1.2.0',
     releasedAt: '2026-08-23',
     title: 'Gmail 与腾讯企业邮箱双邮箱升级',

@@ -1,6 +1,17 @@
 export const DAILY_GMAIL_LOOKBACK_HOURS = 72;
+export const DAILY_MAIL_AUTO_REFRESH_MS = 5 * 60 * 1000;
 
 const HOUR_MS = 60 * 60 * 1000;
+
+export function shouldRefreshDailyMail(
+  lastSuccessfulRefreshAt: number,
+  now: number = Date.now(),
+  intervalMs: number = DAILY_MAIL_AUTO_REFRESH_MS,
+) {
+  if (!Number.isFinite(lastSuccessfulRefreshAt) || lastSuccessfulRefreshAt <= 0) return true;
+  const elapsed = now - lastSuccessfulRefreshAt;
+  return elapsed < 0 || elapsed >= intervalMs;
+}
 
 export function isWithinDailyGmailWindow(
   dateValue: string,

@@ -38,8 +38,7 @@ import {
   readGmailInboxCache,
   writeGmailInboxCache,
 } from '@/lib/gmail-inbox-cache';
-import { loadGmailAIContactHistory } from '@/lib/gmail-ai-reply';
-import { collectGmailThreadParticipants, resolveGmailReplyTarget } from '@/lib/gmail-reply-target';
+import { collectGmailThreadParticipants } from '@/lib/gmail-reply-target';
 import {
   fetchFeishuRecordsCached,
   type CachedFeishuRecord as FeishuRecord,
@@ -77,6 +76,7 @@ import {
   shouldRollbackAutomaticGmailRead,
   waitForAutomaticGmailRead,
 } from '@/lib/gmail-read-state';
+import { shouldShowMailThreadUnreadStyle } from '@/lib/mail-read-state';
 
 const GMAIL_PAGE_SIZE = 50;
 const GMAIL_DETAIL_BATCH_SIZE = 16;
@@ -1541,20 +1541,6 @@ export function GmailInbox({
     threadPrefetchTimerRef.current = null;
   };
 
-  const prefetchGmailAIHistory = (thread: GmailThread) => {
-    const target = resolveGmailReplyTarget({ thread, ownEmail: auth?.email });
-    if (!target?.recipientEmail) return;
-    void loadGmailAIContactHistory({
-      accountEmail: auth?.email,
-      thread,
-      contactEmail: target.recipientEmail,
-      targetMessageId: target.messageId,
-      targetMessageDate: target.date,
-    }).catch(() => {
-      // This read-only prefetch is opportunistic; opening AI assistant will retry visibly.
-    });
-  };
-
   const handleOpenThread = async (thread: GmailThread) => {
     const runId = openingThreadRunRef.current + 1;
     const cachedThread = readCachedThreadDetail(thread);
@@ -1590,7 +1576,6 @@ export function GmailInbox({
         if (!cachedThread) {
           nextThread = markThreadReadAfterContentReady(nextThread, runId, accessToken);
         }
-        prefetchGmailAIHistory(nextThread);
       }
     } catch (caughtError) {
       if (openingThreadRunRef.current === runId) {
@@ -1987,6 +1972,8 @@ export function GmailInbox({
             const actionLoading = actionThreadId === thread.id;
             const threadOpening = openingThreadId === thread.id;
             const avatar = threadAvatars[thread.id] || { status: 'idle' as const };
+            const selected = selectedThreadId === thread.id;
+            const visuallyUnread = shouldShowMailThreadUnreadStyle(thread.hasUnread, selected);
 
             return (
               <div
@@ -1999,8 +1986,8 @@ export function GmailInbox({
                 className={`glass-list-row group cursor-pointer border-b border-border/45 py-2.5 outline-none transition-[background-color,box-shadow] duration-200 ease-out hover:bg-white/82 active:bg-white/90 focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring/40 motion-reduce:transition-none ${
                   avatarOnly ? 'px-2' : 'px-3'
                 } ${
-                  selectedThreadId === thread.id ? 'bg-primary/[0.07] shadow-[inset_2px_0_0_var(--primary)]' : ''
-                } ${thread.hasUnread ? 'bg-primary/[0.055]' : ''} ${threadOpening ? 'cursor-wait bg-white/85' : ''}`}
+                  selected ? '!bg-white shadow-[inset_2px_0_0_var(--primary)]' : ''
+                } ${visuallyUnread ? 'bg-primary/[0.055]' : ''} ${threadOpening ? 'cursor-wait bg-white/85' : ''}`}
                 onClick={() => handleOpenThread(thread)}
                 onMouseEnter={() => prefetchThread(thread)}
                 onMouseLeave={cancelThreadPrefetch}
@@ -2023,7 +2010,7 @@ export function GmailInbox({
                         size="sm"
                         clickable={false}
                       />
-                      {thread.hasUnread && (
+                      {visuallyUnread && (
                         <span
                           className="absolute -right-0.5 -top-0.5 h-2.5 w-2.5 rounded-full border-2 border-white bg-primary"
                           aria-label="未读"
@@ -2067,7 +2054,7 @@ export function GmailInbox({
                       <div className="flex items-center gap-2">
                         <span
                           className={`flex min-w-0 flex-1 items-center gap-1.5 text-sm ${
-                            thread.hasUnread ? 'font-semibold' : 'text-muted-foreground'
+                            visuallyUnread ? 'font-semibold' : 'text-muted-foreground'
                           }`}
                         >
                           {hasReplied && (
@@ -2083,7 +2070,7 @@ export function GmailInbox({
                         </span>
                       </div>
                       <p
-                        className={`mt-0.5 truncate text-sm ${thread.hasUnread ? 'font-semibold' : ''}`}
+                        className={`mt-0.5 truncate text-sm ${visuallyUnread ? 'font-semibold' : ''}`}
                         title={showTranslatedSubjects && subjectTranslations[thread.id] ? thread.subject : undefined}
                       >
                         {displaySubject}
@@ -2096,7 +2083,7 @@ export function GmailInbox({
                     <div className="grid min-w-0 flex-1 grid-cols-[minmax(150px,240px)_minmax(0,1fr)_72px] items-center gap-4">
                       <span
                         className={`flex min-w-0 items-center gap-1.5 text-sm ${
-                          thread.hasUnread ? 'font-semibold' : 'text-muted-foreground'
+                          visuallyUnread ? 'font-semibold' : 'text-muted-foreground'
                         }`}
                       >
                         {hasReplied && (
@@ -2109,7 +2096,7 @@ export function GmailInbox({
                       </span>
                       <div className="min-w-0 truncate text-sm">
                         <span
-                          className={thread.hasUnread ? 'font-semibold' : ''}
+                          className={visuallyUnread ? 'font-semibold' : ''}
                           title={showTranslatedSubjects && subjectTranslations[thread.id] ? thread.subject : undefined}
                         >
                           {displaySubject}

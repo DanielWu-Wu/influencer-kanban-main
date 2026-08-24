@@ -38,8 +38,9 @@ import { detectReplyLanguage } from '@/lib/email-language';
 import {
   buildGmailAIAnalysisCacheKey,
   buildGmailAIThreadMessages,
+  buildMailAIThreadContextCacheKey,
+  buildMailAIThreadContextIdentity,
   getOrLoadGmailAIAnalysis,
-  loadGmailAIContactHistory,
   type GmailAIHistoryMessage,
 } from '@/lib/gmail-ai-reply';
 import {
@@ -61,6 +62,7 @@ import {
   buildGmailEmailGenerationTaskKey,
   buildGmailEmailTranslationTaskKey,
   buildMailEmailGenerationTaskKey,
+  MAIL_AI_TASK_CONTEXT_VERSION,
 } from '@/lib/email-generation-tasks';
 import type { MailAccount, MailDraftLocator } from '@/lib/mail-accounts';
 import {
@@ -208,7 +210,6 @@ export function EmailComposer({
   const [analysis, setAnalysis] = useState<CollaborationAnalysis | null>(null);
   const [analysisLoading, setAnalysisLoading] = useState(mode === 'ai');
   const [analysisError, setAnalysisError] = useState('');
-  const [historyMessages, setHistoryMessages] = useState<GmailAIHistoryMessage[]>([]);
   const [targetLang, setTargetLang] = useState('en');
   const [targetLangName, setTargetLangName] = useState('英语');
   const [targetLangNeedsConfirmation, setTargetLangNeedsConfirmation] = useState(false);
@@ -257,7 +258,21 @@ export function EmailComposer({
     thread,
     replyTarget?.messageId,
     replyTarget?.date,
-  ), [replyTarget?.date, replyTarget?.messageId, thread]);
+    {
+      provider: isTencent ? 'tencent_exmail' : 'gmail',
+      mailAccountId,
+    },
+  ), [isTencent, mailAccountId, replyTarget?.date, replyTarget?.messageId, thread]);
+  const replyContext = useMemo(() => buildMailAIThreadContextIdentity({
+    provider: isTencent ? 'tencent_exmail' : 'gmail',
+    mailAccountId,
+    threadId: thread.id,
+    targetMessageId: replyTarget?.messageId || '',
+  }), [isTencent, mailAccountId, replyTarget?.messageId, thread.id]);
+  const strictHistoryKey = useMemo(
+    () => buildMailAIThreadContextCacheKey(replyContext, threadMessages),
+    [replyContext, threadMessages],
+  );
   const externalMessage = replyTarget?.message;
   const recipientEmail = replyTarget?.recipientEmail || '';
   const targetContextKey = `${thread.id}:${replyTarget?.messageId || ''}`;
@@ -275,7 +290,7 @@ export function EmailComposer({
       });
   const generationTask = getLatestTaskByKey(generationTaskKey);
   const translationTaskKey = isTencent
-    ? `email_translation:${mailAccountId}:ai:${thread.id}:${replyTarget?.messageId || ''}`
+    ? `email_translation:${MAIL_AI_TASK_CONTEXT_VERSION}:${mailAccountId}:ai:${thread.id}:${replyTarget?.messageId || ''}`
     : buildGmailEmailTranslationTaskKey({
         composerMode: 'ai',
         threadId: thread.id,
@@ -347,7 +362,7 @@ export function EmailComposer({
 
   const invokeAI = async (
     payload: Record<string, unknown>,
-    messages: GmailAIHistoryMessage[] = historyMessages.length ? historyMessages : threadMessages,
+    messages: GmailAIHistoryMessage[] = threadMessages,
     signal?: AbortSignal,
   ) => {
     const response = await fetch('/api/ai', {
@@ -359,6 +374,7 @@ export function EmailComposer({
         threadSubject: replyTarget?.subject || thread.subject,
         threadMessages: messages,
         targetMessageId: replyTarget?.messageId || '',
+        replyContext,
         analysisPrompt: settings.aiAnalysisPrompt || '',
         draftPrompt: settings.aiDraftPrompt || settings.aiEmailPrompt || '',
         modelProvider: settings.modelProvider || 'builtin',
@@ -371,44 +387,6 @@ export function EmailComposer({
     return result.data;
   };
 
-  const loadContactHistory = async (force = false) => {
-    if (isTencent) {
-      if (!mailAccount || !recipientEmail) {
-        return { messages: threadMessages, historyKey: `${mailAccountId}:${thread.id}` };
-      }
-      const params = new URLSearchParams({
-        action: 'contactHistory',
-        mailAccountId,
-        email: recipientEmail,
-        maxResults: '10',
-      });
-      const response = await fetch(`/api/mail/tencent?${params.toString()}`, {
-        cache: force ? 'reload' : 'no-store',
-      });
-      const result = await response.json().catch(() => ({})) as {
-        success?: boolean;
-        data?: GmailAIHistoryMessage[];
-        error?: string;
-      };
-      if (!response.ok || !result.success) {
-        throw new Error(result.error || '读取腾讯邮箱联系人历史失败。');
-      }
-      return {
-        messages: result.data?.length ? result.data : threadMessages,
-        historyKey: `${mailAccountId}:${recipientEmail}:${replyTarget?.messageId || thread.id}`,
-      };
-    }
-    const loaded = await loadGmailAIContactHistory({
-      accountEmail: auth?.email,
-      thread,
-      contactEmail: recipientEmail,
-      targetMessageId: replyTarget?.messageId,
-      targetMessageDate: replyTarget?.date,
-      force,
-    });
-    return { messages: loaded.messages, historyKey: `${mailAccountId}:${loaded.historyKey}` };
-  };
-
   const analyzeThread = async (force = false) => {
     const runId = analysisRunRef.current + 1;
     analysisRunRef.current = runId;
@@ -417,10 +395,7 @@ export function EmailComposer({
     setSuggestion(null);
 
     try {
-      const { messages: contactHistory, historyKey } = await loadContactHistory(force);
-      if (runId !== analysisRunRef.current) return;
-      setHistoryMessages(contactHistory);
-      const analysisKey = buildGmailAIAnalysisCacheKey(historyKey, {
+      const analysisKey = buildGmailAIAnalysisCacheKey(strictHistoryKey, {
         modelProvider: settings.modelProvider,
         customApiUrl: settings.customApiUrl,
         customModelName: settings.customModelName,
@@ -429,7 +404,7 @@ export function EmailComposer({
       const analysisStartedAt = performance.now();
       const loaded = await getOrLoadGmailAIAnalysis(
         analysisKey,
-        () => invokeAI({ action: 'analyze' }, contactHistory) as Promise<CollaborationAnalysis>,
+        () => invokeAI({ action: 'analyze' }, threadMessages) as Promise<CollaborationAnalysis>,
         force,
       );
       if (runId !== analysisRunRef.current) return;
@@ -673,7 +648,7 @@ export function EmailComposer({
 
   const generateReply = () => {
     if (!userIdeas.trim()) return;
-    const generationMessages = historyMessages.length ? historyMessages : threadMessages;
+    const generationMessages = threadMessages;
     if (generationMessages.length === 0) {
       setAiError('当前邮件还没有可用于起草的正文，请稍后重试。');
       return;
@@ -818,6 +793,7 @@ export function EmailComposer({
             replyTone,
             gmailAccountEmail: ownEmail,
             targetMessageId: replyTarget?.messageId || '',
+            replyContext,
             draftPrompt: settings.aiDraftPrompt || settings.aiEmailPrompt || '',
             modelProvider: settings.modelProvider || 'builtin',
             customApiUrl: settings.customApiUrl || '',
@@ -1047,7 +1023,7 @@ export function EmailComposer({
 
   const optimizeReplyWithPortrait = async () => {
     if (!analysis || !suggestion || optimizationLoading || aiLoading) return;
-    const generationMessages = historyMessages.length ? historyMessages : threadMessages;
+    const generationMessages = threadMessages;
     const currentDraft = emailHtmlToText(replyContent).trim();
     if (!currentDraft || generationMessages.length === 0) {
       setOptimizationError('当前草稿或邮件上下文为空，暂时无法进行画像优化。');
@@ -1493,7 +1469,7 @@ export function EmailComposer({
         <p className="truncate text-sm font-semibold">{mode === 'ai' ? 'AI 邮件助手' : '手动回复'}</p>
         {mode === 'ai' && analysis && (
           <Badge variant="outline" className="hidden border-gray-200 bg-white font-normal text-gray-600 sm:inline-flex">
-            已分析 {historyMessages.length} 封邮件
+            已按当前会话分析 {threadMessages.length} 封邮件
           </Badge>
         )}
         {analysis && (
@@ -1937,12 +1913,14 @@ export function EmailComposer({
               ) : (
                 <div className="border-t border-gray-100 bg-gray-50">
                   <div className="flex items-center justify-between gap-3 border-b border-gray-100 px-4 py-2.5">
-                    <p className={`text-xs ${bilingualDraftTranslationCurrent ? 'text-emerald-700' : 'text-amber-700'}`}>
-                      {bilingualDraftTranslationCurrent
-                        ? bilingualDraftForeignEdited
-                          ? `外文已手动调整，中文依据未变化，可以直接保存${providerLabel}草稿。`
-                          : `中文依据已同步；满意时可以直接保存${providerLabel}草稿。`
-                        : '中文或回复语言已发生变化，请根据中文更新外文后再保存草稿。'}
+                    <p className={`text-xs ${translatingEditedReply || bilingualDraftTranslationCurrent ? 'text-emerald-700' : 'text-amber-700'}`}>
+                      {translatingEditedReply
+                        ? '正在根据中文更新外文邮件'
+                        : bilingualDraftTranslationCurrent
+                          ? bilingualDraftForeignEdited
+                            ? `外文已手动调整，中文依据未变化，可以直接保存${providerLabel}草稿。`
+                            : `中文依据已同步；满意时可以直接保存${providerLabel}草稿。`
+                          : '中文或回复语言已发生变化，请根据中文更新外文后再保存草稿。'}
                     </p>
                     <Button
                       type="button"

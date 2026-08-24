@@ -3,12 +3,14 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { loadCreatorResourceProfiles, type CreatorResourceProfile } from '@/lib/creator-resource-profile';
 import {
+  DAILY_MAIL_AUTO_REFRESH_MS,
   buildLegacyCompatibleGmailTaskCache,
   findUniqueLegacyGmailTaskMatch,
   getDailyGmailTaskKey,
   isWithinDailyGmailWindow,
   normalizeDailyMailTaskCache,
   resolveIncomingGmailCompletedAt,
+  shouldRefreshDailyMail,
 } from '@/lib/daily-gmail-todos';
 import { useGmailAuth, type AppSettings } from '@/lib/data';
 import { normalizeThreadContactEmail } from '@/lib/gmail-thread-contact';
@@ -65,8 +67,6 @@ export type DailyMailboxStatus = {
 };
 
 type StoredDailyGmailTask = Omit<DailyGmailTodo, 'snippet' | 'body' | 'summaryPending' | 'completed'>;
-
-const AUTO_REFRESH_MS = 5 * 60_000;
 
 function taskCacheToItems(cache: Record<string, StoredDailyGmailTask>) {
   return Object.values(normalizeDailyMailTaskCache(cache))
@@ -158,6 +158,9 @@ export function useDailyGmailTodos(settings: AppSettings, active = true) {
   const [error, setError] = useState('');
   const [sourceStatus, setSourceStatus] = useState<DailyMailboxStatus[]>([]);
   const runIdRef = useRef(0);
+  const loadInFlightRef = useRef<{ scope: string; request: Promise<void> } | null>(null);
+  const lastSuccessfulRefreshAtRef = useRef(0);
+  const lastSuccessfulRefreshScopeRef = useRef('');
   const summaryCacheRef = useRef(
     (accountData[USER_DATA_KEYS.DAILY_GMAIL_SUMMARIES] || {}) as Record<string, string>,
   );
@@ -177,6 +180,20 @@ export function useDailyGmailTodos(settings: AppSettings, active = true) {
     ...versionedTaskCache,
   }));
   const cacheMigrationCompletedRef = useRef(false);
+  const loadScope = [
+    auth?.isConnected ? auth.email?.trim().toLowerCase() : 'gmail-disconnected',
+    accounts
+      .map((account) => [
+        account.provider,
+        account.mailAccountId,
+        account.email.trim().toLowerCase(),
+        account.connectionStatus,
+      ].join(':'))
+      .sort()
+      .join(','),
+    settings.feishuUrl?.trim() || '',
+    JSON.stringify(settings.feishuFieldMapping || {}),
+  ].join('|');
 
   const getAccessToken = useCallback(async (force = false) => {
     if (!auth?.isConnected) throw new Error('请先连接 Gmail。');
@@ -200,12 +217,33 @@ export function useDailyGmailTodos(settings: AppSettings, active = true) {
     return String(result.data.accessToken);
   }, [auth, connect]);
 
-  const load = useCallback(async (force = false) => {
-    const runId = runIdRef.current + 1;
-    runIdRef.current = runId;
-    setError('');
-    setRefreshing(true);
-    try {
+  const load = useCallback((force = false, silent = false) => {
+    if (
+      !force
+      && lastSuccessfulRefreshScopeRef.current === loadScope
+      && !shouldRefreshDailyMail(lastSuccessfulRefreshAtRef.current)
+    ) {
+      return Promise.resolve();
+    }
+
+    const currentLoad = loadInFlightRef.current;
+    if (currentLoad?.scope === loadScope) {
+      if (!silent) setRefreshing(true);
+      return currentLoad.request.finally(() => {
+        if (!silent) setRefreshing(false);
+      });
+    }
+    if (currentLoad) {
+      runIdRef.current += 1;
+      loadInFlightRef.current = null;
+    }
+
+    const request = (async () => {
+      const runId = runIdRef.current + 1;
+      runIdRef.current = runId;
+      setError('');
+      if (!silent) setRefreshing(true);
+      try {
       if (!settings.feishuUrl || !settings.feishuFieldMapping?.email) {
         throw new Error('请先在设置中配置红人信息数据库及联系邮箱字段映射。');
       }
@@ -284,6 +322,7 @@ export function useDailyGmailTodos(settings: AppSettings, active = true) {
       };
 
       const settled = await Promise.allSettled(connectedAccounts.map(requestAccount));
+      if (runId !== runIdRef.current) return;
       const sourceErrors: string[] = [];
       const freshMessages: DailyGmailMessage[] = [];
       const connectedStatuses = settled.map((result, index): DailyMailboxStatus => {
@@ -445,6 +484,8 @@ export function useDailyGmailTodos(settings: AppSettings, active = true) {
         ...item,
         summaryPending: pendingSummaryKeys.has(messageCacheKey(item)),
       })));
+      lastSuccessfulRefreshAtRef.current = Date.now();
+      lastSuccessfulRefreshScopeRef.current = loadScope;
       setLoading(false);
       setRefreshing(false);
       setError(sourceErrors.join('；'));
@@ -521,13 +562,20 @@ export function useDailyGmailTodos(settings: AppSettings, active = true) {
         summaryPending: false,
         avatar: avatarByMessage.get(messageCacheKey(item)) || item.avatar,
       })));
-    } catch (caughtError) {
-      if (runId !== runIdRef.current) return;
-      setError(caughtError instanceof Error ? caughtError.message : '读取近 72 小时 Gmail 来信失败。');
-      setLoading(false);
-      setRefreshing(false);
-    }
-  }, [accounts, auth?.email, auth?.isConnected, getAccessToken, saveAccountData, settings]);
+      } catch (caughtError) {
+        if (runId !== runIdRef.current) return;
+        setError(caughtError instanceof Error ? caughtError.message : '读取近 72 小时 Gmail 来信失败。');
+        setLoading(false);
+        setRefreshing(false);
+      }
+    })();
+
+    loadInFlightRef.current = { scope: loadScope, request };
+    return request.finally(() => {
+      if (loadInFlightRef.current?.request === request) loadInFlightRef.current = null;
+      if (!silent) setRefreshing(false);
+    });
+  }, [accounts, auth?.email, auth?.isConnected, getAccessToken, loadScope, saveAccountData, settings]);
 
   useEffect(() => {
     if (cacheMigrationCompletedRef.current) return;
@@ -550,21 +598,37 @@ export function useDailyGmailTodos(settings: AppSettings, active = true) {
 
   useEffect(() => {
     if (!active) {
+      const cachedItems = taskCacheToItems(taskCacheRef.current);
+      setItems(cachedItems);
+      setLoading(cachedItems.length === 0);
       runIdRef.current += 1;
+      loadInFlightRef.current = null;
+      lastSuccessfulRefreshAtRef.current = 0;
+      lastSuccessfulRefreshScopeRef.current = '';
       setRefreshing(false);
       return;
     }
     const cachedTasks = taskCacheRef.current;
-    setItems(taskCacheToItems(cachedTasks));
-    void load();
-    const timer = window.setInterval(() => {
-      if (document.visibilityState === 'visible') void load();
-    }, AUTO_REFRESH_MS);
+    const cachedItems = taskCacheToItems(cachedTasks);
+    setItems(cachedItems);
+    setLoading(cachedItems.length === 0);
+    const refreshInBackgroundIfNeeded = () => {
+      if (document.visibilityState !== 'visible') return;
+      void load(false, true);
+    };
+    refreshInBackgroundIfNeeded();
+    const timer = window.setInterval(refreshInBackgroundIfNeeded, DAILY_MAIL_AUTO_REFRESH_MS);
+    document.addEventListener('visibilitychange', refreshInBackgroundIfNeeded);
     return () => {
-      runIdRef.current += 1;
       window.clearInterval(timer);
+      document.removeEventListener('visibilitychange', refreshInBackgroundIfNeeded);
     };
   }, [active, load]);
+
+  useEffect(() => () => {
+    runIdRef.current += 1;
+    loadInFlightRef.current = null;
+  }, []);
 
   const toggleCompleted = useCallback((taskId: string) => {
     const task = taskCacheRef.current[taskId];

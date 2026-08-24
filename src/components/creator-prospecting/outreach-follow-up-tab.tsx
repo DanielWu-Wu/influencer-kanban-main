@@ -10,6 +10,7 @@ import {
   CheckCircle2,
   Languages,
   Loader2,
+  LockKeyhole,
   MailCheck,
   PencilLine,
   RefreshCw,
@@ -17,6 +18,7 @@ import {
   Sparkles,
 } from 'lucide-react';
 import { toast } from 'sonner';
+import { zhCN } from 'date-fns/locale';
 import {
   AlertDialog,
   AlertDialogAction,
@@ -31,8 +33,8 @@ import { Alert, AlertDescription, AlertTitle } from '@/components/ui/alert';
 import { Avatar, AvatarFallback, AvatarImage } from '@/components/ui/avatar';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
+import { Calendar } from '@/components/ui/calendar';
 import { Field, FieldDescription, FieldError, FieldLabel } from '@/components/ui/field';
-import { Input } from '@/components/ui/input';
 import {
   Dialog,
   DialogContent,
@@ -44,6 +46,7 @@ import { ScrollArea } from '@/components/ui/scroll-area';
 import { Separator } from '@/components/ui/separator';
 import { Spinner } from '@/components/ui/spinner';
 import { Textarea } from '@/components/ui/textarea';
+import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover';
 import {
   Select,
   SelectContent,
@@ -76,7 +79,11 @@ import { useMailAccounts } from '@/components/mail-account-provider';
 import { useUserDataStore } from '@/components/user-data-provider';
 import { USER_DATA_KEYS } from '@/lib/account-data-keys';
 import { getMailProviderLabel } from '@/lib/mail-accounts';
-import { parseMailAccountBindings, resolveMailAccountBinding, upsertMailAccountBinding } from '@/lib/mail-account-bindings';
+import {
+  bindFeishuRecordsToMailAccount,
+  parseMailAccountBindings,
+  resolveMailAccountBinding,
+} from '@/lib/mail-account-bindings';
 import {
   buildChannelAvatarLookup,
   channelAvatarLookupPriority,
@@ -112,6 +119,14 @@ type MarkSentPreview = {
   stage: FollowUpStage;
   sentAt: number;
 };
+type BulkMailboxPreview = {
+  mailAccountId: string;
+  accountLabel: string;
+  total: number;
+  unselected: number;
+  same: number;
+  overwrite: number;
+};
 type Props = {
   settings: AppSettings;
   auth: GmailAuth | null;
@@ -127,6 +142,30 @@ function dateInputTimestamp(value: string, endOfDay = false) {
   if (Number.isNaN(date.getTime())) return 0;
   if (endOfDay) date.setHours(23, 59, 59, 999);
   return date.getTime();
+}
+
+function datePickerValue(date: Date) {
+  const year = date.getFullYear();
+  const month = String(date.getMonth() + 1).padStart(2, '0');
+  const day = String(date.getDate()).padStart(2, '0');
+  return `${year}-${month}-${day}`;
+}
+
+function selectedDate(value: string) {
+  const timestamp = dateInputTimestamp(value);
+  return timestamp ? new Date(timestamp) : undefined;
+}
+
+function datePickerLabel(value: string) {
+  return value ? value.replaceAll('-', '/') : 'yyyy/mm/dd';
+}
+
+function isMailboxTaskActive(task?: FollowUpDraftTask) {
+  return task ? ['checking', 'generating', 'translating', 'saving'].includes(task.status) : false;
+}
+
+function canDiscardMailboxTask(task?: FollowUpDraftTask) {
+  return task ? !['checking', 'generating', 'translating', 'saving', 'saved', 'feishu_error'].includes(task.status) : false;
 }
 
 
@@ -588,6 +627,7 @@ export function OutreachFollowUpTab({ settings, auth, onAuthRefresh }: Props) {
     translateTask,
     saveTask,
     clearTask,
+    clearTasks,
   } = useFollowUpDrafts();
   const mapping = useMemo(
     () => settings.feishuProspectingFieldMapping || {},
@@ -596,6 +636,8 @@ export function OutreachFollowUpTab({ settings, auth, onAuthRefresh }: Props) {
   const [rangeDays, setRangeDays] = useState<(typeof RANGE_OPTIONS)[number]>(10);
   const [customStartDate, setCustomStartDate] = useState('');
   const [customEndDate, setCustomEndDate] = useState('');
+  const [customStartOpen, setCustomStartOpen] = useState(false);
+  const [customEndOpen, setCustomEndOpen] = useState(false);
   const [records, setRecords] = useState<FollowUpRecord[]>([]);
   const [loading, setLoading] = useState(false);
   const [loadError, setLoadError] = useState('');
@@ -606,6 +648,7 @@ export function OutreachFollowUpTab({ settings, auth, onAuthRefresh }: Props) {
   const [batchReviewKey, setBatchReviewKey] = useState<string | null>(null);
   const [regenerateKey, setRegenerateKey] = useState<string | null>(null);
   const [writePreview, setWritePreview] = useState<WritePreview | null>(null);
+  const [bulkMailboxPreview, setBulkMailboxPreview] = useState<BulkMailboxPreview | null>(null);
   const [writeAllConfirmOpen, setWriteAllConfirmOpen] = useState(false);
   const [writeAllProgress, setWriteAllProgress] = useState<{
     completed: number;
@@ -630,42 +673,170 @@ export function OutreachFollowUpTab({ settings, auth, onAuthRefresh }: Props) {
     () => accounts.filter((account) => account.connectionStatus === 'connected' && account.capabilities.receive),
     [accounts],
   );
+  const mailBindingsRef = useRef(mailBindings);
+  const connectedMailAccountsRef = useRef(connectedMailAccounts);
   const resolveRecordMailbox = useCallback((recordId: string, email: string) => {
-    const binding = resolveMailAccountBinding(mailBindings, { feishuRecordId: recordId, contactEmail: email });
+    const binding = resolveMailAccountBinding(mailBindingsRef.current, { feishuRecordId: recordId, contactEmail: email });
     if (binding) {
-      const account = connectedMailAccounts.find((item) => item.mailAccountId === binding.mailAccountId);
+      const account = connectedMailAccountsRef.current.find((item) => item.mailAccountId === binding.mailAccountId);
       if (account) return { account, status: 'bound' as const };
       return { account: undefined, status: 'disconnected' as const };
     }
-    if (connectedMailAccounts.length === 1) return { account: connectedMailAccounts[0], status: 'legacy' as const };
+    if (connectedMailAccountsRef.current.length === 1) {
+      return { account: connectedMailAccountsRef.current[0], status: 'legacy' as const };
+    }
     return { account: undefined, status: 'unconfirmed' as const };
-  }, [connectedMailAccounts, mailBindings]);
+  }, []);
+
+  useEffect(() => {
+    mailBindingsRef.current = mailBindings;
+    connectedMailAccountsRef.current = connectedMailAccounts;
+    setRecords((current) => {
+      let changed = false;
+      const next = current.map((record) => {
+        const mailbox = resolveRecordMailbox(record.recordId, record.email);
+        const mailboxPatch = {
+          mailAccountId: mailbox.account?.mailAccountId,
+          provider: mailbox.account?.provider,
+          mailAddress: mailbox.account?.email,
+          mailBindingStatus: mailbox.status,
+        };
+        if (
+          record.mailAccountId === mailboxPatch.mailAccountId
+          && record.provider === mailboxPatch.provider
+          && record.mailAddress === mailboxPatch.mailAddress
+          && record.mailBindingStatus === mailboxPatch.mailBindingStatus
+        ) return record;
+        changed = true;
+        return { ...record, ...mailboxPatch };
+      });
+      return changed ? next : current;
+    });
+  }, [connectedMailAccounts, mailBindings, resolveRecordMailbox]);
+
+  const applyMailboxSelection = useCallback((targetRecords: FollowUpRecord[], mailAccountId: string) => {
+    const account = connectedMailAccounts.find((item) => item.mailAccountId === mailAccountId);
+    if (!account || !targetRecords.length) return false;
+    const selection = bindFeishuRecordsToMailAccount(
+      mailBindingsRef.current,
+      targetRecords.map((record) => ({
+        recordId: record.recordId,
+        contactEmail: record.email,
+        currentMailAccountId: record.mailAccountId,
+      })),
+      account,
+    );
+    if (!selection.changedRecordIds.length) {
+      toast.info('当前记录已经使用这个邮箱，无需重复保存。');
+      return true;
+    }
+
+    const changedIds = new Set(selection.changedRecordIds);
+    const accountChangedIds = new Set(selection.accountChangedRecordIds);
+    const busyRecord = targetRecords.find((record) => accountChangedIds.has(record.recordId) && (
+      checkingIds.includes(record.recordId)
+      || isMailboxTaskActive(tasks[followUpTaskKey(record.recordId, 2)])
+      || isMailboxTaskActive(tasks[followUpTaskKey(record.recordId, 3)])
+    ));
+    if (busyRecord) {
+      toast.warning(`${busyRecord.channelName} 正在检查、生成、翻译或保存，请完成后再修改邮箱。`);
+      return false;
+    }
+
+    const discardableTaskKeys = targetRecords.flatMap((record) => (
+      accountChangedIds.has(record.recordId)
+        ? [followUpTaskKey(record.recordId, 2), followUpTaskKey(record.recordId, 3)]
+          .filter((key) => canDiscardMailboxTask(tasks[key]))
+        : []
+    ));
+    clearTasks(discardableTaskKeys);
+    mailBindingsRef.current = selection.bindings;
+    saveAccountData(USER_DATA_KEYS.MAIL_ACCOUNT_BINDINGS, selection.bindings);
+    setRecords((current) => current.map((record) => {
+      if (!changedIds.has(record.recordId)) return record;
+      const accountChanged = accountChangedIds.has(record.recordId);
+      return {
+          ...record,
+          mailAccountId: account.mailAccountId,
+          provider: account.provider,
+          mailAddress: account.email,
+          mailBindingStatus: 'bound',
+          ...(accountChanged
+            ? {
+                check: undefined,
+                checkedAt: undefined,
+                checkError: undefined,
+                synced: undefined,
+              }
+            : {}),
+        };
+    }));
+    return true;
+  }, [checkingIds, clearTasks, connectedMailAccounts, saveAccountData, tasks]);
+
   const chooseRecordMailbox = useCallback((recordId: string, mailAccountId: string) => {
+    const record = records.find((item) => item.recordId === recordId);
+    if (!record || !applyMailboxSelection([record], mailAccountId)) return;
     const account = connectedMailAccounts.find((item) => item.mailAccountId === mailAccountId);
     if (!account) return;
-    const record = records.find((item) => item.recordId === recordId);
-    if (!record) return;
-    const existing = resolveMailAccountBinding(mailBindings, { feishuRecordId: record.recordId, contactEmail: record.email });
-    const nextBindings = upsertMailAccountBinding(mailBindings, {
-      prospectId: existing?.prospectId,
-      feishuRecordId: record.recordId,
-      contactEmail: record.email,
-      mailAccountId: account.mailAccountId,
-      provider: account.provider,
-      mailAddress: account.email,
-      draftRef: existing?.draftRef,
-      initialMessageRef: existing?.initialMessageRef,
-      folderRef: existing?.folderRef,
-      threadRef: existing?.threadRef,
-    });
-    saveAccountData(USER_DATA_KEYS.MAIL_ACCOUNT_BINDINGS, nextBindings);
-    clearTask(followUpTaskKey(record.recordId, 2));
-    clearTask(followUpTaskKey(record.recordId, 3));
-    setRecords((current) => current.map((item) => item.recordId === recordId
-      ? { ...item, mailAccountId: account.mailAccountId, provider: account.provider, mailAddress: account.email, mailBindingStatus: 'bound' }
-      : item));
     toast.success(`已将 ${record.channelName} 的 Follow Up 邮箱设为${getMailProviderLabel(account.provider)}。`);
-  }, [clearTask, connectedMailAccounts, mailBindings, records, saveAccountData]);
+  }, [applyMailboxSelection, connectedMailAccounts, records]);
+
+  const chooseBulkMailbox = useCallback((mailAccountId: string) => {
+    const account = connectedMailAccounts.find((item) => item.mailAccountId === mailAccountId);
+    if (!account || !records.length) return;
+    const selection = bindFeishuRecordsToMailAccount(
+      mailBindingsRef.current,
+      records.map((record) => ({ recordId: record.recordId, contactEmail: record.email })),
+      account,
+    );
+    if (!selection.changedRecordIds.length) {
+      toast.info('当前列表已经统一使用这个邮箱。');
+      return;
+    }
+    const preview: BulkMailboxPreview = {
+      mailAccountId,
+      accountLabel: `${getMailProviderLabel(account.provider)} · ${account.email}`,
+      total: records.length,
+      unselected: selection.unselected,
+      same: selection.same,
+      overwrite: selection.overwrite,
+    };
+    if (selection.overwrite > 0) {
+      setBulkMailboxPreview(preview);
+      return;
+    }
+    if (applyMailboxSelection(records, mailAccountId)) {
+      toast.success(`已为当前列表的 ${selection.changedRecordIds.length} 位红人统一选择写信邮箱。`);
+    }
+  }, [applyMailboxSelection, connectedMailAccounts, records]);
+
+  const confirmBulkMailbox = useCallback(() => {
+    if (!bulkMailboxPreview) return;
+    if (applyMailboxSelection(records, bulkMailboxPreview.mailAccountId)) {
+      setBulkMailboxPreview(null);
+      toast.success(`已为当前列表统一选择 ${bulkMailboxPreview.accountLabel}。`);
+    }
+  }, [applyMailboxSelection, bulkMailboxPreview, records]);
+
+  const bulkMailboxLockedId = useMemo(() => {
+    if (!records.length) return '';
+    const firstId = records[0]?.mailAccountId || '';
+    return firstId && records.every((record) => (
+      record.mailBindingStatus === 'bound' && record.mailAccountId === firstId
+    )) ? firstId : '';
+  }, [records]);
+  const hasMultipleMailboxStates = useMemo(() => {
+    const states = new Set(records.map((record) => (
+      record.mailBindingStatus === 'bound' ? record.mailAccountId || 'none' : 'none'
+    )));
+    return states.size > 1;
+  }, [records]);
+  const mailboxSelectionBusy = useMemo(() => records.some((record) => (
+    checkingIds.includes(record.recordId)
+    || isMailboxTaskActive(tasks[followUpTaskKey(record.recordId, 2)])
+    || isMailboxTaskActive(tasks[followUpTaskKey(record.recordId, 3)])
+  )), [checkingIds, records, tasks]);
   const customStartAt = dateInputTimestamp(customStartDate);
   const customEndAt = dateInputTimestamp(customEndDate, true);
   const hasCustomRange = Boolean(customStartAt && customEndAt);
@@ -1237,43 +1408,65 @@ export function OutreachFollowUpTab({ settings, auth, onAuthRefresh }: Props) {
             aria-label="自定义开发日期范围"
           >
             <CalendarDays className="ml-2 h-3.5 w-3.5 shrink-0 text-muted-foreground" />
-            <Input
-              type="date"
-              value={customStartDate}
-              max={customEndDate || undefined}
-              onChange={(event) => {
-                const nextStart = event.target.value;
-                if (!nextStart) {
-                  setCustomStartDate('');
-                  setCustomEndDate('');
-                  return;
-                }
-                setCustomStartDate(nextStart);
-                if (!customEndDate || nextStart > customEndDate) setCustomEndDate(nextStart);
-              }}
-              className="h-8 w-[8.5rem] border-0 bg-transparent px-2 text-xs shadow-none focus-visible:ring-0"
-              aria-label="开发日期开始"
-              title="开发日期开始"
-            />
+            <Popover open={customStartOpen} onOpenChange={setCustomStartOpen}>
+              <PopoverTrigger asChild>
+                <Button
+                  type="button"
+                  variant="ghost"
+                  className="h-8 w-[8.5rem] justify-between rounded px-2 text-xs font-normal"
+                  aria-label={`选择开发日期开始，当前为${datePickerLabel(customStartDate)}`}
+                  title="开发日期开始"
+                >
+                  <span>{datePickerLabel(customStartDate)}</span>
+                  <CalendarDays className="h-3.5 w-3.5 text-muted-foreground" />
+                </Button>
+              </PopoverTrigger>
+              <PopoverContent align="start" className="w-auto p-0">
+                <Calendar
+                  mode="single"
+                  locale={zhCN}
+                  selected={selectedDate(customStartDate)}
+                  defaultMonth={selectedDate(customStartDate) || selectedDate(customEndDate) || new Date()}
+                  onSelect={(date) => {
+                    if (!date) return;
+                    const nextStart = datePickerValue(date);
+                    setCustomStartDate(nextStart);
+                    if (!customEndDate || nextStart > customEndDate) setCustomEndDate(nextStart);
+                    setCustomStartOpen(false);
+                  }}
+                />
+              </PopoverContent>
+            </Popover>
             <span className="text-xs text-muted-foreground">至</span>
-            <Input
-              type="date"
-              value={customEndDate}
-              min={customStartDate || undefined}
-              onChange={(event) => {
-                const nextEnd = event.target.value;
-                if (!nextEnd) {
-                  setCustomStartDate('');
-                  setCustomEndDate('');
-                  return;
-                }
-                setCustomEndDate(nextEnd);
-                if (!customStartDate || nextEnd < customStartDate) setCustomStartDate(nextEnd);
-              }}
-              className="h-8 w-[8.5rem] border-0 bg-transparent px-2 text-xs shadow-none focus-visible:ring-0"
-              aria-label="开发日期结束"
-              title="开发日期结束"
-            />
+            <Popover open={customEndOpen} onOpenChange={setCustomEndOpen}>
+              <PopoverTrigger asChild>
+                <Button
+                  type="button"
+                  variant="ghost"
+                  className="h-8 w-[8.5rem] justify-between rounded px-2 text-xs font-normal"
+                  aria-label={`选择开发日期结束，当前为${datePickerLabel(customEndDate)}`}
+                  title="开发日期结束"
+                >
+                  <span>{datePickerLabel(customEndDate)}</span>
+                  <CalendarDays className="h-3.5 w-3.5 text-muted-foreground" />
+                </Button>
+              </PopoverTrigger>
+              <PopoverContent align="start" className="w-auto p-0">
+                <Calendar
+                  mode="single"
+                  locale={zhCN}
+                  selected={selectedDate(customEndDate)}
+                  defaultMonth={selectedDate(customEndDate) || selectedDate(customStartDate) || new Date()}
+                  onSelect={(date) => {
+                    if (!date) return;
+                    const nextEnd = datePickerValue(date);
+                    setCustomEndDate(nextEnd);
+                    if (!customStartDate || nextEnd < customStartDate) setCustomStartDate(nextEnd);
+                    setCustomEndOpen(false);
+                  }}
+                />
+              </PopoverContent>
+            </Popover>
           </div>
           <div className="flex rounded-md border border-border bg-background p-0.5" role="group" aria-label="开发日期范围">
             {RANGE_OPTIONS.map((days) => (
@@ -1347,7 +1540,39 @@ export function OutreachFollowUpTab({ settings, auth, onAuthRefresh }: Props) {
             <thead className="sticky top-0 z-10 bg-slate-50 text-xs text-muted-foreground">
               <tr className="border-b border-border/70">
                 <th className="px-4 py-3 font-medium">红人</th>
-                <th className="px-4 py-3 font-medium">邮件账号</th>
+                <th className="px-4 py-3 font-medium">
+                  <div className="flex min-w-[220px] flex-col items-start gap-1.5">
+                    <span>邮箱账号</span>
+                    <Select
+                      value={bulkMailboxLockedId}
+                      onValueChange={chooseBulkMailbox}
+                      disabled={loading || !records.length || !connectedMailAccounts.length || mailboxSelectionBusy}
+                    >
+                      <SelectTrigger className="h-8 w-[220px] bg-background text-xs font-normal text-foreground">
+                        <SelectValue
+                          placeholder={connectedMailAccounts.length
+                            ? hasMultipleMailboxStates ? '多个邮箱' : '统一选择写信邮箱'
+                            : '没有可用邮箱'}
+                        />
+                      </SelectTrigger>
+                      <SelectContent>
+                        {connectedMailAccounts.map((account) => (
+                          <SelectItem key={account.mailAccountId} value={account.mailAccountId}>
+                            {getMailProviderLabel(account.provider)} · {account.email}
+                          </SelectItem>
+                        ))}
+                      </SelectContent>
+                    </Select>
+                    <span className={`inline-flex items-center gap-1 text-[11px] ${bulkMailboxLockedId ? 'text-emerald-700' : 'text-muted-foreground'}`}>
+                      {bulkMailboxLockedId ? <LockKeyhole className="h-3 w-3" /> : null}
+                      {mailboxSelectionBusy
+                        ? '有任务处理中，暂不可统一修改'
+                        : bulkMailboxLockedId
+                          ? `已统一锁定 · 当前 ${records.length} 位`
+                          : `只影响当前列表 ${records.length} 位`}
+                    </span>
+                  </div>
+                </th>
                 <th className="px-4 py-3 font-medium">初次开发信</th>
                 <th className="px-4 py-3 font-medium">
                   <div className="flex items-center gap-2">
@@ -1443,6 +1668,9 @@ export function OutreachFollowUpTab({ settings, auth, onAuthRefresh }: Props) {
                 const secondDraftKey = followUpTaskKey(record.recordId, 3);
                 const firstTask = tasks[firstDraftKey];
                 const secondTask = tasks[secondDraftKey];
+                const mailboxBusy = checking
+                  || isMailboxTaskActive(firstTask)
+                  || isMailboxTaskActive(secondTask);
                 const firstSentAt = record.check?.outbound[1]?.date || record.secondOutreachDate;
                 const secondSentAt = record.check?.outbound[2]?.date || record.thirdOutreachDate;
                 return (
@@ -1471,8 +1699,9 @@ export function OutreachFollowUpTab({ settings, auth, onAuthRefresh }: Props) {
                     <td className="px-4 py-4">
                       <div className="min-w-[210px] space-y-1.5">
                         <Select
-                          value={record.mailAccountId || ''}
+                          value={record.mailBindingStatus === 'bound' ? record.mailAccountId || '' : ''}
                           onValueChange={(value) => chooseRecordMailbox(record.recordId, value)}
+                          disabled={mailboxBusy}
                         >
                           <SelectTrigger className="h-8 w-[220px] text-xs">
                             <SelectValue placeholder="选择邮箱" />
@@ -1486,7 +1715,9 @@ export function OutreachFollowUpTab({ settings, auth, onAuthRefresh }: Props) {
                           </SelectContent>
                         </Select>
                         <p className={`text-xs ${record.mailBindingStatus === 'unconfirmed' || record.mailBindingStatus === 'disconnected' ? 'text-amber-700' : 'text-muted-foreground'}`}>
-                          {record.mailBindingStatus === 'disconnected'
+                          {mailboxBusy
+                            ? '任务处理中，暂不可修改邮箱'
+                            : record.mailBindingStatus === 'disconnected'
                             ? '原绑定邮箱已断开，请重新选择'
                             : record.mailBindingStatus === 'unconfirmed'
                               ? '需要先选择邮箱'
@@ -1686,6 +1917,44 @@ export function OutreachFollowUpTab({ settings, auth, onAuthRefresh }: Props) {
           )}
         </DialogContent>
       </Dialog>
+
+      <AlertDialog
+        open={Boolean(bulkMailboxPreview)}
+        onOpenChange={(open) => !open && setBulkMailboxPreview(null)}
+      >
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>确认统一修改写信邮箱？</AlertDialogTitle>
+            <AlertDialogDescription>
+              这次只修改当前日期范围内已显示的 {bulkMailboxPreview?.total || 0} 位红人，不会写入飞书，也不会发送邮件。
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <div className="space-y-2 rounded-md border border-border bg-slate-50 p-3 text-sm">
+            <div className="flex justify-between gap-4">
+              <span className="text-muted-foreground">统一选择</span>
+              <span className="text-right font-medium">{bulkMailboxPreview?.accountLabel}</span>
+            </div>
+            <div className="flex justify-between gap-4">
+              <span className="text-muted-foreground">尚未选择</span>
+              <span className="font-medium">{bulkMailboxPreview?.unselected || 0} 位</span>
+            </div>
+            <div className="flex justify-between gap-4">
+              <span className="text-muted-foreground">已经相同</span>
+              <span className="font-medium">{bulkMailboxPreview?.same || 0} 位</span>
+            </div>
+            <div className="flex justify-between gap-4">
+              <span className="text-muted-foreground">将被覆盖</span>
+              <span className="font-medium text-amber-700">{bulkMailboxPreview?.overwrite || 0} 位</span>
+            </div>
+          </div>
+          <AlertDialogFooter>
+            <AlertDialogCancel>取消</AlertDialogCancel>
+            <AlertDialogAction onClick={(event) => { event.preventDefault(); confirmBulkMailbox(); }}>
+              <LockKeyhole className="h-4 w-4" />确认并统一锁定
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
 
       <AlertDialog open={Boolean(regenerateKey)} onOpenChange={(open) => !open && setRegenerateKey(null)}>
         <AlertDialogContent>

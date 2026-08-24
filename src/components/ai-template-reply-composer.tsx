@@ -48,10 +48,7 @@ import {
 } from '@/lib/email-content';
 import { detectReplyLanguage } from '@/lib/email-language';
 import {
-  buildGmailAIHistoryCacheKey,
-  getOrLoadGmailAIHistory,
-  GMAIL_AI_HISTORY_LIMIT,
-  mergeRecentGmailAIMessages,
+  buildMailAIThreadContextIdentity,
   scopeGmailAIMessagesToReplyTarget,
   type GmailAIHistoryMessage,
 } from '@/lib/gmail-ai-reply';
@@ -76,6 +73,7 @@ import {
   buildGmailEmailGenerationTaskKey,
   buildGmailEmailTranslationTaskKey,
   buildMailEmailGenerationTaskKey,
+  MAIL_AI_TASK_CONTEXT_VERSION,
 } from '@/lib/email-generation-tasks';
 import type { MailAccount, MailDraftLocator } from '@/lib/mail-accounts';
 import { saveTencentMailDraft } from '@/lib/tencent-mail-transport';
@@ -193,7 +191,17 @@ export function AITemplateReplyComposer({
   const ownEmail = mailAccount?.email || auth?.email || '';
   const mailAccountId = mailAccount?.mailAccountId || `gmail:${ownEmail.toLowerCase()}`;
 
-  const threadMessages = useMemo(() => buildThreadMessages(thread, replyTarget), [replyTarget, thread]);
+  const threadMessages = useMemo(() => buildThreadMessages(thread, replyTarget).map((message) => ({
+    ...message,
+    provider: isTencent ? 'tencent_exmail' as const : 'gmail' as const,
+    mailAccountId,
+  })), [isTencent, mailAccountId, replyTarget, thread]);
+  const replyContext = useMemo(() => buildMailAIThreadContextIdentity({
+    provider: isTencent ? 'tencent_exmail' : 'gmail',
+    mailAccountId,
+    threadId: thread.id,
+    targetMessageId: replyTarget?.messageId || '',
+  }), [isTencent, mailAccountId, replyTarget?.messageId, thread.id]);
   const externalMessage = replyTarget?.message;
   const recipientEmail = replyTarget?.recipientEmail || '';
   const languageName = LANGUAGE_OPTIONS.find(([code]) => code === targetLang)?.[1] || targetLang;
@@ -217,7 +225,7 @@ export function AITemplateReplyComposer({
       });
   const generationTask = getLatestTaskByKey(generationTaskKey);
   const translationTaskKey = isTencent
-    ? `email_translation:${mailAccountId}:template:${thread.id}:${replyTarget?.messageId || ''}`
+    ? `email_translation:${MAIL_AI_TASK_CONTEXT_VERSION}:${mailAccountId}:template:${thread.id}:${replyTarget?.messageId || ''}`
     : buildGmailEmailTranslationTaskKey({
         composerMode: 'template',
         threadId: thread.id,
@@ -394,66 +402,6 @@ export function AITemplateReplyComposer({
     return result.data.accessToken as string;
   };
 
-  const loadContactHistory = async (signal?: AbortSignal) => {
-    const cacheKey = buildGmailAIHistoryCacheKey({
-      accountEmail: `${isTencent ? 'tencent_exmail' : 'gmail'}:${mailAccountId}:${ownEmail}`,
-      threadId: thread.id,
-      contactEmail: recipientEmail || 'no-recipient',
-      targetMessageId: replyTarget?.messageId,
-      latestMessageDate: replyTarget?.date,
-    });
-    const loaded = await getOrLoadGmailAIHistory(cacheKey, async () => {
-      if (!recipientEmail || !replyTarget) return threadMessages;
-      if (isTencent) {
-        const params = new URLSearchParams({
-          action: 'contactHistory',
-          mailAccountId,
-          email: recipientEmail,
-          maxResults: String(GMAIL_AI_HISTORY_LIMIT),
-        });
-        const response = await fetch(`/api/mail/tencent?${params.toString()}`, {
-          cache: 'no-store',
-          signal,
-        });
-        const result = await response.json().catch(() => ({})) as {
-          success?: boolean;
-          data?: GmailAIHistoryMessage[];
-          error?: string;
-        };
-        if (!response.ok || !result.success) throw new Error(result.error || '读取腾讯邮箱联系人历史失败。');
-        const merged = mergeRecentGmailAIMessages(result.data || [], threadMessages);
-        return scopeGmailAIMessagesToReplyTarget(merged, replyTarget.messageId, replyTarget.date);
-      }
-      const accessToken = await getAccessToken(signal);
-      const response = await fetch('/api/gmail', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        signal,
-        body: JSON.stringify({
-          action: 'contactHistory',
-          accessToken,
-          contactEmail: recipientEmail,
-          maxResults: GMAIL_AI_HISTORY_LIMIT,
-          knownMessageIds: thread.messages.map((message) => message.id).filter(Boolean),
-        }),
-      });
-      const result = await response.json();
-      if (!response.ok || !result.success) throw new Error(result.error || '读取联系人历史邮件失败。');
-      const scopedFetched = scopeGmailAIMessagesToReplyTarget(
-        result.data || [],
-        replyTarget.messageId,
-        replyTarget.date,
-      );
-      const merged = mergeRecentGmailAIMessages(scopedFetched, threadMessages);
-      return scopeGmailAIMessagesToReplyTarget(
-        merged,
-        replyTarget.messageId,
-        replyTarget.date,
-      );
-    });
-    return loaded.value;
-  };
-
   const baseAIPayload = (
     history: GmailAIHistoryMessage[],
     template: AIReplyTemplate,
@@ -462,6 +410,7 @@ export function AITemplateReplyComposer({
     threadSubject: replyTarget?.subject || thread.subject,
     threadMessages: history,
     targetMessageId: replyTarget?.messageId || '',
+    replyContext,
     templateReply: true,
     replyTemplate: template,
     userIdeas: userIdeas.trim(),
@@ -545,11 +494,11 @@ export function AITemplateReplyComposer({
         setTranslatingChinese(false);
         setDraftSaved(false);
         setError('');
-        report('正在读取最近邮件上下文');
-    setStage('正在读取最近邮件上下文');
+        report('正在准备当前会话上下文');
+    setStage('正在准备当前会话上下文');
 
     try {
-      const history = await loadContactHistory(controller.signal);
+      const history = threadMessages;
       let finalResult: TemplateSuggestion | null = null;
       let streamError = '';
       let streamedBody = '';
@@ -1063,16 +1012,18 @@ export function AITemplateReplyComposer({
                         disabled={translatingChinese}
                       />
                       <div className="flex flex-wrap items-center justify-between gap-3 border-t bg-slate-50/70 px-3 py-2.5">
-                        <p className={`text-xs ${translationOutOfSync ? 'text-amber-700' : 'text-muted-foreground'}`}>
-                          {targetLanguageChanged
-                            ? `目标语言已改为${languageName}；请更新外文后再保存${providerLabel}草稿。`
-                            : chineseDirty
-                              ? `中文已修改；更新外文成功前不能保存${providerLabel}草稿。`
-                              : foreignManuallyEdited
-                                ? `外文已手动调整，中文对照可能未同步；可以直接保存${providerLabel}草稿。`
-                                : translationUpdated
-                                  ? `上方外文已按这份中文更新为${languageName}。`
-                                  : '请重点检查中文；无误可直接保存，修改后再由 AI 忠实更新外文。'}
+                        <p className={`text-xs ${translatingChinese ? 'text-emerald-700' : translationOutOfSync ? 'text-amber-700' : 'text-muted-foreground'}`}>
+                          {translatingChinese
+                            ? '正在根据中文更新外文邮件'
+                            : targetLanguageChanged
+                              ? `目标语言已改为${languageName}；请更新外文后再保存${providerLabel}草稿。`
+                              : chineseDirty
+                                ? `中文已修改；更新外文成功前不能保存${providerLabel}草稿。`
+                                : foreignManuallyEdited
+                                  ? `外文已手动调整，中文对照可能未同步；可以直接保存${providerLabel}草稿。`
+                                  : translationUpdated
+                                    ? `上方外文已按这份中文更新为${languageName}。`
+                                    : '请重点检查中文；无误可直接保存，修改后再由 AI 忠实更新外文。'}
                         </p>
                         <Button
                           type="button"

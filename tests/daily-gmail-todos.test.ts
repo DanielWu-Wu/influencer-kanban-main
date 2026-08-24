@@ -2,6 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import {
   DAILY_GMAIL_LOOKBACK_HOURS,
+  DAILY_MAIL_AUTO_REFRESH_MS,
   buildLegacyCompatibleGmailTaskCache,
   findUniqueLegacyGmailTaskMatch,
   getDailyGmailTaskKey,
@@ -11,6 +12,7 @@ import {
   resolveIncomingGmailCompletedAt,
   resolveLatestGmailAnswerAt,
   resolveLatestMatchingMailboxAnswerAt,
+  shouldRefreshDailyMail,
 } from '../src/lib/daily-gmail-todos';
 
 const NOW = Date.parse('2026-08-06T12:00:00.000Z');
@@ -26,6 +28,14 @@ test('Gmail 待办排除超过 72 小时、未来和无效日期', () => {
   assert.equal(isWithinDailyGmailWindow(new Date(NOW - 72 * HOUR_MS - 1).toISOString(), NOW), false);
   assert.equal(isWithinDailyGmailWindow(new Date(NOW + 1).toISOString(), NOW), false);
   assert.equal(isWithinDailyGmailWindow('invalid-date', NOW), false);
+});
+
+test('每日待办首次进入和缓存超过五分钟时才需要后台刷新', () => {
+  assert.equal(DAILY_MAIL_AUTO_REFRESH_MS, 5 * 60 * 1000);
+  assert.equal(shouldRefreshDailyMail(0, NOW), true);
+  assert.equal(shouldRefreshDailyMail(NOW - DAILY_MAIL_AUTO_REFRESH_MS + 1, NOW), false);
+  assert.equal(shouldRefreshDailyMail(NOW - DAILY_MAIL_AUTO_REFRESH_MS, NOW), true);
+  assert.equal(shouldRefreshDailyMail(NOW + 1, NOW), true);
 });
 
 test('Gmail 待办使用线程 ID 作为稳定任务键', () => {

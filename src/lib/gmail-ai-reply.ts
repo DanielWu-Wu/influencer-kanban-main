@@ -1,10 +1,13 @@
 import { ACCOUNT_SCOPE_CHANGED_EVENT, getAccountCacheScope } from '@/lib/account-cache-scope';
 import { isIgnoredGmailThreadSender } from '@/lib/gmail-thread-contact';
+import type { MailProvider } from '@/lib/mail-accounts';
 import type { GmailThread } from '@/lib/types';
 
 export type GmailAIHistoryMessage = {
   id?: string;
   threadId?: string;
+  provider?: MailProvider;
+  mailAccountId?: string;
   subject?: string;
   from?: string;
   to?: string;
@@ -21,23 +24,40 @@ export type GmailAIConversation = {
   messageCount: number;
 };
 
+export type MailAIThreadContextIdentity = {
+  version: typeof MAIL_AI_THREAD_CONTEXT_VERSION;
+  provider: MailProvider;
+  mailAccountId: string;
+  threadId: string;
+  targetMessageId: string;
+};
+
+export type ValidatedMailAIThreadContext = {
+  identity: MailAIThreadContextIdentity;
+  messages: GmailAIHistoryMessage[];
+};
+
 export const GMAIL_AI_HISTORY_LIMIT = 10;
 export const GMAIL_AI_CACHE_MS = 5 * 60_000;
 export const GMAIL_AI_CACHE_MAX_ENTRIES = 100;
 export const GMAIL_AI_MAX_CONVERSATION_CHARACTERS = 30_000;
 export const GMAIL_AI_MAX_MESSAGE_CHARACTERS = 3_500;
 export const GMAIL_AI_DRAFT_HISTORY_LIMIT = 6;
+export const MAIL_AI_THREAD_CONTEXT_VERSION = 2 as const;
 
 export function buildGmailAIThreadMessages(
   thread: GmailThread,
   targetMessageId = '',
   targetMessageDate?: string,
+  mailContext?: { provider: MailProvider; mailAccountId: string },
 ) {
   const messages = thread.messages
     .filter((message) => !isIgnoredGmailThreadSender(message.from))
     .map((message) => ({
       id: message.id,
       threadId: message.threadId,
+      provider: mailContext?.provider || message.provider,
+      mailAccountId: mailContext?.mailAccountId || message.mailAccountId,
       subject: message.subject || thread.subject,
       from: message.from,
       to: message.to,
@@ -123,6 +143,104 @@ function hashCachePart(value: string) {
     hash = Math.imul(hash, 16777619);
   }
   return (hash >>> 0).toString(36);
+}
+
+export function buildMailAIThreadContextIdentity(input: {
+  provider: MailProvider;
+  mailAccountId: string;
+  threadId: string;
+  targetMessageId: string;
+}): MailAIThreadContextIdentity {
+  return {
+    version: MAIL_AI_THREAD_CONTEXT_VERSION,
+    provider: input.provider,
+    mailAccountId: input.mailAccountId.trim(),
+    threadId: input.threadId.trim(),
+    targetMessageId: input.targetMessageId.trim(),
+  };
+}
+
+export function buildMailAIThreadContextCacheKey(
+  identity: MailAIThreadContextIdentity,
+  messages: GmailAIHistoryMessage[],
+) {
+  const messageFingerprint = messages.map((message) => [
+    message.id || '',
+    message.threadId || '',
+    message.date || '',
+    hashCachePart(String(message.body || '')),
+  ].join(':')).join('|');
+  return [
+    `thread-context-v${identity.version}`,
+    identity.provider,
+    identity.mailAccountId,
+    identity.threadId,
+    identity.targetMessageId,
+    hashCachePart(messageFingerprint),
+  ].join('|');
+}
+
+export function validateMailAIThreadContext(input: {
+  identity: unknown;
+  messages: unknown;
+}): ValidatedMailAIThreadContext {
+  const rawIdentity = input.identity && typeof input.identity === 'object'
+    ? input.identity as Record<string, unknown>
+    : {};
+  if (rawIdentity.provider !== 'gmail' && rawIdentity.provider !== 'tencent_exmail') {
+    throw new Error('邮件来源类型无效，请重新打开邮件后重试。');
+  }
+  const identity = buildMailAIThreadContextIdentity({
+    provider: rawIdentity.provider,
+    mailAccountId: String(rawIdentity.mailAccountId || ''),
+    threadId: String(rawIdentity.threadId || ''),
+    targetMessageId: String(rawIdentity.targetMessageId || ''),
+  });
+
+  if (rawIdentity.version !== MAIL_AI_THREAD_CONTEXT_VERSION) {
+    throw new Error('邮件上下文版本已过期，请刷新邮件后重试。');
+  }
+  if (!identity.mailAccountId || !identity.threadId || !identity.targetMessageId) {
+    throw new Error('邮件账号、会话或回复目标不完整，请重新打开邮件后重试。');
+  }
+  if (!Array.isArray(input.messages) || input.messages.length === 0) {
+    throw new Error('当前会话没有可供 AI 分析的邮件。');
+  }
+
+  const messages = (input.messages as GmailAIHistoryMessage[]).map((message) => ({
+    id: String(message?.id || ''),
+    threadId: String(message?.threadId || ''),
+    provider: message?.provider,
+    mailAccountId: String(message?.mailAccountId || ''),
+    subject: String(message?.subject || ''),
+    from: String(message?.from || ''),
+    to: String(message?.to || ''),
+    cc: String(message?.cc || ''),
+    replyTo: String(message?.replyTo || ''),
+    date: String(message?.date || ''),
+    body: String(message?.body || ''),
+  }));
+  if (messages.some((message) => (
+    !message.id
+    || message.threadId !== identity.threadId
+    || message.provider !== identity.provider
+    || message.mailAccountId !== identity.mailAccountId
+  ))) {
+    throw new Error('检测到其他邮件会话混入，AI 已停止生成。请刷新当前邮件后重试。');
+  }
+  const target = messages.find((message) => message.id === identity.targetMessageId);
+  if (!target) {
+    throw new Error('当前回复目标不在已加载会话中，请重新打开邮件后重试。');
+  }
+
+  return {
+    identity,
+    messages: scopeGmailAIMessagesToReplyTarget(
+      messages,
+      identity.targetMessageId,
+      target.date,
+    ),
+  };
 }
 
 function stripQuotedHistory(value: string) {

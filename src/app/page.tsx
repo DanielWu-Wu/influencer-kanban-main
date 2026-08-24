@@ -209,10 +209,24 @@ export default function DashboardPage() {
   const { todos, addTodo, updateTodo, toggleTodo, deleteTodo } = useTodos();
   const { events, addEvent, deleteEvent } = useCalendarEvents();
   const { settings, loading: settingsLoading } = useSettings();
-  const { accounts: mailAccounts, activeAccount, selectAccount } = useMailAccounts();
+  const {
+    accounts: mailAccounts,
+    activeAccount,
+    loading: mailAccountsLoading,
+    selectAccount,
+  } = useMailAccounts();
   const { unreadCount } = useGmailThreads();
   useGmailTranslationPrefetch(Boolean(user && account?.status === 'active' && !account.mustChangePassword));
-  const dailyGmail = useDailyGmailTodos(settings, currentView === 'todo');
+  const dailyGmail = useDailyGmailTodos(
+    settings,
+    Boolean(
+      user
+      && account?.status === 'active'
+      && !account.mustChangePassword
+      && !settingsLoading
+      && !mailAccountsLoading
+    ),
+  );
   const cooperationCalendar = useCooperationCalendarEvents({
     active: currentView === 'calendar',
     ready: !settingsLoading,

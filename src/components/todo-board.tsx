@@ -251,9 +251,6 @@ export function TodoBoard({
               <Badge variant="outline" className="h-5 shrink-0 px-1.5 text-[9px]">{entry.item.provider === 'tencent_exmail' ? '腾讯邮箱' : 'Gmail'}</Badge>
               <span className="min-w-0 flex-1 truncate text-[10px] line-through">{entry.item.subject || '无主题'}</span>
             </div>
-            <p className="mt-0.5 truncate text-[10px] text-slate-400 line-through" title={entry.item.mailAddress}>
-              来源邮箱：{entry.item.mailAddress || '未记录'}
-            </p>
             <p className="mt-1 truncate text-[11px] text-slate-500 line-through">
               {entry.item.summary}
               {entry.item.summaryPending && <span className="ml-2 text-[10px] text-blue-500">AI 正在优化摘要…</span>}
@@ -420,9 +417,6 @@ export function TodoBoard({
                     <Badge variant="outline" className="h-5 shrink-0 border-blue-100 bg-blue-50 px-1.5 text-[9px] font-medium text-blue-600"><Mail className="mr-1 h-2.5 w-2.5" />{entry.item.provider === 'tencent_exmail' ? '腾讯邮箱' : 'Gmail'}</Badge>
                     <span className="min-w-0 truncate text-[11px] text-muted-foreground">{entry.item.subject || '无主题'}</span>
                   </div>
-                  <p className="mt-0.5 truncate text-[10px] text-slate-400" title={entry.item.mailAddress}>
-                    来源邮箱：{entry.item.mailAddress || '未记录'}
-                  </p>
                   <p className="mt-1 truncate text-[11px] text-slate-600">{entry.item.summary}{entry.item.summaryPending && <span className="ml-2 text-[10px] text-blue-500">AI 正在优化摘要…</span>}</p>
                 </div>
                 <span className="w-12 shrink-0 text-right text-[10px] text-muted-foreground">{new Date(entry.item.date).toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit' })}</span>
