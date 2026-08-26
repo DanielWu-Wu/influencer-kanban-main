@@ -33,6 +33,7 @@ import {
   type AIConfigValidation,
   type AIProviderPresetId,
 } from '@/lib/ai-provider-config';
+import { AI_CONNECTION_TEST_ACTION } from '@/lib/ai-request-actions';
 import { APP_RELEASES, CURRENT_APP_RELEASE } from '@/lib/app-release';
 import {
   Settings, Zap,
@@ -271,17 +272,7 @@ export function SettingsPanel() {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
-          action: 'draft',
-          threadSubject: '测试连接',
-          threadMessages: [{
-            from: 'creator@example.com',
-            to: 'brand@example.com',
-            date: new Date().toISOString(),
-            body: 'This is a test collaboration message.',
-          }],
-          userIdeas: '请简单回复 OK',
-          targetLang: 'en',
-          targetLangName: '英语',
+          action: AI_CONNECTION_TEST_ACTION,
           modelProvider,
           customApiUrl,
           customModelName,

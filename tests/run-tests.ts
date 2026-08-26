@@ -26,6 +26,7 @@ import './prompt-template-settings.test';
 import './follow-up-draft-workflow.test';
 import './mail-account-bindings.test';
 import './ai-provider-config.test';
+import './ai-request-actions.test';
 import './ai-chinese-translation.test';
 import './feishu-app-credentials.test';
 import './dashboard-navigation.test';

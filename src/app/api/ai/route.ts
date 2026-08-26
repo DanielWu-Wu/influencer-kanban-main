@@ -16,6 +16,10 @@ import {
   type GmailAIHistoryMessage,
 } from '@/lib/gmail-ai-reply';
 import { validateChineseTranslation } from '@/lib/ai-chinese-translation';
+import {
+  AI_CONNECTION_TEST_ACTION,
+  requiresMailThreadContext,
+} from '@/lib/ai-request-actions';
 import { buildGmailTemplateDraftResult } from '@/lib/gmail-bilingual-draft';
 import { normalizeAIReplyTemplate } from '@/lib/ai-reply-templates';
 import { formatCooperationNoticeDate } from '@/lib/cooperation-projects';
@@ -58,8 +62,6 @@ type OutreachChannel = {
   recentAverageViews?: number | null;
   recentVideos?: OutreachVideo[];
 };
-
-const STRICT_MAIL_REPLY_ACTIONS = new Set(['analyze', 'draft', 'optimizeDraft', 'templateDraft']);
 
 function resolveChatOptions(options: ChatOptions): Required<Omit<ChatOptions, 'requestLabel'>> {
   const apiKey =
@@ -198,7 +200,7 @@ export async function POST(request: NextRequest) {
     let threadMessages = Array.isArray(body.threadMessages)
       ? body.threadMessages as GmailAIHistoryMessage[]
       : [];
-    if (STRICT_MAIL_REPLY_ACTIONS.has(action)) {
+    if (requiresMailThreadContext(action)) {
       let validatedContext: ReturnType<typeof validateMailAIThreadContext>;
       try {
         validatedContext = validateMailAIThreadContext({
@@ -224,6 +226,26 @@ export async function POST(request: NextRequest) {
         }, { status: 403 });
       }
       threadMessages = validatedContext.messages;
+    }
+
+    if (action === AI_CONNECTION_TEST_ACTION) {
+      const response = await invokeOpenAICompatibleApi(
+        [
+          {
+            role: 'system',
+            content: 'You are testing an AI API connection. Follow the user instruction briefly.',
+          },
+          {
+            role: 'user',
+            content: 'Reply with exactly: OK',
+          },
+        ],
+        getModelOptions(body, 0, 'connection-test'),
+      );
+      if (!response.trim()) {
+        throw new Error('模型接口已响应，但没有返回可读取的内容。');
+      }
+      return NextResponse.json({ success: true });
     }
 
     if (action === 'dailyGmailSummaries') {
