@@ -1784,7 +1784,7 @@ export function EmailDetail({
       <div
         className={`flex shrink-0 flex-col ${
           composerState === 'expanded' && (replyMode === 'ai' || replyMode === 'template')
-            ? 'h-[68dvh] min-h-0 overflow-hidden border-t border-gray-300 bg-white shadow-[0_-8px_24px_rgba(15,23,42,0.08)] sm:h-[min(62dvh,640px)]'
+            ? 'h-[min(48dvh,382px)] min-h-0 overflow-hidden border-t border-gray-300 bg-white shadow-[0_-8px_24px_rgba(15,23,42,0.08)]'
             : composerState === 'expanded'
               ? 'material-toolbar max-h-[72%] overflow-y-auto border-t border-border/55 p-4'
               : composerState === 'minimized'

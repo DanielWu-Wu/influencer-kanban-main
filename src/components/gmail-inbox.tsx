@@ -62,6 +62,10 @@ import { GMAIL_AUTH_CACHE_RESET_EVENT } from './gmail-auth-provider';
 import { ACCOUNT_SCOPE_CHANGED_EVENT, getAccountCacheScope } from '@/lib/account-cache-scope';
 import { GMAIL_PRIMARY_INBOX_REFRESHED_EVENT } from '@/lib/gmail-translation-prefetch';
 import {
+  mailTimestampToIso,
+  resolveGmailMessageTimestamp,
+} from '@/lib/mail-message-time';
+import {
   beginGmailReadStateOperation,
   clearGmailReadStateRuntime,
   copyGmailThreadReadState,
@@ -181,12 +185,13 @@ function getDateTimestamp(dateString: string | undefined): number {
 }
 
 function getApiMessageTimestamp(message: Record<string, unknown>): number {
-  const internalDate = Number(message.internalDate);
-  if (Number.isFinite(internalDate) && internalDate > 0) return internalDate;
-
   const payload = (message.payload || {}) as Record<string, unknown>;
   const headers = (payload.headers as { name: string; value: string }[]) || [];
-  return getDateTimestamp(getHeader(headers, 'Date'));
+  return resolveGmailMessageTimestamp({
+    headers,
+    internalDate: message.internalDate,
+    labelIds: (message.labelIds as string[]) || [],
+  });
 }
 
 function usesLatestIncomingMessage(mailbox: GmailMailbox): boolean {
@@ -482,13 +487,7 @@ async function parseGmailThread(
       : parsed.attachments;
     const htmlBody = repairTextEncoding(replaceInlineContentIds(parsed.htmlParts.join('\n'), attachments));
     const body = repairTextEncoding(parsed.textParts.join('\n\n') || htmlBody.replace(/<[^>]+>/g, ' '));
-    const rawDate = getHeader(headers, 'Date');
-    const internalDate = Number(message.internalDate);
-    const date = Number.isFinite(internalDate)
-      ? new Date(internalDate).toISOString()
-      : rawDate
-        ? new Date(rawDate).toISOString()
-        : '';
+    const date = mailTimestampToIso(getApiMessageTimestamp(message));
 
     return {
       id: String(message.id),
@@ -513,13 +512,9 @@ async function parseGmailThread(
   }));
 
   const participantCount = collectGmailThreadParticipants({ messages }).length;
-  const rawDate = getHeader(lastHeaders, 'Date');
-  const lastInternalDate = Number(apiMessages[apiMessages.length - 1]?.internalDate);
-  const lastMessageDate = Number.isFinite(lastInternalDate)
-    ? new Date(lastInternalDate).toISOString()
-    : rawDate
-      ? new Date(rawDate).toISOString()
-      : new Date().toISOString();
+  const lastMessageDate = mailTimestampToIso(
+    getApiMessageTimestamp(apiMessages[apiMessages.length - 1] || {}),
+  );
 
   return {
     id: String(apiThread.id),
@@ -1028,7 +1023,7 @@ export function GmailInbox({
           batch.map(async (thread) => {
             try {
               const response = await fetchWithTimeout(
-                `https://gmail.googleapis.com/gmail/v1/users/me/threads/${thread.id}?format=metadata&metadataHeaders=From&metadataHeaders=To&metadataHeaders=Subject&metadataHeaders=Date`,
+                `https://gmail.googleapis.com/gmail/v1/users/me/threads/${thread.id}?format=metadata&metadataHeaders=From&metadataHeaders=To&metadataHeaders=Subject&metadataHeaders=Date&metadataHeaders=Received`,
                 { headers },
                 12_000,
               );

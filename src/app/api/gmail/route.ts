@@ -7,6 +7,10 @@ import { getRequestUser } from '@/lib/supabase/server';
 import { resolveLatestGmailAnswerAt } from '@/lib/daily-gmail-todos';
 import { selectLatestGmailTranslationCandidate } from '@/lib/gmail-translation-candidates';
 import { wrapGmailDefaultEmailHtml } from '@/lib/gmail-compose-html';
+import {
+  mailTimestampToIso,
+  resolveGmailMessageTimestamp,
+} from '@/lib/mail-message-time';
 
 type GmailHeader = { name: string; value: string };
 type InlineImagePayload = {
@@ -151,14 +155,14 @@ function parseHistoryMessage(message: Record<string, unknown>) {
     .replace(/&amp;/gi, '&')
     .replace(/\s+/g, ' ')
     .trim();
-  const rawDate = getHeader(headers, 'Date');
+  const labelIds = Array.isArray(message.labelIds)
+    ? message.labelIds.map((label) => String(label || ''))
+    : [];
 
   return {
     id: String(message.id || ''),
     threadId: String(message.threadId || ''),
-    labelIds: Array.isArray(message.labelIds)
-      ? message.labelIds.map((label) => String(label || ''))
-      : [],
+    labelIds,
     mimeType: String(payload.mimeType || ''),
     rfcMessageId: getHeader(headers, 'Message-ID'),
     inReplyTo: getHeader(headers, 'In-Reply-To'),
@@ -169,7 +173,11 @@ function parseHistoryMessage(message: Record<string, unknown>) {
     cc: getHeader(headers, 'Cc'),
     bcc: getHeader(headers, 'Bcc'),
     replyTo: getHeader(headers, 'Reply-To'),
-    date: rawDate ? new Date(rawDate).toISOString() : '',
+    date: mailTimestampToIso(resolveGmailMessageTimestamp({
+      headers,
+      internalDate: message.internalDate,
+      labelIds,
+    })),
     snippet: repairTextEncoding(String(message.snippet || '')),
     body: repairTextEncoding(text.join('\n\n').trim() || htmlFallback || String(message.snippet || '')),
     automated: isAutomatedReply(headers, getHeader(headers, 'Subject'), getHeader(headers, 'From')),
@@ -339,7 +347,7 @@ export async function GET(request: NextRequest) {
         const threadDetails = await Promise.all(
           data.threads.map(async (thread: { id: string }) => {
             const threadRes = await fetch(
-              `https://gmail.googleapis.com/gmail/v1/users/me/threads/${thread.id}?format=metadata&metadataHeaders=Subject&metadataHeaders=From&metadataHeaders=To&metadataHeaders=Date`,
+              `https://gmail.googleapis.com/gmail/v1/users/me/threads/${thread.id}?format=metadata&metadataHeaders=Subject&metadataHeaders=From&metadataHeaders=To&metadataHeaders=Date&metadataHeaders=Received`,
               { headers }
             );
             if (!threadRes.ok) return thread;

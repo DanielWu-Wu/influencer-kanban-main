@@ -24,6 +24,10 @@ import {
   groupStrictMailConversations,
 } from './mail-conversation';
 import { ExpiringRequestCache } from './expiring-request-cache';
+import {
+  mailTimestampToIso,
+  resolveImapMessageTimestamp,
+} from './mail-message-time';
 
 const MAX_LIST_RESULTS = 50;
 const MAX_MESSAGE_BYTES = 32 * 1024 * 1024;
@@ -217,7 +221,11 @@ export async function listTencentThreads(options: {
             }
           }
           const subject = parsed?.subject || item.envelope?.subject || '(无主题)';
-          const date = item.envelope?.date || item.internalDate || new Date();
+          const date = mailTimestampToIso(resolveImapMessageTimestamp({
+            internalDate: item.internalDate,
+            parsedDate: parsed?.date,
+            envelopeDate: item.envelope?.date,
+          }));
           const from = addressText(parsed?.from) || envelopeAddressText(item.envelope?.from);
           const to = addressText(parsed?.to) || envelopeAddressText(item.envelope?.to);
           const messageId = parsed?.messageId || item.envelope?.messageId || `${options.account.mailAccountId}:${folder}:${item.uid}`;
@@ -240,7 +248,7 @@ export async function listTencentThreads(options: {
             subject,
             snippet,
             body,
-            date: new Date(date).toISOString(),
+            date,
             isRead: Boolean(item.flags?.has('\\Seen')),
             labels,
             hasAttachments: Boolean(parsed?.attachments.length),
@@ -370,7 +378,10 @@ async function loadTencentThread(options: {
             body,
             htmlBody: typeof parsed.html === 'string' ? parsed.html : parsed.textAsHtml,
             attachments,
-            date: (parsed.date || new Date(item.internalDate || Date.now())).toISOString(),
+            date: mailTimestampToIso(resolveImapMessageTimestamp({
+              internalDate: item.internalDate,
+              parsedDate: parsed.date,
+            })),
             isRead: Boolean(item.flags?.has('\\Seen')),
             labels: labelsForFolder(folder),
             hasAttachments: attachments.length > 0,
@@ -480,7 +491,11 @@ async function loadTencentThread(options: {
                 subject: parsed?.subject || item.envelope?.subject || '(无主题)',
                 snippet: '',
                 body: '',
-                date: new Date(parsed?.date || item.envelope?.date || item.internalDate || Date.now()).toISOString(),
+                date: mailTimestampToIso(resolveImapMessageTimestamp({
+                  internalDate: item.internalDate,
+                  parsedDate: parsed?.date,
+                  envelopeDate: item.envelope?.date,
+                })),
                 isRead: Boolean(item.flags?.has('\\Seen')),
                 labels: labelsForFolder(folder),
                 hasAttachments: false,
@@ -690,7 +705,11 @@ export async function listTencentDailyTodoMessages(options: {
           const parsed = item.headers ? await simpleParser(item.headers).catch(() => null) : null;
           recentSentItems.push({
             to: item.envelope?.to || [],
-            date: new Date(item.envelope?.date || item.internalDate || Date.now()),
+            date: new Date(resolveImapMessageTimestamp({
+              internalDate: item.internalDate,
+              parsedDate: parsed?.date,
+              envelopeDate: item.envelope?.date,
+            }) || 0),
             inReplyTo: parsed?.inReplyTo || String(item.envelope?.inReplyTo || '') || undefined,
             references: Array.isArray(parsed?.references)
               ? parsed.references.join(' ')
@@ -1092,7 +1111,10 @@ function followUpMessageFromParsed(options: {
   internalDate?: Date | string;
   labels: string[];
 }) : FollowUpMessage {
-  const date = new Date(options.parsed.date || options.internalDate || Date.now());
+  const date = mailTimestampToIso(resolveImapMessageTimestamp({
+    internalDate: options.internalDate,
+    parsedDate: options.parsed.date,
+  }));
   const messageId = options.parsed.messageId || `${options.account.mailAccountId}:${options.folder}:${options.uid}`;
   const references = Array.isArray(options.parsed.references)
     ? options.parsed.references.join(' ')
@@ -1108,7 +1130,7 @@ function followUpMessageFromParsed(options: {
     subject: options.parsed.subject || '(无主题)',
     from: addressText(options.parsed.from),
     to: addressText(options.parsed.to),
-    date: date.toISOString(),
+    date,
     body,
     providerMessageRef: String(options.uid),
     folderRef: options.folder,

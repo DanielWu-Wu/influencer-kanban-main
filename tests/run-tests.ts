@@ -41,4 +41,5 @@ import './email-translation-tasks.test';
 import './app-release.test';
 import './mail-draft-edit.test';
 import './mail-conversation.test';
+import './mail-message-time.test';
 import './expiring-request-cache.test';
