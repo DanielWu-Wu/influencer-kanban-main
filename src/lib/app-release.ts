@@ -9,6 +9,16 @@ export const APP_RELEASE_LAST_SEEN_STORAGE_KEY = 'influencer-board-last-seen-rel
 
 export const APP_RELEASES: readonly AppRelease[] = [
   {
+    version: '1.2.2',
+    releasedAt: '2026-08-26',
+    title: '邮件时间与生成体验优化',
+    highlights: [
+      '修复 Gmail 与腾讯企业邮箱部分邮件时间显示异常、最新邮件排序混乱的问题。',
+      '邮件生成进度新增百分比和阶段进度条，可以更清楚地查看每封邮件的生成状态。',
+      '红人开发台生成开发信后，标题、外文正文和中文对照现在可以直接修改，无需再点击“编辑邮件”。',
+    ],
+  },
+  {
     version: '1.2.1',
     releasedAt: '2026-08-24',
     title: '邮箱与工作流稳定性优化',

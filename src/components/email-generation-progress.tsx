@@ -13,11 +13,15 @@ import { Avatar, AvatarFallback, AvatarImage } from '@/components/ui/avatar';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover';
+import { Progress } from '@/components/ui/progress';
 import { ScrollArea } from '@/components/ui/scroll-area';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { Separator } from '@/components/ui/separator';
 import { useEmailGenerationTasks } from '@/components/email-generation-task-provider';
-import type { EmailGenerationTask } from '@/lib/email-generation-tasks';
+import {
+  resolveEmailGenerationTaskProgress,
+  type EmailGenerationTask,
+} from '@/lib/email-generation-tasks';
 import { getMailProviderLabel } from '@/lib/mail-accounts';
 
 function taskInitial(title: string) {
@@ -41,8 +45,32 @@ function TaskRow({
 }) {
   const { cancelTask, openTask, retryTask } = useEmailGenerationTasks();
   const canOpen = task.status !== 'cancelled';
+  const progress = resolveEmailGenerationTaskProgress(task);
+  const progressLabel = task.status === 'completed'
+    ? '100%'
+    : task.status === 'queued'
+      ? '排队中 · 0%'
+      : task.status === 'interrupted'
+        ? `${progress}% · 可重试`
+        : task.status === 'failed'
+          ? `失败于 ${progress}%`
+          : `约 ${progress}%`;
+  const progressClassName = task.status === 'completed'
+    ? 'bg-emerald-100 [&_[data-slot=progress-indicator]]:bg-emerald-500'
+    : task.status === 'failed'
+      ? 'bg-red-100 [&_[data-slot=progress-indicator]]:bg-red-500'
+      : task.status === 'interrupted' || task.status === 'queued'
+        ? 'bg-amber-100 [&_[data-slot=progress-indicator]]:bg-amber-500'
+        : 'bg-blue-100 [&_[data-slot=progress-indicator]]:bg-blue-600';
+  const progressTextClassName = task.status === 'completed'
+    ? 'text-emerald-700'
+    : task.status === 'failed'
+      ? 'text-red-700'
+      : task.status === 'interrupted' || task.status === 'queued'
+        ? 'text-amber-700'
+        : 'text-blue-700';
   return (
-    <div className="group flex min-h-16 items-center gap-3 px-3 py-2.5 transition-colors hover:bg-muted/45">
+    <div className="group flex min-h-20 items-center gap-3 px-3 py-2.5 transition-colors hover:bg-muted/45">
       <Avatar className="h-9 w-9 shrink-0 border border-border/60">
         {task.avatarUrl ? <AvatarImage src={task.avatarUrl} alt="" /> : null}
         <AvatarFallback className="bg-primary/10 text-xs font-semibold text-primary">
@@ -67,6 +95,16 @@ function TaskRow({
           {getMailProviderLabel(task.provider)} · {task.mailAddress || task.gmailEmail || '未记录来源邮箱'}
         </p>
         <p className="mt-0.5 truncate text-xs text-muted-foreground/80">{task.stage}</p>
+        <div className="mt-1.5 flex items-center gap-2">
+          <Progress
+            value={progress}
+            aria-label={`${task.title}，${progressLabel}，${task.stage}`}
+            className={`h-1.5 flex-1 ${progressClassName}`}
+          />
+          <span className={`shrink-0 text-[11px] font-medium tabular-nums ${progressTextClassName}`}>
+            {progressLabel}
+          </span>
+        </div>
       </button>
       {task.status === 'queued' || task.status === 'running' ? (
         <Button

@@ -7,7 +7,6 @@ import {
   CheckCircle2,
   ChevronDown,
   ChevronUp,
-  Edit3,
   ExternalLink,
   GripVertical,
   Image as ImageIcon,
@@ -43,11 +42,10 @@ import {
   formatCompactNumber,
   type Prospect,
 } from '@/lib/creator-prospecting';
-import { appendEmailSignature, stripConfiguredEmailSignature } from '@/lib/email-content';
+import { stripConfiguredEmailSignature } from '@/lib/email-content';
 import { outreachLanguageLabel } from '@/lib/outreach-languages';
 import { sanitizeOutreachEmailBody } from '@/lib/outreach-draft-sanitizer';
 import {
-  buildOutreachEmailHtml,
   clampImagePlacement,
   getRecommendedImagePlacement,
   selectedProductEmailAsset,
@@ -180,21 +178,17 @@ function MailPreview({
   prospect,
   product,
   emailSignature,
-  isEditing,
   isRegeneratingBody,
   regenerateDisabled,
   onPatch,
-  onEditingChange,
   onRegenerateBody,
 }: {
   prospect: Prospect;
   product: OutreachEmailProductAsset | null;
   emailSignature?: string;
-  isEditing: boolean;
   isRegeneratingBody: boolean;
   regenerateDisabled: boolean;
   onPatch: (id: string, patch: Partial<Prospect>) => void;
-  onEditingChange: (editing: boolean) => void;
   onRegenerateBody: () => void;
 }) {
   const body = stripConfiguredEmailSignature(
@@ -205,13 +199,6 @@ function MailPreview({
   const hasImage = Boolean(product?.mainImage?.dataUrl);
   const includeImage = hasImage && prospect.aiDraft?.productImageIncluded !== false;
   const imagePlacement = clampImagePlacement(prospect.aiDraft?.productImagePlacement, body, product);
-  const html = appendEmailSignature(buildOutreachEmailHtml({
-    body,
-    product,
-    imageSrc: product?.mainImage?.dataUrl,
-    imagePlacement,
-    includeImage,
-  }), emailSignature);
 
   const moveImage = (placement: number) => {
     if (!includeImage) return;
@@ -222,9 +209,9 @@ function MailPreview({
     <div>
       <div className="mb-1.5 flex flex-wrap items-center justify-between gap-2">
         <div>
-          <Label>邮件预览</Label>
+          <Label>外文邮件正文</Label>
           <p className="mt-0.5 text-xs text-muted-foreground">
-            {isEditing ? '正在编辑最终邮件正文，修改会直接用于 Gmail 草稿。' : '这里展示最终写入 Gmail 草稿的正文效果。'}
+            可直接修改；当前内容将用于最终保存的邮件草稿。
           </p>
         </div>
         <div className="flex items-center gap-2">
@@ -239,38 +226,15 @@ function MailPreview({
             {isRegeneratingBody ? <Loader2 className="mr-1 h-3.5 w-3.5 animate-spin" /> : <RefreshCw className="mr-1 h-3.5 w-3.5" />}
             重新生成正文
           </Button>
-          <Button
-            type="button"
-            size="sm"
-            variant={isEditing ? 'default' : 'outline'}
-            className="h-8 px-2 text-xs"
-            onClick={() => onEditingChange(!isEditing)}
-          >
-            {isEditing ? <CheckCircle2 className="mr-1 h-3.5 w-3.5" /> : <Edit3 className="mr-1 h-3.5 w-3.5" />}
-            {isEditing ? '完成编辑' : '编辑正文'}
-          </Button>
         </div>
       </div>
       <div className="grid gap-3 xl:grid-cols-[minmax(0,1fr)_220px]">
-        {isEditing ? (
-          <Textarea
-            value={body}
-            onChange={(event) => onPatch(prospect.id, patchDraft(prospect, { body: event.target.value }))}
-            className="min-h-[32rem] resize-y bg-white text-sm leading-6 focus-visible:ring-primary"
-            aria-label="编辑最终邮件正文"
-          />
-        ) : (
-          <div
-            className="min-h-64 rounded-md border bg-white p-4 text-sm leading-6 shadow-sm [&_a]:text-primary [&_a]:underline [&_img]:my-2"
-            onDragStart={(event) => {
-              const target = event.target as HTMLElement;
-              if (target.closest('[data-product-image="true"]')) {
-                event.dataTransfer.setData('text/plain', 'product-image');
-              }
-            }}
-            dangerouslySetInnerHTML={{ __html: html }}
-          />
-        )}
+        <Textarea
+          value={body}
+          onChange={(event) => onPatch(prospect.id, patchDraft(prospect, { body: event.target.value }))}
+          className="min-h-[32rem] resize-y bg-white text-sm leading-6 focus-visible:ring-primary"
+          aria-label="编辑最终邮件正文"
+        />
         {includeImage && (
           <div className="rounded-md border border-dashed bg-slate-50/80 p-2">
             <p className="mb-2 text-xs font-medium text-muted-foreground">主图位置</p>
@@ -323,7 +287,6 @@ export function OutreachEmailTab({
   openProspectRequest,
 }: Props) {
   const [query, setQuery] = useState('');
-  const [editingIds, setEditingIds] = useState<string[]>([]);
   const [expandedIds, setExpandedIds] = useState<string[]>(() => (
     prospects[0] ? [prospects[0].id] : []
   ));
@@ -427,7 +390,7 @@ export function OutreachEmailTab({
       <div className="flex flex-wrap items-center justify-between gap-3 border-b border-border/70 pb-3">
         <div>
           <h2 className="font-semibold">邮件审核队列</h2>
-          <p className="text-sm text-muted-foreground">生成后先人工检查和编辑，确认无误才允许写入 Gmail 草稿。</p>
+          <p className="text-sm text-muted-foreground">生成后可直接检查和编辑，确认无误才保存到所选邮箱草稿。</p>
         </div>
         <div className="flex flex-wrap items-center justify-end gap-2">
           <span className="text-xs text-muted-foreground">{filtered.length} 封待审核</span>
@@ -473,7 +436,6 @@ export function OutreachEmailTab({
 
       <div className="min-h-0 flex-1 space-y-3 overflow-y-auto pr-1">
         {filtered.map((prospect) => {
-          const isEditing = editingIds.includes(prospect.id);
           const isExpanded = expandedIds.includes(prospect.id);
           const safeDraftBody = sanitizeOutreachEmailBody(prospect.aiDraft?.body);
           const hasDraft = Boolean(prospect.aiDraft?.subject && safeDraftBody);
@@ -618,7 +580,7 @@ export function OutreachEmailTab({
                           type="email"
                           value={prospect.publicEmail || ''}
                           onChange={(event) => onEmailChange(prospect.id, event.target.value)}
-                          placeholder="补充邮箱后才能保存 Gmail 草稿"
+                          placeholder="补充邮箱后才能保存邮件草稿"
                           className="mt-1.5 h-9 bg-white"
                         />
                       </div>
@@ -716,11 +678,10 @@ export function OutreachEmailTab({
                             <Input
                               id={`subject-${prospect.id}`}
                               value={prospect.aiDraft?.subject || ''}
-                              readOnly={!isEditing}
                               onChange={(event) => onPatch(prospect.id, {
                                 aiDraft: { ...prospect.aiDraft!, subject: event.target.value },
                               })}
-                              className={`mt-1.5 ${isEditing ? 'bg-white' : 'bg-slate-50'}`}
+                              className="mt-1.5 bg-white"
                             />
                             {Boolean(prospect.aiDraft?.subjectOptions?.length) && (
                               <div className="mt-2 space-y-2">
@@ -771,15 +732,9 @@ export function OutreachEmailTab({
                             }}
                             product={productAsset}
                             emailSignature={emailSignature}
-                            isEditing={isEditing}
                             isRegeneratingBody={isRegeneratingBody}
                             regenerateDisabled={isGenerating || isRegeneratingSubject || isRegeneratingBody}
                             onPatch={onPatch}
-                            onEditingChange={(editing) => setEditingIds((current) => (
-                              editing
-                                ? Array.from(new Set([...current, prospect.id]))
-                                : current.filter((id) => id !== prospect.id)
-                            ))}
                             onRegenerateBody={() => onRegeneratePart(prospect, 'body')}
                           />
                           <div>
@@ -796,16 +751,15 @@ export function OutreachEmailTab({
                             <Textarea
                               id={`translation-${prospect.id}`}
                               value={prospect.aiDraft?.translatedBody || prospect.aiDraft?.translatedSummary || ''}
-                              readOnly={!isEditing}
                               onChange={(event) => updateChineseBody(prospect, event.target.value)}
-                              className={`mt-1.5 min-h-48 resize-y leading-6 ${isEditing ? 'bg-white' : 'bg-slate-50'}`}
+                              className="mt-1.5 min-h-48 resize-y bg-white leading-6"
                             />
                             <div className="mt-2 flex justify-end">
                               <Button
                                 type="button"
                                 size="sm"
                                 variant="outline"
-                                disabled={!translationUnsynced || translationBusy || !isEditing}
+                                disabled={!translationUnsynced || translationBusy}
                                 onClick={() => { void onTranslateChinese(prospect.id, currentChineseBody, targetLang); }}
                               >
                                 {translationBusy
@@ -844,17 +798,6 @@ export function OutreachEmailTab({
                         <Button variant="outline" onClick={() => onGenerate(prospect)} disabled={isGenerating}>
                           {isGenerating ? <Loader2 className="mr-1 h-4 w-4 animate-spin" /> : <RefreshCw className="mr-1 h-4 w-4" />}
                           重新生成
-                        </Button>
-                        <Button
-                          variant="outline"
-                          onClick={() => setEditingIds((current) => (
-                            current.includes(prospect.id)
-                              ? current.filter((id) => id !== prospect.id)
-                              : [...current, prospect.id]
-                          ))}
-                        >
-                          {isEditing ? <CheckCircle2 className="mr-1 h-4 w-4" /> : <Edit3 className="mr-1 h-4 w-4" />}
-                          {isEditing ? '完成编辑' : '编辑邮件'}
                         </Button>
                       </>
                     )}

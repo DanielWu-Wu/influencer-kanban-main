@@ -62,6 +62,7 @@ import {
   buildGmailEmailGenerationTaskKey,
   buildGmailEmailTranslationTaskKey,
   buildMailEmailGenerationTaskKey,
+  EMAIL_GENERATION_PROGRESS,
   MAIL_AI_TASK_CONTEXT_VERSION,
 } from '@/lib/email-generation-tasks';
 import type { MailAccount, MailDraftLocator } from '@/lib/mail-accounts';
@@ -730,7 +731,7 @@ export function EmailComposer({
         setAiError('');
         setOptimizedSuggestion(null);
         setOptimizationError('');
-        report('正在准备邮件上下文');
+        report('正在准备邮件上下文', undefined, EMAIL_GENERATION_PROGRESS.preparing);
     setGenerationStage('正在准备邮件上下文');
 
     try {
@@ -822,7 +823,13 @@ export function EmailComposer({
             }
             const nextStage = String(event.label || '正在生成草稿');
             setGenerationStage(nextStage);
-            report(nextStage);
+            report(
+              nextStage,
+              undefined,
+              event.stage === 'finalizing'
+                ? EMAIL_GENERATION_PROGRESS.translatingOrAnalyzing
+                : EMAIL_GENERATION_PROGRESS.generatingBody,
+            );
             return;
           }
           if (eventName === 'delta') {
@@ -884,7 +891,11 @@ export function EmailComposer({
           pendingBody = streamedBody.trim();
           pendingTranslation = '';
           setGenerationStage('正文已生成，正在单独补充中文对照');
-          report('正文已生成，正在补充中文对照');
+          report(
+            '正文已生成，正在补充中文对照',
+            undefined,
+            EMAIL_GENERATION_PROGRESS.translatingOrAnalyzing,
+          );
           flushStreamUi();
           try {
             const translatedReply = await translateDraftToChinese(
@@ -919,7 +930,11 @@ export function EmailComposer({
           }
         } else {
           setGenerationStage('流式生成不可用，正在使用兼容模式');
-          report('流式生成不可用，正在使用兼容模式');
+          report(
+            '流式生成不可用，正在使用兼容模式',
+            undefined,
+            EMAIL_GENERATION_PROGRESS.generatingBody,
+          );
           finalResult = await invokeAI({
             action: 'draft',
             analysis: analysis || {},
@@ -1130,7 +1145,11 @@ export function EmailComposer({
       },
       retryInput,
       run: async ({ signal, report }) => {
-        report(`正在翻译为${nextTargetLangName}`);
+        report(
+          `正在翻译为${nextTargetLangName}`,
+          undefined,
+          EMAIL_GENERATION_PROGRESS.translatingOrAnalyzing,
+        );
         const foreignBody = await requestEmailTranslation({
           chineseBody: normalizedChineseBody,
           targetLang: nextTargetLang,

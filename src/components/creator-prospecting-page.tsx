@@ -123,6 +123,7 @@ import { getMailProviderLabel } from '@/lib/mail-accounts';
 import {
   buildOutreachEmailGenerationTaskKey,
   buildOutreachEmailTranslationTaskKey,
+  EMAIL_GENERATION_PROGRESS,
 } from '@/lib/email-generation-tasks';
 import {
   EMAIL_TRANSLATION_RETRY_OPERATION,
@@ -3127,7 +3128,7 @@ export function CreatorProspectingPage({
       initialStage: '等待生成',
       run: async ({ signal, report }) => {
         setGeneratingId(prospect.id);
-        report('正在准备开发信上下文');
+        report('正在准备开发信上下文', undefined, EMAIL_GENERATION_PROGRESS.preparing);
         updateProspect(prospect.id, {
       aiDraft: {
         subject: '',
@@ -3165,9 +3166,15 @@ export function CreatorProspectingPage({
       const handleStreamEvent = (event: OutreachStreamEvent) => {
         if (event.event === 'stage' && event.data.stage) {
           updateProspect(prospect.id, { outreachGenerationStage: event.data.stage });
-          report(event.data.stage === 'finalizing'
-            ? '正在整理标题和中文翻译'
-            : '正在生成开发信');
+          report(
+            event.data.stage === 'finalizing'
+              ? '正在整理标题和中文翻译'
+              : '正在生成开发信',
+            undefined,
+            event.data.stage === 'finalizing'
+              ? EMAIL_GENERATION_PROGRESS.translatingOrAnalyzing
+              : EMAIL_GENERATION_PROGRESS.generatingBody,
+          );
         }
         if (event.event === 'delta') {
           const text = event.data.text || '';
@@ -3262,7 +3269,11 @@ export function CreatorProspectingPage({
       if (signal.aborted) return undefined;
       try {
         updateProspect(prospect.id, { outreachGenerationStage: 'finalizing' });
-        report('流式生成不可用，正在使用兼容模式');
+        report(
+          '流式生成不可用，正在使用兼容模式',
+          undefined,
+          EMAIL_GENERATION_PROGRESS.generatingBody,
+        );
         const generatedDraft = await generateOneShot(signal);
         const draft: OutreachDraft = {
           ...generatedDraft,
@@ -3415,7 +3426,11 @@ export function CreatorProspectingPage({
       initialStage: `等待翻译为${targetLangName}`,
       retryInput,
       run: async ({ signal, report }) => {
-        report(`正在翻译为${targetLangName}`);
+        report(
+          `正在翻译为${targetLangName}`,
+          undefined,
+          EMAIL_GENERATION_PROGRESS.translatingOrAnalyzing,
+        );
         const foreignBody = await requestEmailTranslation({
           chineseBody: normalizedChineseBody,
           targetLang,

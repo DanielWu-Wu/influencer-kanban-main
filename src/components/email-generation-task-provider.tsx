@@ -19,7 +19,9 @@ import {
 } from '@/components/gmail-auth-provider';
 import {
   EMAIL_GENERATION_TASK_OPEN_EVENT,
+  EMAIL_GENERATION_PROGRESS,
   EMAIL_GENERATION_TOASTER_ID,
+  advanceEmailGenerationProgress,
   markInterruptedEmailGenerationTasks,
   normalizeEmailGenerationConcurrency,
   readEmailGenerationTaskSnapshot,
@@ -37,7 +39,7 @@ import type { MailProvider } from '@/lib/mail-accounts';
 
 interface EmailGenerationTaskRunContext {
   signal: AbortSignal;
-  report: (stage: string, partialResult?: unknown) => void;
+  report: (stage: string, partialResult?: unknown, progress?: number) => void;
 }
 
 interface EnqueueEmailGenerationTaskInput {
@@ -217,12 +219,15 @@ export function EmailGenerationTaskProvider({ children }: { children: ReactNode 
     const controller = new AbortController();
     controllersRef.current.set(taskId, controller);
     const taskScopeKey = scopeKeyRef.current;
-    const report = (stage: string, partialResult?: unknown) => {
+    const report = (stage: string, partialResult?: unknown, progress?: number) => {
       if (disposedRef.current || controller.signal.aborted || scopeKeyRef.current !== taskScopeKey) return;
       replaceTasks((current) => current.map((task) => task.id === taskId
         ? {
             ...task,
             stage,
+            ...(progress === undefined
+              ? {}
+              : { progress: advanceEmailGenerationProgress(task.progress, progress) }),
             ...(partialResult === undefined ? {} : { partialResult }),
           }
         : task));
@@ -238,6 +243,7 @@ export function EmailGenerationTaskProvider({ children }: { children: ReactNode 
             ...task,
             status: 'completed',
             stage: task.kind === 'email_translation' ? '外文邮件已更新' : '已生成',
+            progress: EMAIL_GENERATION_PROGRESS.completed,
             completedAt: Date.now(),
             result,
             partialResult: undefined,
@@ -293,7 +299,13 @@ export function EmailGenerationTaskProvider({ children }: { children: ReactNode 
     if (startableIds.length === 0) return;
     const startedAt = Date.now();
     replaceTasks((current) => current.map((task) => startableIds.includes(task.id)
-      ? { ...task, status: 'running', stage: '正在准备', startedAt }
+      ? {
+          ...task,
+          status: 'running',
+          stage: '正在准备',
+          progress: EMAIL_GENERATION_PROGRESS.preparing,
+          startedAt,
+        }
       : task));
     startableIds.forEach(startTask);
   }, [replaceTasks, startTask]);
@@ -334,6 +346,7 @@ export function EmailGenerationTaskProvider({ children }: { children: ReactNode 
       description: input.description,
       avatarUrl: input.avatarUrl,
       stage: input.initialStage || '等待生成',
+      progress: EMAIL_GENERATION_PROGRESS.queued,
       navigation: input.navigation,
       createdAt: Date.now(),
       rollbackResult: input.rollbackResult,
@@ -377,6 +390,7 @@ export function EmailGenerationTaskProvider({ children }: { children: ReactNode 
           ...item,
           status: 'queued',
           stage: '等待重试',
+          progress: EMAIL_GENERATION_PROGRESS.queued,
           startedAt: undefined,
           completedAt: undefined,
           partialResult: undefined,

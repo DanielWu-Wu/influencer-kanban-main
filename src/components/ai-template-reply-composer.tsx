@@ -73,6 +73,7 @@ import {
   buildGmailEmailGenerationTaskKey,
   buildGmailEmailTranslationTaskKey,
   buildMailEmailGenerationTaskKey,
+  EMAIL_GENERATION_PROGRESS,
   MAIL_AI_TASK_CONTEXT_VERSION,
 } from '@/lib/email-generation-tasks';
 import type { MailAccount, MailDraftLocator } from '@/lib/mail-accounts';
@@ -494,7 +495,11 @@ export function AITemplateReplyComposer({
         setTranslatingChinese(false);
         setDraftSaved(false);
         setError('');
-        report('正在准备当前会话上下文');
+        report(
+          '正在准备当前会话上下文',
+          undefined,
+          EMAIL_GENERATION_PROGRESS.preparing,
+        );
     setStage('正在准备当前会话上下文');
 
     try {
@@ -503,7 +508,7 @@ export function AITemplateReplyComposer({
       let streamError = '';
       let streamedBody = '';
       setStage('正在生成外文邮件');
-      report('正在生成外文邮件');
+      report('正在生成外文邮件', undefined, EMAIL_GENERATION_PROGRESS.generatingBody);
       try {
         const response = await fetch('/api/ai/gmail-reply-stream', {
           method: 'POST',
@@ -526,7 +531,13 @@ export function AITemplateReplyComposer({
           if (eventName === 'stage') {
             const nextStage = String(event.label || '正在生成草稿');
             setStage(nextStage);
-            report(nextStage);
+            report(
+              nextStage,
+              undefined,
+              event.stage === 'finalizing'
+                ? EMAIL_GENERATION_PROGRESS.translatingOrAnalyzing
+                : EMAIL_GENERATION_PROGRESS.generatingBody,
+            );
           }
           if (eventName === 'delta') {
             streamedBody += String(event.text || '');
@@ -556,7 +567,11 @@ export function AITemplateReplyComposer({
         if (controller.signal.aborted) return;
         console.warn('[AI template reply stream fallback]', streamFailure);
         setStage('正在生成外文邮件');
-        report('流式生成不可用，正在使用兼容模式');
+        report(
+          '流式生成不可用，正在使用兼容模式',
+          undefined,
+          EMAIL_GENERATION_PROGRESS.generatingBody,
+        );
         const response = await fetch('/api/ai', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
@@ -692,7 +707,11 @@ export function AITemplateReplyComposer({
       },
       retryInput,
       run: async ({ signal, report }) => {
-        report(`正在翻译为${nextTargetLangName}`);
+        report(
+          `正在翻译为${nextTargetLangName}`,
+          undefined,
+          EMAIL_GENERATION_PROGRESS.translatingOrAnalyzing,
+        );
         const foreignBody = await requestEmailTranslation({
           chineseBody: normalizedChineseBody,
           targetLang: nextTargetLang,

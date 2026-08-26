@@ -1,8 +1,17 @@
 export const EMAIL_GENERATION_TASK_RETENTION_MS = 24 * 60 * 60 * 1000;
-export const EMAIL_GENERATION_TASKS_SCHEMA_VERSION = 2;
+export const EMAIL_GENERATION_TASKS_SCHEMA_VERSION = 3;
 export const EMAIL_GENERATION_TASK_OPEN_EVENT = 'email-generation-task-open';
 export const EMAIL_GENERATION_TOASTER_ID = 'email-generation-tasks';
 export const MAIL_AI_TASK_CONTEXT_VERSION = 'thread-v2';
+export const EMAIL_GENERATION_PROGRESS = {
+  queued: 0,
+  preparing: 10,
+  readingContext: 15,
+  generatingBody: 35,
+  organizingResult: 70,
+  translatingOrAnalyzing: 85,
+  completed: 100,
+} as const;
 
 export type EmailGenerationTaskKind =
   | 'gmail_ai_reply'
@@ -58,6 +67,7 @@ export interface EmailGenerationTask {
   description: string;
   avatarUrl?: string;
   stage: string;
+  progress?: number;
   navigation: EmailGenerationTaskNavigation;
   createdAt: number;
   startedAt?: number;
@@ -85,6 +95,27 @@ function cloneJsonValue(value: unknown) {
   } catch {
     return undefined;
   }
+}
+
+export function normalizeEmailGenerationProgress(value: unknown, fallback = 0) {
+  const numeric = typeof value === 'number' ? value : Number(value);
+  if (!Number.isFinite(numeric)) {
+    return Math.min(EMAIL_GENERATION_PROGRESS.completed, Math.max(0, Math.round(fallback)));
+  }
+  return Math.min(EMAIL_GENERATION_PROGRESS.completed, Math.max(0, Math.round(numeric)));
+}
+
+export function advanceEmailGenerationProgress(current: unknown, next: unknown) {
+  return Math.max(
+    normalizeEmailGenerationProgress(current),
+    normalizeEmailGenerationProgress(next),
+  );
+}
+
+export function resolveEmailGenerationTaskProgress(task: Pick<EmailGenerationTask, 'status' | 'progress'>) {
+  if (task.status === 'completed') return EMAIL_GENERATION_PROGRESS.completed;
+  if (task.status === 'queued') return EMAIL_GENERATION_PROGRESS.queued;
+  return normalizeEmailGenerationProgress(task.progress);
 }
 
 function parseNavigation(value: unknown): EmailGenerationTaskNavigation | null {
@@ -172,6 +203,11 @@ function parseTask(value: unknown): EmailGenerationTask | null {
     description: value.description,
     avatarUrl: typeof value.avatarUrl === 'string' ? value.avatarUrl : undefined,
     stage: value.stage,
+    progress: value.status === 'completed'
+      ? 100
+      : typeof value.progress === 'number'
+        ? normalizeEmailGenerationProgress(value.progress)
+        : undefined,
     navigation,
     createdAt: value.createdAt,
     startedAt: typeof value.startedAt === 'number' ? value.startedAt : undefined,

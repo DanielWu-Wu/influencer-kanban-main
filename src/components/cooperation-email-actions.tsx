@@ -80,6 +80,7 @@ import {
 } from '@/lib/mail-account-bindings';
 import { getMailProviderLabel, type MailAccount, type MailProvider } from '@/lib/mail-accounts';
 import { useEmailGenerationTasks } from '@/components/email-generation-task-provider';
+import { EMAIL_GENERATION_PROGRESS } from '@/lib/email-generation-tasks';
 import { useDelayedEmailSender } from '@/components/delayed-email-provider';
 import {
   createTencentClientMessageId,
@@ -488,10 +489,18 @@ export function CooperationEmailActions({
       retryInput: { type, recipient, mailAccountId: mailAccount.mailAccountId, conversationKey },
       run: async ({ signal, report }) => {
         try {
-          report(`正在读取${getMailProviderLabel(mailAccount.provider)}当前项目绑定会话`);
+          report(
+            `正在读取${getMailProviderLabel(mailAccount.provider)}当前项目绑定会话`,
+            undefined,
+            EMAIL_GENERATION_PROGRESS.readingContext,
+          );
           const validHistory = getUsableCooperationEmailHistory(selectedHistory);
           const thread = validHistory.at(-1);
-          report('正在生成外文与中文对照');
+          report(
+            '正在生成外文与中文对照',
+            undefined,
+            EMAIL_GENERATION_PROGRESS.generatingBody,
+          );
           const response = await fetch('/api/ai', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
@@ -523,6 +532,11 @@ export function CooperationEmailActions({
           });
           const result = await response.json();
           if (!response.ok || !result.success) throw new Error(String(result.error || '生成告知邮件失败。'));
+          report(
+            '正在整理生成结果',
+            undefined,
+            EMAIL_GENERATION_PROGRESS.organizingResult,
+          );
           const readyDraft: NoticeDraft = {
             type,
             status: 'ready',

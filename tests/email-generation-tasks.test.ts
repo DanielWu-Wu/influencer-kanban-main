@@ -2,7 +2,9 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 import {
   EMAIL_GENERATION_TASK_RETENTION_MS,
+  EMAIL_GENERATION_PROGRESS,
   MAIL_AI_TASK_CONTEXT_VERSION,
+  advanceEmailGenerationProgress,
   buildEmailGenerationTaskScopeKey,
   buildGmailEmailGenerationTaskKey,
   buildGmailEmailTranslationTaskKey,
@@ -11,9 +13,11 @@ import {
   buildOutreachEmailTranslationTaskKey,
   markInterruptedEmailGenerationTasks,
   normalizeEmailGenerationConcurrency,
+  normalizeEmailGenerationProgress,
   pruneExpiredEmailGenerationTasks,
   readEmailGenerationTaskSnapshot,
   replaceEmailGenerationTaskForKey,
+  resolveEmailGenerationTaskProgress,
   serializeEmailGenerationTasks,
   selectStartableEmailTaskIds,
   updateEmailGenerationTaskAvatar,
@@ -52,6 +56,38 @@ test('邮件生成并发数始终限制在 2 到 10', () => {
   assert.equal(normalizeEmailGenerationConcurrency(6.4), 6);
   assert.equal(normalizeEmailGenerationConcurrency(99), 10);
   assert.equal(normalizeEmailGenerationConcurrency(Number.NaN), 2);
+});
+
+test('邮件生成百分比始终限制在 0 到 100', () => {
+  assert.equal(normalizeEmailGenerationProgress(-10), 0);
+  assert.equal(normalizeEmailGenerationProgress(35.4), 35);
+  assert.equal(normalizeEmailGenerationProgress(160), 100);
+  assert.equal(normalizeEmailGenerationProgress(Number.NaN), 0);
+});
+
+test('邮件生成业务阶段使用固定百分比', () => {
+  assert.deepEqual(EMAIL_GENERATION_PROGRESS, {
+    queued: 0,
+    preparing: 10,
+    readingContext: 15,
+    generatingBody: 35,
+    organizingResult: 70,
+    translatingOrAnalyzing: 85,
+    completed: 100,
+  });
+});
+
+test('邮件生成进度只能前进，不能被较早阶段倒退', () => {
+  assert.equal(advanceEmailGenerationProgress(35, 15), 35);
+  assert.equal(advanceEmailGenerationProgress(35, 70), 70);
+  assert.equal(advanceEmailGenerationProgress(undefined, 10), 10);
+});
+
+test('只有成功任务显示 100%，其他状态保留自己的阶段进度', () => {
+  assert.equal(resolveEmailGenerationTaskProgress({ status: 'completed', progress: 85 }), 100);
+  assert.equal(resolveEmailGenerationTaskProgress({ status: 'failed', progress: 35 }), 35);
+  assert.equal(resolveEmailGenerationTaskProgress({ status: 'interrupted', progress: 70 }), 70);
+  assert.equal(resolveEmailGenerationTaskProgress({ status: 'queued', progress: 85 }), 0);
 });
 
 test('邮件生成任务按创建顺序进入空闲并发位', () => {
@@ -121,13 +157,14 @@ test('云端快照只保留可恢复字段，并能恢复已完成结果', () =>
   const original = {
     ...task('completed', 'completed', 1),
     completedAt: 2,
+    progress: 100,
     result: { suggestion: { suggestedReply: 'Hello' } },
     avatarUrl: 'https://yt3.ggpht.com/avatar.jpg',
     rollbackResult: { replyContent: '之前内容' },
     retryInput: { userIdeas: '礼貌确认发布时间', targetLang: 'en' },
   };
   const snapshot = serializeEmailGenerationTasks([original]);
-  assert.equal(snapshot.version, 2);
+  assert.equal(snapshot.version, 3);
   const [restored] = readEmailGenerationTaskSnapshot(snapshot);
   assert.equal(restored.id, original.id);
   assert.equal(restored.status, 'completed');
@@ -135,17 +172,45 @@ test('云端快照只保留可恢复字段，并能恢复已完成结果', () =>
   assert.deepEqual(restored.rollbackResult, original.rollbackResult);
   assert.deepEqual(restored.retryInput, original.retryInput);
   assert.equal(restored.avatarUrl, original.avatarUrl);
+  assert.equal(restored.progress, 100);
+});
+
+test('旧版云端任务没有百分比时仍可安全恢复', () => {
+  const oldTask = task('legacy', 'running', 1);
+  const [restored] = readEmailGenerationTaskSnapshot({
+    version: 2,
+    tasks: [oldTask],
+  });
+
+  assert.equal(restored.progress, undefined);
+  assert.equal(resolveEmailGenerationTaskProgress(restored), 0);
 });
 
 test('重新打开页面会把排队中和运行中的任务标记为中断，不会自动重跑', () => {
   const recovered = markInterruptedEmailGenerationTasks([
     task('queued', 'queued', 1),
-    task('running', 'running', 2),
+    { ...task('running', 'running', 2), progress: 35 },
     task('completed', 'completed', 3),
   ], 100);
   assert.deepEqual(recovered.map((item) => item.status), ['interrupted', 'interrupted', 'completed']);
   assert.equal(recovered[0].stage, '页面已关闭或会话已中断，可重试');
   assert.equal(recovered[1].completedAt, 100);
+  assert.equal(recovered[1].progress, 35);
+});
+
+test('并发任务分别保留自己的百分比，不会互相覆盖', () => {
+  const gmail = { ...task('gmail-progress', 'running', 1), progress: 35 };
+  const tencent = {
+    ...task('tencent-progress', 'running', 2),
+    provider: 'tencent_exmail' as const,
+    mailAccountId: 'tencent_exmail:owner@example.com',
+    progress: 85,
+  };
+
+  assert.deepEqual(
+    [gmail, tencent].map(resolveEmailGenerationTaskProgress),
+    [35, 85],
+  );
 });
 
 test('任务范围按系统账号和 Gmail 邮箱隔离', () => {
