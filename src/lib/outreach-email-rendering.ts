@@ -146,6 +146,15 @@ export function buildOutreachEmailHtml({
   return linkFirstProductMention(parts.join('<br>'), product);
 }
 
+export function buildOutreachEmailEditorHtml(
+  options: Parameters<typeof buildOutreachEmailHtml>[0],
+) {
+  return buildOutreachEmailHtml(options).replace(
+    '<div data-product-image="true" draggable="true"',
+    '<div data-product-image="true" contenteditable="false" draggable="true"',
+  );
+}
+
 export function getProductInlineImage(product?: OutreachEmailProductAsset | null): OutreachInlineImage | undefined {
   if (!product?.mainImage?.dataUrl) return undefined;
   return {

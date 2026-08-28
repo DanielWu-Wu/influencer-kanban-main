@@ -80,6 +80,7 @@ import {
   requestEmailTranslation,
   type EmailTranslationRetryInput,
 } from '@/lib/email-translation-tasks';
+import { cn } from '@/lib/utils';
 
 interface EmailComposerProps {
   thread: GmailThread;
@@ -92,6 +93,7 @@ interface EmailComposerProps {
   autoRetryRequest?: { taskId: string; retryInput?: unknown };
   avatarUrl?: string;
   mailAccount?: MailAccount;
+  embedded?: boolean;
 }
 
 type CollaborationAnalysis = {
@@ -198,6 +200,7 @@ export function EmailComposer({
   autoRetryRequest,
   avatarUrl,
   mailAccount,
+  embedded = false,
 }: EmailComposerProps) {
   const { addSuggestion } = useEmailAISuggestions();
   const { addDraft } = useEmailDrafts();
@@ -1487,12 +1490,12 @@ export function EmailComposer({
         </span>
         <p className="truncate text-sm font-semibold">{mode === 'ai' ? 'AI 邮件助手' : '手动回复'}</p>
         {mode === 'ai' && analysis && (
-          <Badge variant="outline" className="hidden border-gray-200 bg-white font-normal text-gray-600 sm:inline-flex">
+          <Badge variant="outline" className="hidden border-gray-200 bg-white font-normal text-gray-600 @2xl/email-composer:inline-flex">
             已按当前会话分析 {threadMessages.length} 封邮件
           </Badge>
         )}
         {analysis && (
-          <Badge variant="secondary" className="hidden bg-gray-100 font-normal text-gray-700 sm:inline-flex">
+          <Badge variant="secondary" className="hidden bg-gray-100 font-normal text-gray-700 @2xl/email-composer:inline-flex">
             来信：{analysis.languageName || targetLangName}
           </Badge>
         )}
@@ -1570,7 +1573,7 @@ export function EmailComposer({
   );
 
   const aiBody = (
-    <div className="flex flex-col gap-3 px-4 py-4 sm:px-5">
+    <div className="flex flex-col gap-3 px-4 py-4 @2xl/email-composer:px-5">
       {(analysisLoading || settingsLoading) && (
         <div className="flex items-center gap-3 rounded-lg border border-gray-200 bg-white p-4">
           <Loader2 className="size-5 animate-spin text-primary" />
@@ -1661,30 +1664,30 @@ export function EmailComposer({
               </p>
             </div>
 
-            <div className="grid lg:grid-cols-2">
+            <div className="grid @3xl/email-composer:grid-cols-2">
               <AnalysisSection
                 title="当前合作判断"
                 content={analysis.creatorIntent}
                 secondary={analysis.attitude}
-                className="border-b border-gray-100 lg:border-b-0 lg:border-r"
+                className="border-b border-gray-100 @3xl/email-composer:border-b-0 @3xl/email-composer:border-r"
               />
               <AnalysisList
                 title="推荐回复策略"
                 items={analysis.replyStrategy}
-                className="border-b border-gray-100 lg:border-b-0"
+                className="border-b border-gray-100 @3xl/email-composer:border-b-0"
               />
               <AnalysisList
                 title="待确认事项"
                 items={analysis.openQuestions}
                 emptyText="当前没有需要额外确认的事项"
-                className="border-b border-gray-100 lg:border-b-0 lg:border-r lg:border-t"
+                className="border-b border-gray-100 @3xl/email-composer:border-b-0 @3xl/email-composer:border-r @3xl/email-composer:border-t"
               />
               <AnalysisList
                 title="风险提醒"
                 items={analysis.risks}
                 emptyText="暂未发现明显风险"
                 tone="warning"
-                className="lg:border-t"
+                className="@3xl/email-composer:border-t"
               />
             </div>
           </section>
@@ -1697,8 +1700,8 @@ export function EmailComposer({
               </Button>
             </CollapsibleTrigger>
             <CollapsibleContent>
-              <div className="grid border-t border-gray-100 sm:grid-cols-2">
-                <AnalysisSection title="红人的态度" content={analysis.attitude} className="border-b border-gray-100 sm:border-r" />
+              <div className="grid border-t border-gray-100 @2xl/email-composer:grid-cols-2">
+                <AnalysisSection title="红人的态度" content={analysis.attitude} className="border-b border-gray-100 @2xl/email-composer:border-r" />
                 <AnalysisSection
                   title="沟通风格与当前情绪"
                   content={[
@@ -1707,11 +1710,11 @@ export function EmailComposer({
                   ].filter(Boolean).join('\n')}
                   className="border-b border-gray-100"
                 />
-                <AnalysisSection title="表面立场" content={analysis.statedPosition || ''} className="border-b border-gray-100 sm:border-r" />
+                <AnalysisSection title="表面立场" content={analysis.statedPosition || ''} className="border-b border-gray-100 @2xl/email-composer:border-r" />
                 <AnalysisSection title="核心利益" content={analysis.coreInterests || ''} className="border-b border-gray-100" />
-                <AnalysisList title="已确认事项" items={analysis.confirmedItems} className="border-b border-gray-100 sm:border-r" />
+                <AnalysisList title="已确认事项" items={analysis.confirmedItems} className="border-b border-gray-100 @2xl/email-composer:border-r" />
                 <AnalysisList title="沟通雷区" items={analysis.communicationRisks} className="border-b border-gray-100" />
-                <AnalysisList title="破局筹码" items={analysis.leverageOptions} className="sm:border-r" />
+                <AnalysisList title="破局筹码" items={analysis.leverageOptions} className="@2xl/email-composer:border-r" />
                 <AnalysisList title="补充回复建议" items={analysis.replyStrategy} />
               </div>
             </CollapsibleContent>
@@ -1762,12 +1765,12 @@ export function EmailComposer({
                   </Button>
                 )}
               </div>
-              <div className="grid sm:grid-cols-2">
+              <div className="grid @2xl/email-composer:grid-cols-2">
                 <AnalysisList
                   title="待确认事项"
                   items={analysis.openQuestions || []}
                   emptyText="当前没有需要额外确认的事项"
-                  className="border-b border-amber-100 sm:border-b-0 sm:border-r"
+                  className="border-b border-amber-100 @2xl/email-composer:border-b-0 @2xl/email-composer:border-r"
                   compact
                 />
                 <AnalysisList
@@ -1794,7 +1797,7 @@ export function EmailComposer({
                 </div>
                 <p className="mt-1 text-xs text-blue-800">先看中文差异；选定版本后如未再修改，可以直接保存{providerLabel}草稿。直接发送仍需人工确认。</p>
               </div>
-              <div className="grid lg:grid-cols-2">
+              <div className="grid @3xl/email-composer:grid-cols-2">
                 <DraftComparisonCard
                   title="当前版本"
                   chineseText={suggestion.translatedReply}
@@ -1804,7 +1807,7 @@ export function EmailComposer({
                     setOptimizedSuggestion(null);
                     setOptimizationError('');
                   }}
-                  className="border-b border-blue-100 lg:border-b-0 lg:border-r"
+                  className="border-b border-blue-100 @3xl/email-composer:border-b-0 @3xl/email-composer:border-r"
                 />
                 <DraftComparisonCard
                   title="画像优化版本"
@@ -1971,12 +1974,12 @@ export function EmailComposer({
 
   if (mode === 'ai') {
     return (
-      <div className="flex h-full min-h-0 flex-col bg-white text-gray-900">
-        {header}
+      <div className="@container/email-composer flex h-full min-h-0 flex-col bg-white text-gray-900">
+        {!embedded ? header : null}
         <ScrollArea className="min-h-0 flex-1 bg-[#F7F8FA]">{aiBody}</ScrollArea>
         <div className="shrink-0 border-t border-gray-200 bg-white px-4 py-3 shadow-[0_-4px_12px_rgba(15,23,42,0.035)]">
           {!suggestion ? (
-            <div className="flex flex-col gap-3 lg:flex-row lg:items-center lg:justify-between">
+            <div className="flex flex-col gap-3 @3xl/email-composer:flex-row @3xl/email-composer:items-center @3xl/email-composer:justify-between">
               {generationSettings}
               <Button
                 className="shrink-0"
@@ -1994,7 +1997,7 @@ export function EmailComposer({
               </Button>
             </div>
           ) : suggestion ? (
-            <div className="flex flex-col gap-3 xl:flex-row xl:items-center xl:justify-between">
+            <div className="flex flex-col gap-3 @4xl/email-composer:flex-row @4xl/email-composer:items-center @4xl/email-composer:justify-between">
               {generationSettings}
               <div className="flex flex-wrap items-center justify-end gap-2">
                 <span className={`mr-1 text-xs ${recipientEmail ? 'text-gray-500' : 'text-red-600'}`}>
@@ -2051,8 +2054,11 @@ export function EmailComposer({
   }
 
   return (
-    <div className="flex flex-col gap-4">
-      <div className="flex items-center justify-between">
+    <div className={cn(
+      '@container/email-composer flex flex-col gap-4',
+      embedded && 'h-full min-h-0 overflow-y-auto p-3',
+    )}>
+      {!embedded ? <div className="flex items-center justify-between">
         <Badge variant="secondary" className="gap-1">
           <Globe className="size-3" />
           手动回复
@@ -2060,7 +2066,7 @@ export function EmailComposer({
         <Button variant="ghost" size="icon" className="size-8" onClick={onClose} aria-label="关闭手动回复">
           <X />
         </Button>
-      </div>
+      </div> : null}
       <input
         ref={fileInputRef}
         type="file"
@@ -2078,7 +2084,14 @@ export function EmailComposer({
       {attachmentList}
       <p className="text-xs text-muted-foreground">支持图片、PDF、文档等常见文件，附件总大小上限为 18 MB。</p>
       {attachmentError && <p className="text-xs text-destructive">{attachmentError}</p>}
-      <RichEmailEditor value={replyContent} onChange={setReplyContent} placeholder="输入回复内容..." minHeight="12rem" />
+      <RichEmailEditor
+        value={replyContent}
+        onChange={setReplyContent}
+        placeholder="输入回复内容..."
+        minHeight="12rem"
+        fillHeight={embedded}
+        className={embedded ? 'min-h-52 flex-1' : undefined}
+      />
       {aiError && <ErrorMessage message={aiError} />}
       <p className={`text-xs ${recipientEmail ? 'text-muted-foreground' : 'text-destructive'}`}>
         回复收件人：{recipientEmail || '尚未确认；AI 仍可正常生成内容'}

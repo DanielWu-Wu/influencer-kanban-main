@@ -87,6 +87,63 @@ export function repairTextEncoding(value: string) {
   return cleanupEncodingArtifacts(best);
 }
 
+function decodeEmailHtmlEntities(value: string) {
+  const namedEntities: Record<string, string> = {
+    amp: '&',
+    apos: "'",
+    gt: '>',
+    lt: '<',
+    nbsp: ' ',
+    quot: '"',
+  };
+
+  return value.replace(/&(#x[\da-f]+|#\d+|amp|apos|gt|lt|nbsp|quot);/gi, (match, entity: string) => {
+    const normalized = entity.toLowerCase();
+    if (namedEntities[normalized] !== undefined) return namedEntities[normalized];
+
+    const codePoint = normalized.startsWith('#x')
+      ? Number.parseInt(normalized.slice(2), 16)
+      : Number.parseInt(normalized.slice(1), 10);
+    if (!Number.isSafeInteger(codePoint) || codePoint < 0 || codePoint > 0x10ffff) return match;
+    return String.fromCodePoint(codePoint);
+  });
+}
+
+export function emailHtmlBodyToPlainText(value: string) {
+  if (!value.trim()) return '';
+
+  const text = value
+    .replace(/<!--[\s\S]*?-->/g, ' ')
+    .replace(/<(?:head|style|script)[^>]*>[\s\S]*?<\/(?:head|style|script)>/gi, ' ')
+    .replace(/<br\s*\/?>/gi, '\n')
+    .replace(/<li[^>]*>/gi, '• ')
+    .replace(/<\/(?:div|p|li|blockquote|h[1-6]|tr|table)>/gi, '\n')
+    .replace(/<\/?(?:td|th)[^>]*>/gi, ' ')
+    .replace(/<[^>]+>/g, ' ');
+
+  return repairTextEncoding(decodeEmailHtmlEntities(text))
+    .replace(/\r\n?/g, '\n')
+    .replace(/[ \t]+\n/g, '\n')
+    .replace(/\n[ \t]+/g, '\n')
+    .replace(/[ \t]{2,}/g, ' ')
+    .replace(/\n{3,}/g, '\n\n')
+    .trim();
+}
+
+export function resolveMailMessageReadableText(message: {
+  body?: string;
+  htmlBody?: string;
+  snippet?: string;
+}) {
+  const plainText = repairTextEncoding(String(message.body || ''));
+  if (plainText.trim()) return plainText;
+
+  const htmlText = emailHtmlBodyToPlainText(String(message.htmlBody || ''));
+  if (htmlText) return htmlText;
+
+  return repairTextEncoding(String(message.snippet || '')).trim();
+}
+
 const QUOTED_HISTORY_PATTERNS = [
   /^\s*-{2,}\s*Original Message\s*-{2,}\s*$/gim,
   /^\s*-{2,}\s*Forwarded message\s*-{2,}\s*$/gim,

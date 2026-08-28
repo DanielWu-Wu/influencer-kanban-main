@@ -98,6 +98,7 @@ import {
   inferLanguage,
   migrateProspects,
   normalizeYouTubeKey,
+  shouldAdvanceProspectingStage,
   type OutreachDraft,
   type Prospect,
   type OutreachGenerationStage,
@@ -2963,6 +2964,10 @@ export function CreatorProspectingPage({
     if (targets.length > 1 && !window.confirm(`确认将 ${targets.length} 个红人移入“邀约确认”吗？`)) return;
     const ids = new Set(targets.map((item) => item.id));
     const submittedIds = Array.from(ids);
+    const shouldAdvance = shouldAdvanceProspectingStage(
+      importProspects.map((item) => item.id),
+      submittedIds,
+    );
     if (!beginProspectWrite(submittedIds)) {
       toast.warning('所选红人已有飞书写入正在后台处理，请等待完成后再提交下一阶段。');
       return;
@@ -2973,7 +2978,7 @@ export function CreatorProspectingPage({
         : item
     )));
     setSelectedIds((current) => current.filter((id) => !ids.has(id)));
-    setActiveTab('invitation');
+    if (shouldAdvance) setActiveTab('invitation');
     if (!settings.feishuProspectingUrl) {
       finishProspectWrite(submittedIds);
       toast.warning(`已将 ${targets.length} 个红人移入邀约确认；未连接飞书，状态仅保存在本地。`);
@@ -3014,7 +3019,7 @@ export function CreatorProspectingPage({
         invalidateDevelopmentSnapshot();
       }
       if (failedById.size) {
-        toast.warning(`已切换到邀约确认；${failedById.size} 条飞书状态同步失败，可稍后重试。`);
+        toast.warning(`已完成阶段更新；${failedById.size} 条飞书状态同步失败，可稍后重试。`);
       } else {
         toast.success(`已将 ${targets.length} 个红人移入邀约确认。`);
       }
@@ -3023,7 +3028,7 @@ export function CreatorProspectingPage({
       setProspects((current) => current.map((item) => (
         ids.has(item.id) ? { ...item, syncError: message } : item
       )));
-      toast.warning(`已切换到邀约确认；飞书状态同步失败，可稍后重试。${message}`);
+      toast.warning(`已完成阶段更新；飞书状态同步失败，可稍后重试。${message}`);
     } finally {
       finishProspectWrite(submittedIds);
     }
@@ -3048,8 +3053,12 @@ export function CreatorProspectingPage({
       return;
     }
     const nextProspect: Prospect = { ...prospect, workflowStatus: 'outreach_pending' };
+    const shouldAdvance = shouldAdvanceProspectingStage(
+      invitationProspects.map((item) => item.id),
+      [prospect.id],
+    );
     updateProspect(prospect.id, { workflowStatus: 'outreach_pending', error: undefined });
-    setActiveTab('outreach');
+    if (shouldAdvance) setActiveTab('outreach');
     toast.success('邀约方向已确认，正在生成开发信。');
     void syncFeishuProspect(prospect, { workflowStatus: 'outreach_pending' });
     void handleGenerateOutreach(nextProspect);
@@ -3571,6 +3580,12 @@ export function CreatorProspectingPage({
         error: undefined,
       };
       updateProspect(prospect.id, patch);
+      if (shouldAdvanceProspectingStage(
+        outreachProspects.map((item) => item.id),
+        [prospect.id],
+      )) {
+        setActiveTab('follow_up');
+      }
       const currentBindings = parseMailAccountBindings(accountData[USER_DATA_KEYS.MAIL_ACCOUNT_BINDINGS]);
       saveAccountData(USER_DATA_KEYS.MAIL_ACCOUNT_BINDINGS, upsertMailAccountBinding(currentBindings, {
         prospectId: prospect.id,
@@ -3614,7 +3629,15 @@ export function CreatorProspectingPage({
 
   const handleSkip = async (prospect: Prospect) => {
     if (!window.confirm(`确认跳过 ${prospect.title || '该红人'} 吗？`)) return;
+    const nextTab = activeTab === 'invitation'
+      && shouldAdvanceProspectingStage(invitationProspects.map((item) => item.id), [prospect.id])
+      ? 'outreach'
+      : activeTab === 'outreach'
+        && shouldAdvanceProspectingStage(outreachProspects.map((item) => item.id), [prospect.id])
+        ? 'follow_up'
+        : null;
     updateProspect(prospect.id, { workflowStatus: 'skipped' });
+    if (nextTab) setActiveTab(nextTab);
     await syncFeishuProspect(prospect, { workflowStatus: 'skipped' });
     toast.success('已标记为跳过。');
   };

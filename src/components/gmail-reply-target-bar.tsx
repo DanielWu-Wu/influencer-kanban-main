@@ -12,6 +12,7 @@ import {
   normalizeThreadContactEmail,
 } from '@/lib/gmail-thread-contact';
 import { parseGmailAddresses, type GmailReplyTarget } from '@/lib/gmail-reply-target';
+import { cn } from '@/lib/utils';
 
 const SOURCE_LABELS: Record<GmailReplyTarget['recipientCandidates'][number]['source'], string> = {
   'reply-to': '邮件 Reply-To',
@@ -27,11 +28,13 @@ export function GmailReplyTargetBar({
   ownEmail,
   onRecipientChange,
   onChooseMessage,
+  compact = false,
 }: {
   target: GmailReplyTarget;
   ownEmail?: string;
   onRecipientChange: (email: string) => void;
   onChooseMessage: () => void;
+  compact?: boolean;
 }) {
   const [recipientOpen, setRecipientOpen] = useState(false);
   const [manualEmail, setManualEmail] = useState('');
@@ -64,11 +67,14 @@ export function GmailReplyTargetBar({
   };
 
   return (
-    <div className="flex shrink-0 flex-wrap items-center gap-3 border-b border-border/55 bg-primary/[0.035] px-4 py-2.5">
+    <div className={cn(
+      'flex shrink-0 flex-wrap items-center gap-3 border-b border-border/55 bg-primary/[0.035] px-4 py-2.5',
+      compact && 'items-start gap-2 px-3 py-2',
+    )}>
       <span className="flex size-8 shrink-0 items-center justify-center rounded-lg bg-primary/10 text-primary">
         <Mail />
       </span>
-      <div className="min-w-48 flex-1">
+      <div className={cn('min-w-48 flex-1', compact && 'min-w-0 basis-[calc(100%-2.5rem)]')}>
         <div className="flex flex-wrap items-center gap-2">
           <p className="truncate text-sm font-medium">
             正在基于：{sender?.name || sender?.email || target.message.from || '所选邮件'}
@@ -81,8 +87,11 @@ export function GmailReplyTargetBar({
           {target.subject} · {new Date(target.date).toLocaleString('zh-CN')}
         </p>
       </div>
-      <div className="flex flex-wrap items-center gap-2">
-        <span className={target.recipientConfirmed ? 'text-xs text-muted-foreground' : 'text-xs text-destructive'}>
+      <div className={cn('flex flex-wrap items-center gap-2', compact && 'w-full justify-end pl-10')}>
+        <span className={cn(
+          'min-w-0 flex-1 truncate text-xs',
+          target.recipientConfirmed ? 'text-muted-foreground' : 'text-destructive',
+        )}>
           收件人：{target.recipientEmail || '保存草稿前需确认'}
         </span>
         <Popover open={recipientOpen} onOpenChange={setRecipientOpen}>

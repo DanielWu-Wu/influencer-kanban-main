@@ -8,13 +8,12 @@ import {
   RotateCcw,
   X,
 } from 'lucide-react';
-import { useState } from 'react';
+import { useState, type KeyboardEvent } from 'react';
 import { Avatar, AvatarFallback, AvatarImage } from '@/components/ui/avatar';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover';
 import { Progress } from '@/components/ui/progress';
-import { ScrollArea } from '@/components/ui/scroll-area';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { Separator } from '@/components/ui/separator';
 import { useEmailGenerationTasks } from '@/components/email-generation-task-provider';
@@ -36,6 +35,33 @@ function taskStatusIcon(task: EmailGenerationTask) {
   return <X className="h-3.5 w-3.5 text-destructive" />;
 }
 
+function handleTaskListKeyDown(event: KeyboardEvent<HTMLDivElement>) {
+  if (event.target !== event.currentTarget) return;
+
+  const list = event.currentTarget;
+  const pageDistance = Math.max(80, list.clientHeight * 0.85);
+  let distance = 0;
+
+  if (event.key === 'ArrowDown') distance = 40;
+  else if (event.key === 'ArrowUp') distance = -40;
+  else if (event.key === 'PageDown' || (event.key === ' ' && !event.shiftKey)) distance = pageDistance;
+  else if (event.key === 'PageUp' || (event.key === ' ' && event.shiftKey)) distance = -pageDistance;
+  else if (event.key === 'Home') {
+    event.preventDefault();
+    list.scrollTo({ top: 0 });
+    return;
+  } else if (event.key === 'End') {
+    event.preventDefault();
+    list.scrollTo({ top: list.scrollHeight });
+    return;
+  } else {
+    return;
+  }
+
+  event.preventDefault();
+  list.scrollBy({ top: distance });
+}
+
 function TaskRow({
   task,
   onNavigate,
@@ -46,6 +72,7 @@ function TaskRow({
   const { cancelTask, openTask, retryTask } = useEmailGenerationTasks();
   const canOpen = task.status !== 'cancelled';
   const progress = resolveEmailGenerationTaskProgress(task);
+  const mailSource = `${getMailProviderLabel(task.provider)} · ${task.mailAddress || task.gmailEmail || '未记录来源邮箱'}`;
   const progressLabel = task.status === 'completed'
     ? '100%'
     : task.status === 'queued'
@@ -90,10 +117,12 @@ function TaskRow({
           <span className="truncate text-sm font-medium">{task.title}</span>
           {taskStatusIcon(task)}
         </div>
-        <p className="mt-0.5 truncate text-xs text-muted-foreground">{task.description}</p>
-        <p className="mt-0.5 truncate text-[11px] text-blue-700">
-          {getMailProviderLabel(task.provider)} · {task.mailAddress || task.gmailEmail || '未记录来源邮箱'}
-        </p>
+        <div className="mt-0.5 flex min-w-0 items-center justify-between gap-2">
+          <p className="shrink-0 text-xs text-muted-foreground">{task.description}</p>
+          <p className="min-w-0 truncate text-[11px] text-blue-700" title={mailSource}>
+            {mailSource}
+          </p>
+        </div>
         <p className="mt-0.5 truncate text-xs text-muted-foreground/80">{task.stage}</p>
         <div className="mt-1.5 flex items-center gap-2">
           <Progress
@@ -194,7 +223,13 @@ export function EmailGenerationProgress() {
           </div>
         </div>
         <Separator />
-        <ScrollArea className="max-h-[min(520px,70vh)]">
+        <div
+          aria-label="邮件生成任务列表"
+          className="max-h-[min(520px,70vh)] overflow-y-auto overscroll-contain focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring/50"
+          onKeyDown={handleTaskListKeyDown}
+          role="region"
+          tabIndex={0}
+        >
           {visibleTasks.length === 0 ? (
             <div className="flex min-h-44 flex-col items-center justify-center px-6 text-center">
               <Bot className="h-7 w-7 text-muted-foreground/55" />
@@ -224,7 +259,7 @@ export function EmailGenerationProgress() {
               ) : null}
             </div>
           )}
-        </ScrollArea>
+        </div>
       </PopoverContent>
     </Popover>
   );

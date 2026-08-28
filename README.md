@@ -63,7 +63,7 @@ GOOGLE_CLIENT_SECRET=
 GOOGLE_REDIRECT_URI=https://你的-vercel-域名/api/auth/callback
 ```
 
-飞书、YouTube、Gmail、腾讯企业邮箱、AI 模型等连接信息主要通过设置页保存；飞书写入必须依赖用户保存的字段映射。
+飞书、YouTube、Gmail、腾讯企业邮箱、AI 模型等连接信息主要通过设置页保存。AI“测试连接”使用独立的最小模型请求验证当前接口地址、API Key 和模型名称，不读取或伪造 Gmail/腾讯邮件会话；正式邮件起草继续要求真实邮箱账号和会话校验。飞书写入必须依赖用户保存的字段映射。
 
 团队账号管理还需要先执行 `supabase/migrations/20260806_account_management.sql` 和
 `supabase/migrations/20260807_account_admin_permissions.sql`，并在服务端配置：

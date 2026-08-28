@@ -140,6 +140,7 @@ export function AITemplateReplyComposer({
   autoRetryRequest,
   avatarUrl,
   mailAccount,
+  embedded = false,
 }: {
   thread: GmailThread;
   replyTarget: GmailReplyTarget | null;
@@ -149,6 +150,7 @@ export function AITemplateReplyComposer({
   autoRetryRequest?: { taskId: string; retryInput?: unknown };
   avatarUrl?: string;
   mailAccount?: MailAccount;
+  embedded?: boolean;
 }) {
   const { templates, addTemplate, updateTemplate, deleteTemplate } = useEmailTemplates();
   const { addDraft } = useEmailDrafts();
@@ -828,8 +830,8 @@ export function AITemplateReplyComposer({
   };
 
   return (
-    <div className="flex h-full min-h-0 flex-col bg-white">
-      <div className="flex h-14 shrink-0 items-center gap-3 border-b px-4">
+    <div className="@container/email-composer flex h-full min-h-0 flex-col bg-white">
+      {!embedded ? <div className="flex h-14 shrink-0 items-center gap-3 border-b px-4">
         <span className="flex size-8 items-center justify-center rounded-lg bg-primary/10 text-primary">
           <FileText className="size-4" />
         </span>
@@ -841,10 +843,10 @@ export function AITemplateReplyComposer({
           <Button variant="ghost" size="icon" title="最小化" onClick={onMinimize}><Minimize2 /></Button>
         )}
         <Button variant="ghost" size="icon" title="关闭" onClick={onClose}><X /></Button>
-      </div>
+      </div> : null}
 
       <ScrollArea className="min-h-0 flex-1">
-        <div className="grid gap-4 p-4 lg:grid-cols-[minmax(280px,0.85fr)_minmax(380px,1.25fr)]">
+        <div className="grid gap-4 p-4 @3xl/email-composer:grid-cols-[minmax(280px,0.85fr)_minmax(380px,1.25fr)]">
           <div className="space-y-4">
             <div className="rounded-xl border bg-slate-50/70 p-4">
               <div className="mb-3 flex items-center justify-between gap-3">

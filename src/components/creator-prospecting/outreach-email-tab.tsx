@@ -46,6 +46,7 @@ import { stripConfiguredEmailSignature } from '@/lib/email-content';
 import { outreachLanguageLabel } from '@/lib/outreach-languages';
 import { sanitizeOutreachEmailBody } from '@/lib/outreach-draft-sanitizer';
 import {
+  buildOutreachEmailEditorHtml,
   clampImagePlacement,
   getRecommendedImagePlacement,
   selectedProductEmailAsset,
@@ -174,6 +175,204 @@ function ProductAssetPanel({
   );
 }
 
+type OutreachEmailBodyEditorLayout = {
+  prospectId: string;
+  hasProduct: boolean;
+  includeImage: boolean;
+  imagePlacement: number;
+  imageSrc?: string;
+  productName?: string;
+  productModel?: string;
+  productUrl?: string;
+};
+
+function sameEditorLayout(
+  previous: OutreachEmailBodyEditorLayout | null,
+  next: OutreachEmailBodyEditorLayout,
+) {
+  return Boolean(
+    previous
+    && previous.prospectId === next.prospectId
+    && previous.hasProduct === next.hasProduct
+    && previous.includeImage === next.includeImage
+    && previous.imagePlacement === next.imagePlacement
+    && previous.imageSrc === next.imageSrc
+    && previous.productName === next.productName
+    && previous.productModel === next.productModel
+    && previous.productUrl === next.productUrl,
+  );
+}
+
+function renderEditableOutreachEmail(
+  editor: HTMLDivElement,
+  body: string,
+  layout: OutreachEmailBodyEditorLayout,
+) {
+  const product: OutreachEmailProductAsset | null = layout.hasProduct
+    ? {
+      name: layout.productName || '',
+      model: layout.productModel || '',
+      productUrl: layout.productUrl || '',
+      mainImage: layout.imageSrc
+        ? {
+          fileName: 'product-main-image',
+          mimeType: 'image/*',
+          dataUrl: layout.imageSrc,
+        }
+        : undefined,
+    }
+    : null;
+  editor.innerHTML = buildOutreachEmailEditorHtml({
+    body,
+    product,
+    imageSrc: layout.imageSrc,
+    imagePlacement: layout.imagePlacement,
+    includeImage: layout.includeImage,
+  });
+}
+
+function readEditableOutreachBody(editor: HTMLDivElement) {
+  return sanitizeOutreachEmailBody(
+    String(editor.innerText || editor.textContent || '')
+      .replace(/\r\n?/g, '\n')
+      .replace(/\u00a0/g, ' '),
+  );
+}
+
+function insertPlainTextAtSelection(editor: HTMLDivElement, value: string) {
+  const selection = window.getSelection();
+  if (!selection?.rangeCount) return false;
+  const range = selection.getRangeAt(0);
+  if (!editor.contains(range.commonAncestorContainer)) return false;
+
+  range.deleteContents();
+  const textNode = document.createTextNode(value.replace(/\r\n?/g, '\n'));
+  range.insertNode(textNode);
+  range.setStartAfter(textNode);
+  range.collapse(true);
+  selection.removeAllRanges();
+  selection.addRange(range);
+  return true;
+}
+
+function OutreachEmailBodyEditor({
+  prospectId,
+  body,
+  product,
+  includeImage,
+  imagePlacement,
+  onBodyChange,
+}: {
+  prospectId: string;
+  body: string;
+  product: OutreachEmailProductAsset | null;
+  includeImage: boolean;
+  imagePlacement: number;
+  onBodyChange: (body: string) => void;
+}) {
+  const editorRef = useRef<HTMLDivElement>(null);
+  const pendingBodyRef = useRef<string | null>(null);
+  const renderedLayoutRef = useRef<OutreachEmailBodyEditorLayout | null>(null);
+  const hasProduct = Boolean(product);
+  const imageSrc = product?.mainImage?.dataUrl;
+  const productName = product?.name;
+  const productModel = product?.model;
+  const productUrl = product?.productUrl;
+
+  useEffect(() => {
+    const layout: OutreachEmailBodyEditorLayout = {
+      prospectId,
+      hasProduct,
+      includeImage,
+      imagePlacement,
+      imageSrc,
+      productName,
+      productModel,
+      productUrl,
+    };
+    const ownBodyUpdate = pendingBodyRef.current === body;
+    if (ownBodyUpdate && sameEditorLayout(renderedLayoutRef.current, layout)) {
+      pendingBodyRef.current = null;
+      return;
+    }
+    pendingBodyRef.current = null;
+    const editor = editorRef.current;
+    if (!editor) return;
+    renderEditableOutreachEmail(editor, body, layout);
+    renderedLayoutRef.current = layout;
+  }, [
+    body,
+    hasProduct,
+    imagePlacement,
+    imageSrc,
+    includeImage,
+    productModel,
+    productName,
+    productUrl,
+    prospectId,
+  ]);
+
+  const renderEditor = (nextBody: string) => {
+    const editor = editorRef.current;
+    if (!editor) return;
+    const layout: OutreachEmailBodyEditorLayout = {
+      prospectId,
+      hasProduct,
+      includeImage,
+      imagePlacement,
+      imageSrc,
+      productName,
+      productModel,
+      productUrl,
+    };
+    renderEditableOutreachEmail(editor, nextBody, layout);
+    renderedLayoutRef.current = layout;
+  };
+
+  const syncBodyFromEditor = () => {
+    const editor = editorRef.current;
+    if (!editor) return;
+    const nextBody = readEditableOutreachBody(editor);
+    pendingBodyRef.current = nextBody;
+    onBodyChange(nextBody);
+
+    const productImageCount = editor.querySelectorAll('[data-product-image="true"]').length;
+    if (includeImage && productImageCount !== 1) {
+      renderEditor(nextBody);
+    }
+  };
+
+  return (
+    <div
+      ref={editorRef}
+      contentEditable
+      suppressContentEditableWarning
+      role="textbox"
+      aria-label="编辑最终邮件正文"
+      aria-multiline="true"
+      className="min-h-[32rem] resize-y overflow-auto whitespace-pre-wrap rounded-md border border-input bg-white px-3 py-2 text-sm leading-6 shadow-sm outline-none ring-offset-background focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 [&_a]:text-primary [&_a]:underline [&_img]:my-2 [&_img]:max-w-full"
+      onInput={syncBodyFromEditor}
+      onBlur={() => {
+        const editor = editorRef.current;
+        if (editor) renderEditor(readEditableOutreachBody(editor));
+      }}
+      onPaste={(event) => {
+        event.preventDefault();
+        if (insertPlainTextAtSelection(event.currentTarget, event.clipboardData.getData('text/plain'))) {
+          syncBodyFromEditor();
+        }
+      }}
+      onDrop={(event) => event.preventDefault()}
+      onDragStart={(event) => {
+        const target = event.target as HTMLElement;
+        if (target.closest('[data-product-image="true"]')) {
+          event.dataTransfer.setData('text/plain', 'product-image');
+        }
+      }}
+    />
+  );
+}
+
 function MailPreview({
   prospect,
   product,
@@ -229,11 +428,13 @@ function MailPreview({
         </div>
       </div>
       <div className="grid gap-3 xl:grid-cols-[minmax(0,1fr)_220px]">
-        <Textarea
-          value={body}
-          onChange={(event) => onPatch(prospect.id, patchDraft(prospect, { body: event.target.value }))}
-          className="min-h-[32rem] resize-y bg-white text-sm leading-6 focus-visible:ring-primary"
-          aria-label="编辑最终邮件正文"
+        <OutreachEmailBodyEditor
+          prospectId={prospect.id}
+          body={body}
+          product={product}
+          includeImage={includeImage}
+          imagePlacement={imagePlacement}
+          onBodyChange={(nextBody) => onPatch(prospect.id, patchDraft(prospect, { body: nextBody }))}
         />
         {includeImage && (
           <div className="rounded-md border border-dashed bg-slate-50/80 p-2">

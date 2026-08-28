@@ -5,6 +5,7 @@ import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
 import { ScrollArea } from '@/components/ui/scroll-area';
 import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover';
+import { Tabs, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { GmailAttachment, GmailThread, GmailMessage } from '@/lib/types';
 import { useEmailTranslations, useGmailAuth, useSettings } from '@/lib/data';
 import { 
@@ -12,7 +13,7 @@ import {
   Copy, Sparkles, ChevronDown, Loader2,
   Paperclip, Download, Forward, Mail, MailOpen, ImageOff,
   Database, Save, CheckCircle2, XCircle,
-  ExternalLink, Maximize2, X,
+  ExternalLink, X,
   FileText,
   CornerUpLeft,
   Users,
@@ -107,6 +108,30 @@ type FeishuQuickAction = {
   label: string;
   description: string;
   fields: Partial<Record<FeishuFieldKey, string>>;
+};
+
+type ReplyMode = 'compose' | 'template' | 'ai';
+
+const REPLY_MODE_META: Record<ReplyMode, {
+  label: string;
+  description: string;
+  icon: typeof Reply;
+}> = {
+  compose: {
+    label: '手动回复',
+    description: '直接编辑回复内容',
+    icon: Reply,
+  },
+  template: {
+    label: 'AI 模板起草',
+    description: '根据业务模板生成可修改的邮件草稿',
+    icon: FileText,
+  },
+  ai: {
+    label: 'AI 辅助回复',
+    description: '结合当前会话和你的想法生成草稿',
+    icon: Sparkles,
+  },
 };
 
 const QUICK_FIELD_LABELS: Partial<Record<FeishuFieldKey, string>> = {
@@ -248,8 +273,9 @@ export function EmailDetail({
     const newestMessage = sortMessagesNewestFirst(thread.messages)[0];
     return new Set(newestMessage ? [newestMessage.id] : []);
   });
-  const [composerState, setComposerState] = useState<'closed' | 'expanded' | 'minimized'>('closed');
-  const [replyMode, setReplyMode] = useState<'compose' | 'template' | 'ai'>('compose');
+  const [composerState, setComposerState] = useState<'closed' | 'expanded'>('closed');
+  const [replyMode, setReplyMode] = useState<ReplyMode>('compose');
+  const [visitedReplyModes, setVisitedReplyModes] = useState<Set<ReplyMode>>(() => new Set());
   const [selectedReplyMessageId, setSelectedReplyMessageId] = useState(
     () => getDefaultGmailReplyMessage(thread)?.id || '',
   );
@@ -301,6 +327,7 @@ export function EmailDetail({
       setRecipientOverrides({});
       setSavedReplyDraft('');
       setComposerState('closed');
+      setVisitedReplyModes(new Set());
     }
   }, [defaultReplyMessageId, replyAnchorScope, selectedReplyMessageId, thread]);
 
@@ -505,6 +532,7 @@ export function EmailDetail({
   const creatorChannelAvatarUrl = channelAvatar.status === 'ready'
     ? channelAvatar.avatarUrl
     : undefined;
+  const ActiveReplyModeIcon = REPLY_MODE_META[replyMode].icon;
 
   useEffect(() => {
     if (!creatorChannelAvatarUrl) return;
@@ -525,20 +553,32 @@ export function EmailDetail({
     replyAnchorManuallySelectedRef.current = true;
     setSelectedReplyMessageId(message.id);
     setExpandedMessages((current) => new Set(current).add(message.id));
+    setSavedReplyDraft('');
     setComposerState('closed');
+    setVisitedReplyModes(new Set());
   };
 
   const chooseAnotherReplyAnchor = () => {
     const confirmed = window.confirm(
       '返回选择回复依据会关闭当前起草面板，其中尚未保存的内容可能丢失。确定继续吗？',
     );
-    if (confirmed) setComposerState('closed');
+    if (confirmed) {
+      setSavedReplyDraft('');
+      setComposerState('closed');
+      setVisitedReplyModes(new Set());
+    }
   };
 
-  const openReplyComposer = (mode: 'compose' | 'template' | 'ai') => {
+  const openReplyComposer = (mode: ReplyMode) => {
     if (!replyTarget || replyActionsUnavailable) return;
     replyAnchorManuallySelectedRef.current = true;
     setReplyMode(mode);
+    setVisitedReplyModes((current) => {
+      if (current.has(mode)) return current;
+      const next = new Set(current);
+      next.add(mode);
+      return next;
+    });
     setComposerState('expanded');
   };
 
@@ -550,14 +590,30 @@ export function EmailDetail({
       || handledOpenComposerRequestRef.current === openComposerRequest.requestId
     ) return;
     handledOpenComposerRequestRef.current = openComposerRequest.requestId;
+    const switchesReplyAnchor = Boolean(
+      openComposerRequest.messageId
+      && openComposerRequest.messageId !== selectedReplyMessageId,
+    );
     if (openComposerRequest.messageId) {
       replyAnchorManuallySelectedRef.current = true;
       setSelectedReplyMessageId(openComposerRequest.messageId);
       setExpandedMessages((current) => new Set(current).add(openComposerRequest.messageId!));
     }
+    if (switchesReplyAnchor) {
+      setSavedReplyDraft('');
+    }
     setReplyMode(openComposerRequest.composerMode);
+    setVisitedReplyModes((current) => {
+      if (switchesReplyAnchor) {
+        return new Set([openComposerRequest.composerMode!]);
+      }
+      if (current.has(openComposerRequest.composerMode!)) return current;
+      const next = new Set(current);
+      next.add(openComposerRequest.composerMode!);
+      return next;
+    });
     setComposerState('expanded');
-  }, [openComposerRequest, replyActionsUnavailable, replyTarget]);
+  }, [openComposerRequest, replyActionsUnavailable, replyTarget, selectedReplyMessageId]);
 
   const updateReplyRecipient = (email: string) => {
     if (!replyTarget) return;
@@ -1242,7 +1298,7 @@ export function EmailDetail({
   };
 
   return (
-    <div className="material-reading flex h-full min-h-0 flex-col overflow-hidden">
+    <div className="email-detail-container material-reading flex h-full min-h-0 flex-col overflow-hidden">
       {/* 头部 */}
       <div className="material-toolbar flex items-center justify-between border-b border-border/55 px-4 py-3">
         <div className="flex items-center gap-3">
@@ -1452,7 +1508,12 @@ export function EmailDetail({
           {messageActionError}
         </div>
       )}
-      <ScrollArea className="min-h-0 flex-1">
+      <div
+        className="email-reply-workspace min-h-0 flex-1"
+        data-expanded={composerState === 'expanded'}
+      >
+        <div className="min-h-0 min-w-0 overflow-hidden">
+          <ScrollArea className="h-full min-h-0">
         {loading ? (
           <div className="flex min-h-[320px] items-center justify-center p-6">
             <div className="w-full max-w-2xl rounded-xl border border-border/55 bg-white/82 p-6 shadow-sm">
@@ -1778,129 +1839,145 @@ export function EmailDetail({
           })}
         </div>
         )}
-      </ScrollArea>
+          </ScrollArea>
+        </div>
 
-      {/* 底部回复区域 */}
-      <div
-        className={`flex shrink-0 flex-col ${
-          composerState === 'expanded' && (replyMode === 'ai' || replyMode === 'template')
-            ? 'h-[min(48dvh,382px)] min-h-0 overflow-hidden border-t border-gray-300 bg-white shadow-[0_-8px_24px_rgba(15,23,42,0.08)]'
-            : composerState === 'expanded'
-              ? 'material-toolbar max-h-[72%] overflow-y-auto border-t border-border/55 p-4'
-              : composerState === 'minimized'
-                ? 'border-t border-gray-200 bg-white p-0 shadow-[0_-4px_14px_rgba(15,23,42,0.05)]'
-                : 'material-toolbar border-t border-border/55 p-4'
-        }`}
-      >
-        {composerState === 'expanded' && replyTarget ? (
-          <GmailReplyTargetBar
-            target={replyTarget}
-            ownEmail={ownEmail}
-            onRecipientChange={updateReplyRecipient}
-            onChooseMessage={chooseAnotherReplyAnchor}
-          />
-        ) : null}
-        {composerState === 'closed' ? (
-          <div className="flex items-center justify-center gap-3">
-            <Button
-              variant="outline" 
-              className="h-10 flex-1 rounded-lg bg-white/80"
-              disabled={replyActionsUnavailable || !replyTarget}
-              onClick={() => openReplyComposer('compose')}
-            >
-              <Reply className="w-4 h-4 mr-2" />
-              回复
-            </Button>
-            <Button
-              variant="outline"
-              className="h-10 flex-1 rounded-lg border-primary/25 bg-primary/5 text-primary hover:bg-primary/10"
-              disabled={replyActionsUnavailable || !replyTarget}
-              onClick={() => openReplyComposer('template')}
-            >
-              <FileText className="w-4 h-4 mr-2" />
-              AI 模板起草
-            </Button>
-            <Button
-              className="h-10 flex-1 rounded-lg shadow-apple"
-              disabled={replyActionsUnavailable || !replyTarget}
-              onClick={() => openReplyComposer('ai')}
-            >
-              <Sparkles className="w-4 h-4 mr-2" />
-              AI 辅助回复
-            </Button>
-          </div>
-        ) : (
-          <>
-            {composerState === 'minimized' && (replyMode === 'ai' || replyMode === 'template') && (
-              <div className="flex h-12 items-center gap-3 px-4">
-                <span className="flex size-8 shrink-0 items-center justify-center rounded-md bg-primary/10 text-primary">
-                  <Sparkles className="size-4" />
-                </span>
-                <div className="min-w-0 flex-1">
-                  <p className="truncate text-sm font-medium">
-                    {replyMode === 'template' ? 'AI 模板起草' : 'AI 邮件助手'}
-                  </p>
-                  <p className="truncate text-xs text-muted-foreground">
-                    {replyMode === 'template' ? '模板、输入和草稿内容已保留' : '分析和回复内容已保留'}
-                  </p>
-                </div>
-                <Button
-                  variant="ghost"
-                  size="icon"
-                  className="size-8"
-                  title="展开 AI 邮件助手"
-                  aria-label="展开 AI 邮件助手"
-                  onClick={() => setComposerState('expanded')}
-                >
-                  <Maximize2 />
-                </Button>
-                <Button
-                  variant="ghost"
-                  size="icon"
-                  className="size-8"
-                  title="关闭 AI 邮件助手"
-                  aria-label="关闭 AI 邮件助手"
-                  onClick={() => setComposerState('closed')}
-                >
-                  <X />
-                </Button>
-              </div>
-            )}
-            <div className={composerState === 'minimized' ? 'hidden' : 'min-h-0 flex-1'}>
-              {replyMode === 'template' ? (
-                <AITemplateReplyComposer
-                  key={`template-${mailScope}-${thread.id}-${replyTarget?.messageId || 'default'}`}
-                  thread={thread}
-                  replyTarget={replyTarget}
-                  avatarUrl={creatorChannelAvatarUrl}
-                  mailAccount={mailAccount}
-                  onMinimize={() => setComposerState('minimized')}
-                  onClose={() => setComposerState('closed')}
-                  onDraftSaved={setSavedReplyDraft}
-                  autoRetryRequest={openComposerRequest?.retryRequested && openComposerRequest.taskId
-                    ? { taskId: openComposerRequest.taskId, retryInput: openComposerRequest.retryInput }
-                    : undefined}
-                />
-              ) : (
-                <EmailComposer
-                  key={`${mailScope}-${thread.id}-${replyMode}-${replyTarget?.messageId || 'default'}`}
-                  thread={thread}
-                  replyTarget={replyTarget}
-                  mode={replyMode}
-                  avatarUrl={creatorChannelAvatarUrl}
-                  mailAccount={mailAccount}
-                  onMinimize={replyMode === 'ai' ? () => setComposerState('minimized') : undefined}
-                  onClose={() => setComposerState('closed')}
-                  initialMessage={replyMode === 'compose' ? savedReplyDraft : undefined}
-                  onDraftSaved={setSavedReplyDraft}
-                  autoRetryRequest={openComposerRequest?.retryRequested && openComposerRequest.taskId
-                    ? { taskId: openComposerRequest.taskId, retryInput: openComposerRequest.retryInput }
-                    : undefined}
-                />
-              )}
+        {/* 回复区域：关闭时为底部入口，展开时为右侧或下方独立工作区。 */}
+        <div className="email-reply-composer min-h-0 min-w-0 overflow-hidden bg-white">
+          {composerState === 'closed' ? (
+            <div className="material-toolbar flex items-center justify-center gap-3 border-t border-border/55 p-4">
+              <Button
+                variant="outline"
+                className="h-10 flex-1 rounded-lg bg-white/80"
+                disabled={replyActionsUnavailable || !replyTarget}
+                onClick={() => openReplyComposer('compose')}
+              >
+                <Reply data-icon="inline-start" />
+                手动回复
+              </Button>
+              <Button
+                variant="outline"
+                className="h-10 flex-1 rounded-lg border-primary/25 bg-primary/5 text-primary hover:bg-primary/10"
+                disabled={replyActionsUnavailable || !replyTarget}
+                onClick={() => openReplyComposer('template')}
+              >
+                <FileText data-icon="inline-start" />
+                AI 模板起草
+              </Button>
+              <Button
+                className="h-10 flex-1 rounded-lg shadow-apple"
+                disabled={replyActionsUnavailable || !replyTarget}
+                onClick={() => openReplyComposer('ai')}
+              >
+                <Sparkles data-icon="inline-start" />
+                AI 辅助回复
+              </Button>
             </div>
-          </>
-        )}
+          ) : null}
+
+          <div
+            className={composerState === 'expanded' ? 'flex h-full min-h-0 flex-col' : 'hidden'}
+            aria-hidden={composerState !== 'expanded'}
+          >
+            <div className="flex h-14 shrink-0 items-center gap-3 border-b border-border/55 px-4">
+              <span className="flex size-8 shrink-0 items-center justify-center rounded-lg bg-primary/10 text-primary">
+                <ActiveReplyModeIcon className="size-4" />
+              </span>
+              <div className="min-w-0 flex-1">
+                <p className="truncate text-sm font-semibold">{REPLY_MODE_META[replyMode].label}</p>
+                <p className="truncate text-xs text-muted-foreground">{REPLY_MODE_META[replyMode].description}</p>
+              </div>
+              <Button
+                variant="ghost"
+                size="icon"
+                className="size-8"
+                title="收起回复区域，当前输入会保留"
+                aria-label="收起回复区域，当前输入会保留"
+                onClick={() => setComposerState('closed')}
+              >
+                <X />
+              </Button>
+            </div>
+
+            <Tabs
+              value={replyMode}
+              onValueChange={(value) => openReplyComposer(value as ReplyMode)}
+              className="shrink-0 gap-0 border-b border-border/55 bg-muted/20 p-2"
+            >
+              <TabsList className="grid h-10 w-full grid-cols-3">
+                <TabsTrigger value="compose">手动回复</TabsTrigger>
+                <TabsTrigger value="template">AI 模板起草</TabsTrigger>
+                <TabsTrigger value="ai">AI 辅助回复</TabsTrigger>
+              </TabsList>
+            </Tabs>
+
+            {replyTarget ? (
+              <GmailReplyTargetBar
+                target={replyTarget}
+                ownEmail={ownEmail}
+                onRecipientChange={updateReplyRecipient}
+                onChooseMessage={chooseAnotherReplyAnchor}
+                compact
+              />
+            ) : null}
+
+            <div className="relative min-h-0 flex-1 overflow-hidden">
+              {visitedReplyModes.has('compose') ? (
+                <div className={replyMode === 'compose' ? 'absolute inset-0 flex min-h-0 flex-col' : 'hidden'}>
+                  <EmailComposer
+                    key={`${mailScope}-${thread.id}-compose-${replyTarget?.messageId || 'default'}`}
+                    thread={thread}
+                    replyTarget={replyTarget}
+                    mode="compose"
+                    avatarUrl={creatorChannelAvatarUrl}
+                    mailAccount={mailAccount}
+                    onClose={() => setComposerState('closed')}
+                    initialMessage={savedReplyDraft}
+                    onDraftSaved={setSavedReplyDraft}
+                    embedded
+                  />
+                </div>
+              ) : null}
+
+              {visitedReplyModes.has('template') ? (
+                <div className={replyMode === 'template' ? 'absolute inset-0 flex min-h-0 flex-col' : 'hidden'}>
+                  <AITemplateReplyComposer
+                    key={`template-${mailScope}-${thread.id}-${replyTarget?.messageId || 'default'}`}
+                    thread={thread}
+                    replyTarget={replyTarget}
+                    avatarUrl={creatorChannelAvatarUrl}
+                    mailAccount={mailAccount}
+                    onClose={() => setComposerState('closed')}
+                    onDraftSaved={setSavedReplyDraft}
+                    autoRetryRequest={openComposerRequest?.retryRequested && openComposerRequest.taskId
+                      ? { taskId: openComposerRequest.taskId, retryInput: openComposerRequest.retryInput }
+                      : undefined}
+                    embedded
+                  />
+                </div>
+              ) : null}
+
+              {visitedReplyModes.has('ai') ? (
+                <div className={replyMode === 'ai' ? 'absolute inset-0 flex min-h-0 flex-col' : 'hidden'}>
+                  <EmailComposer
+                    key={`${mailScope}-${thread.id}-ai-${replyTarget?.messageId || 'default'}`}
+                    thread={thread}
+                    replyTarget={replyTarget}
+                    mode="ai"
+                    avatarUrl={creatorChannelAvatarUrl}
+                    mailAccount={mailAccount}
+                    onClose={() => setComposerState('closed')}
+                    onDraftSaved={setSavedReplyDraft}
+                    autoRetryRequest={openComposerRequest?.retryRequested && openComposerRequest.taskId
+                      ? { taskId: openComposerRequest.taskId, retryInput: openComposerRequest.retryInput }
+                      : undefined}
+                    embedded
+                  />
+                </div>
+              ) : null}
+            </div>
+          </div>
+        </div>
       </div>
       <NewEmailComposer
         open={Boolean(forwardDraft)}

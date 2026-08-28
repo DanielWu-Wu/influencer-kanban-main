@@ -556,3 +556,13 @@ export function canGenerateOutreach(prospect: Prospect) {
     && Boolean(prospect.cooperationIdea?.trim())
     && Boolean(prospect.outreachLanguage?.trim());
 }
+
+export function shouldAdvanceProspectingStage(
+  currentStageProspectIds: string[],
+  processedProspectIds: string[],
+) {
+  if (!currentStageProspectIds.length || !processedProspectIds.length) return false;
+
+  const processedIds = new Set(processedProspectIds);
+  return currentStageProspectIds.every((id) => processedIds.has(id));
+}

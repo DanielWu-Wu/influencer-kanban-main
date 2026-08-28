@@ -9,6 +9,19 @@ export const APP_RELEASE_LAST_SEEN_STORAGE_KEY = 'influencer-board-last-seen-rel
 
 export const APP_RELEASES: readonly AppRelease[] = [
   {
+    version: '1.2.3',
+    releasedAt: '2026-08-28',
+    title: '邮件处理与工作流体验优化',
+    highlights: [
+      '手动回复、AI 模板起草和 AI 辅助回复统一使用更舒适的编辑空间。',
+      '恢复开发信正文中的产品图片预览，同时保留正文直接编辑能力。',
+      '修复部分来信正文无法被 AI 正确读取、被误判为空白的问题。',
+      '优化“下一步”流转逻辑：当前阶段还有待处理线索时继续停留，全部完成后自动进入下一阶段。',
+      '优化邮件生成进度弹窗，来源邮箱展示更加紧凑，历史记录支持鼠标滚动查看。',
+      '完善多处界面细节和交互体验。',
+    ],
+  },
+  {
     version: '1.2.2',
     releasedAt: '2026-08-26',
     title: '邮件时间与生成体验优化',

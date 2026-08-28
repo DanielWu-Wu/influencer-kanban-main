@@ -4,9 +4,9 @@
 >
 > 更新时间：2026-08-26
 >
-> 当前已提交基线：`main` / `43ad449650abd2b5396604426c1ed8835ff65afc`；本地 `origin/main` 跟踪引用与 HEAD 一致，GitHub 提交页面已直接核对可见。
-> 当前已提交版本为 `1.2.2`“邮件时间与生成体验优化”，包含邮件时间排序、阶段百分比进度和首封开发信默认直接编辑。
-> TypeScript、ESLint 和生产构建已通过；正式域名登录页可访问且线上前端资源已包含 `1.2.2`，但 Vercel deployment 与提交 SHA 的精确对应、登录后的线上关键流程仍需分别验证。
+> 当前已提交基线：`main` / `8b91207165de292903f37bc63d5777575549ea49`，提交说明为“修复AI模型连接测试按钮”；本地 `origin/main` 跟踪引用与 HEAD 一致，但 GitHub HTTPS 远端仍需直接复核。
+> 当前用户版本仍为 `1.2.2`“邮件时间与生成体验优化”；其后维护提交修复了设置页 AI 模型连接测试被邮件会话校验错误拦截的问题。
+> TypeScript、ESLint、完整纯逻辑测试和生产构建已通过；此前正式域名登录页及 `1.2.2` 前端资源可访问，但 `8b91207` 对应的 GitHub 远端、Vercel deployment、线上资源和登录后真实连接测试仍需分别验证。
 > 本次洁癖收尾只同步现役交接文档和 README，不提交、推送、部署或清理工作区。
 >
 > 根目录 `HANDOFF.md`、`PROJECT_HANDOFF.md`、`TODO.md` 与 `docs/AI_HANDOFF.md`
@@ -181,25 +181,26 @@
 - YouTube API 只能读取公开频道资料；隐藏邮箱不可获取，邮箱只能从公开内容提取或人工填写。
 - AI 模型由用户配置 OpenAI-compatible 接口；项目不内置 DeepSeek，也不能假设任意代理地址兼容。
 - 设置页可按提供商自动填充常用 API 地址和推荐模型，并提供三步指引与连接测试；自定义兼容接口仍需用户核对真实 Base URL/完整 endpoint 和模型名。
+- AI“测试连接”使用独立的 `testConnection` 动作，只发送最小模型请求并要求系统登录、当前账号私有密钥和模型配置；它不再伪装成 `draft`，也不读取或伪造 Gmail/腾讯会话。正式 `analyze`、`draft`、`optimizeDraft`、`templateDraft` 仍必须通过真实邮箱账号归属和会话上下文校验。
 - `APP_SECRET_ENCRYPTION_KEY` 只允许保存在服务端并保持稳定；更换后既有成员的飞书 App Secret 无法解密，需要逐人重新配置。
 
 ## 4. 当前验证状态
 
 | 事实面 | 状态 | 当前证据 |
 | --- | --- | --- |
-| 代码 | changed-and-verified | 2026-08-26：当前分支 `main`，HEAD 与本地 `origin/main` 跟踪引用均为 `43ad449650abd2b5396604426c1ed8835ff65afc`，提交说明为 `1.2.2 邮件时间与生成体验优化`；GitHub 提交页面已直接核对可见。除本次交接文档/README 更新和受保护 `.codex-tmp` 现场外，没有普通源码未提交差异 |
+| 代码 | changed-and-verified | 2026-08-26：当前分支 `main`，HEAD 与本地 `origin/main` 跟踪引用均为 `8b91207165de292903f37bc63d5777575549ea49`，提交说明为“修复AI模型连接测试按钮”。连接测试已与正式邮件动作分离；除本次交接文档/README 更新和受保护 `.codex-tmp` 现场外，没有普通源码未提交差异 |
 | TypeScript | changed-and-verified | 2026-08-26：bundled Node 运行 `tsc -p tsconfig.json --noEmit` 通过 |
 | ESLint | changed-and-verified | 2026-08-26：`src tests` 全量检查 0 error、7 个既有 warning；没有为了过检查降低规则 |
-| 纯逻辑测试 | partially-verified | Windows 完整 `tests/run-tests.ts` 在进入测试前因 `uv_os_get_passwd returned ENOMEM` 无法启动，必须记录为“未运行”。邮件生成进度专项测试通过 19/19，邮件时间专项测试通过 6/6；此前候选逻辑测试和每日待办专项测试结果仍可作历史证据，但不能替代完整测试运行器 |
+| 纯逻辑测试 | changed-and-verified | 2026-08-26：普通 `tsx` 启动仍会触发本机 `uv_os_get_passwd ENOMEM`；使用一次性、未写入仓库的 Windows `os.userInfo` 启动兼容层后，完整 `tests/run-tests.ts` 实际运行 238/238 通过，包含新增的连接测试/正式邮件动作隔离测试 |
 | 生产构建 | changed-and-verified | 2026-08-26：`next build` 完整通过，共生成 40 个页面/路由 |
 | Supabase 临时附件 | partially-verified | 用户已在生产 Supabase 创建私有 `mail-attachments-temp` 桶、设置 25MB 单文件限制并成功执行本人路径 RLS；本地附件下载已确认。18MB 发信、24 小时机会式清理及双用户越权仍待真实验证 |
-| 本地运行态 | partially-verified | 2026-08-26：`http://localhost:5000/` 登录页可正常显示且浏览器控制台无报错；自动化浏览器没有用户登录态，无法验收红人开发台的默认编辑和真实邮箱任务。5000 端口存在非本轮启动的监听进程，本轮未擅自停止 |
+| 本地运行态 | partially-verified | 2026-08-26：`http://localhost:5000/` 登录页可正常显示且浏览器控制台无报错；自动化浏览器没有用户登录态，无法点击设置页真实调用用户模型，也无法验收红人开发台和真实邮箱任务。5000 端口存在非本轮启动的监听进程，本轮未擅自停止 |
 | 浏览器 warning | pending | 生产登录页未复现控制台 warning；此前开发模式记录过 AI 助手悬浮按钮 hydration 属性不一致警告，登录后的开发页面尚未重新核对，不能据此宣称已消失 |
 | 真实 Gmail/腾讯操作 | pending | 用户已确认腾讯附件可下载；`1.2.1` 关键流程及 `1.2.2` 邮件时间排序、任务百分比、红人开发信默认直接编辑和中文同步门禁尚未形成完整登录态验收记录 |
 | 规则 | changed-and-verified | `AGENTS.md` 已补充腾讯 IMAP/SMTP 入口与 Gmail/腾讯共同的人工确认边界；没有改变飞书字段映射或草稿成功后标记“已发/已告知”的运营规则 |
 | 文档 | changed-and-verified | 2026-08-26：本文件和 README 已同步到 `1.2.2` 真实行为；历史交接入口继续明确指向本文件。本次文档修改尚未提交 |
 | 记忆 | out-of-scope | 当前 Codex 记忆属于宿主管线，本轮没有获准的独立记忆写入入口，也未手改任何生成记忆 |
-| GitHub / Vercel / 线上 | partially-verified | 2026-08-26：GitHub 公开提交页已直接确认 `43ad449` 和 `1.2.2` 文案可见；正式域名 `https://kolworkflow.vercel.app/` 登录页可访问且加载资源包含 `1.2.2` 版本号与标题。Vercel deployment 与目标提交 SHA 的精确对应、登录后的线上业务流程仍为 pending |
+| GitHub / Vercel / 线上 | partially-verified | 2026-08-26：此前已直接确认 GitHub `43ad449`、正式域名登录页及 `1.2.2` 前端资源；本轮只能确认本地 `origin/main` 跟踪引用已到 `8b91207`，GitHub HTTPS 远端读取工具不可用。`8b91207` 的直接远端可见性、Vercel deployment/commit 对应、正式域名是否已包含连接测试修复及登录后真实模型调用均为 pending |
 | 工作区 | pending | 受保护 `.codex-tmp/workflow-share-deck/slides-test-temp` 仍显示两组已跟踪删除和 Permission denied；两个外部 worktree 均未触碰。未获授权，不恢复、不清理、不改权限 |
 
 当前仍保留 7 个既有 ESLint warning：
@@ -209,7 +210,7 @@
 
 ## 5. 下一轮优先验收
 
-1. 登录后优先验收 `1.2.2`：分别用 Gmail 和腾讯邮件确认异常日期不再显示未来时间且列表/会话顺序正确；并行运行两项生成任务，确认每项独立显示阶段百分比，失败/中断不伪装成 100%，重试回到 0%。
+1. 登录设置页，使用当前真实模型配置点击“测试连接”：确认不再出现“邮件来源类型无效”，配置正确时显示成功；配置错误时应显示模型服务商真实返回的鉴权、模型名、额度或接口错误。测试不应要求打开 Gmail/腾讯邮件，也不得放宽正式邮件会话校验。
 2. 在红人开发台生成首封开发信，确认标题、外文和中文默认可直接编辑；只改标题或外文可以保存，修改中文后必须先根据中文更新外文；分别检查 Gmail 和腾讯草稿确认弹窗，但不得由自动化创建真实测试草稿。
 3. 继续验收 `1.2.1`：长时间离开后静默恢复登录；Gmail/腾讯打开邮件后的已读状态和选中样式；AI 只读取当前真实会话；翻译进行中绿色提示；每日待办先显示缓存并后台更新；开发信跟进表头批量选择邮箱且不重新读取飞书。
 4. 用一封 Gmail 草稿和一封腾讯草稿验收无损编辑：2 个收件人、2 个抄送、1 个密送、1 张内嵌图片、1 个普通附件和已有签名，不修改直接保存后全部保持；加载任一附件失败时必须阻止覆盖。
@@ -218,17 +219,17 @@
 7. 用同一红人的两个合作项目分别绑定不同会话或“新建独立邮件”，生成物流、折扣和合作回复草稿，确认项目 A/B 的主题、历史、回复头、草稿定位和 AI 结果互不混合。
 8. 分别回归 Gmail/腾讯的收件箱、未读、星标、已发送、草稿、搜索、分页、写信、回复、转发、翻译、AI 辅助、AI 模板、签名、附件、延迟发送和取消；腾讯发送只在用户明确确认的测试邮件上执行。
 9. 使用两个系统登录账号验证邮箱账号、附件、绑定、任务、草稿、缓存和联系人历史的 RLS/账号隔离；完成约 18MB 腾讯附件保存草稿和发送测试，并确认取消/失败后的临时文件处理。
-10. 在能够避开当前 Windows `ENOMEM` 的环境补跑完整测试运行器，并核对 Vercel Production deployment 与 `43ad449` 的精确对应。所有真实草稿、发送和飞书写回必须由用户在页面明确点击。
+10. 核对 GitHub 远端、Vercel Production deployment 与 `8b91207` 的精确对应，并在正式域名登录后完成真实模型连接测试。所有真实草稿、发送和飞书写回必须由用户在页面明确点击。
 
 ## 6. Git、工作区与清场预览
 
-- 主工作区为 `main...origin/main`，已提交基线 `43ad449650abd2b5396604426c1ed8835ff65afc`。普通业务源码没有未提交差异；本次洁癖仅产生 `docs/HANDOFF.md` 和 `README.md` 文档差异。
-- GitHub 提交页已确认 `43ad449` 可见；正式域名资源已包含 `1.2.2`，但 Vercel deployment 与 commit SHA 的精确对应和线上登录后流程仍待核对。本轮没有提交文档、推送或部署。
+- 主工作区为 `main...origin/main`，已提交基线 `8b91207165de292903f37bc63d5777575549ea49`。普通业务源码没有未提交差异；本次洁癖仅继续更新 `docs/HANDOFF.md` 和 `README.md` 文档差异。
+- 当前只能确认本地 `origin/main` 跟踪引用与 `8b91207` 一致；GitHub HTTPS 远端、Vercel deployment 与 commit SHA 的精确对应、正式域名是否包含该修复和线上登录后流程仍待核对。本轮没有提交、推送或部署。
 - 提交 `bbb9584` 除移除旧“添加红人”入口外，还把 PPT 生成脚本、渲染图和测试产物提交进 `.codex-tmp`，并删除了 `docs/团队成员三项服务零基础配置操作手册.docx`。这些已进入 Git 历史，本轮不擅自重写提交或恢复文件。
 - 当前工作区中，两组已跟踪的 `slides-test-temp` 文件显示为删除，同时对应目录出现 `Permission denied`；无法确认是实际删除还是访问权限导致的不可见。按受保护现场处理，不执行恢复、删除或权限修改，等待用户另行确认。
 - detached worktree `C:/Users/Admin/.codex/worktrees/347c/influencer-kanban-main` 此前明确记录含未提交代码，本轮未进入复查；继续按受保护现场处理，绝对不能自动删除、清理、移动或回退。
 - 另有 detached worktree `C:/Users/Admin/.codex/worktrees/5a94/influencer-kanban-main`，当前列表显示位于 `de328cb`；同样不进入、不清理、不移动、不回退。
-- 根目录 `.codex-dev-server.*.log`、`pnpm-exe.tgz`、`pnpm-js.tgz`、`pnpm-win-x64.tgz` 及对应解包目录属于被忽略的本机运行残留候选。本地 5000 端口当前未运行，但本轮没有用户清理授权，因此不删除任何文件，保留复核现场。
+- 根目录 `.codex-dev-server.*.log`、`pnpm-exe.tgz`、`pnpm-js.tgz`、`pnpm-win-x64.tgz` 及对应解包目录属于被忽略的本机运行残留候选。本地 5000 端口当前由非本轮启动的服务占用；本轮没有用户停服或清理授权，因此不停止进程、不删除任何文件，保留复核现场。
 - `.env.local`、`.next`、`node_modules`、本地 pnpm 运行包和 `tsconfig.tsbuildinfo` 均已忽略；
   不属于本次文档收尾的清理范围。
 
@@ -337,8 +338,8 @@ C:\Users\Admin\Documents\Codex\influencer-kanban-main
 
 当前已提交基线：
 - 分支：main
-- HEAD：43ad449650abd2b5396604426c1ed8835ff65afc
-- 本地 origin/main 跟踪引用与 HEAD 一致；GitHub 提交页面已直接确认该提交可见
+- HEAD：8b91207165de292903f37bc63d5777575549ea49
+- 本地 origin/main 跟踪引用与 HEAD 一致；GitHub HTTPS 远端和 Vercel 部署仍需直接核对
 - 已提交版本：1.2.2“邮件时间与生成体验优化”
 - 普通业务源码当前没有未提交差异；洁癖收尾预计只留下 docs/HANDOFF.md 与 README.md 文档更新。必须重新运行 git status 以现场事实为准
 
@@ -346,6 +347,7 @@ C:\Users\Admin\Documents\Codex\influencer-kanban-main
 - Gmail 与腾讯企业邮箱邮件时间统一校验和排序，异常日期不再制造未来时间或打乱最新邮件顺序；
 - 邮件生成任务按真实阶段显示独立百分比和进度条，失败/中断保留最后进度，重试归零；
 - 红人开发台生成首封开发信后，标题、外文和中文默认可直接编辑；修改中文仍必须先更新外文才能保存草稿；
+- 设置页 AI“测试连接”使用独立最小模型请求，不再触发 Gmail/腾讯真实邮件会话校验；正式邮件 AI 动作仍保留账号归属和会话隔离；
 - Gmail 与腾讯企业邮箱账号模型、左侧邮箱切换、连接/断开和账号隔离；
 - 腾讯收件箱、未读、星标、已发送、草稿、搜索、分页、刷新、附件下载、写信、回复、转发、AI、翻译、签名、保存草稿和人工确认发送；
 - Gmail/腾讯草稿无损编辑，保留多收件人、抄送、密送、附件、内嵌图片和原签名；加载失败时阻止覆盖；
@@ -364,10 +366,9 @@ C:\Users\Admin\Documents\Codex\influencer-kanban-main
 - TypeScript 通过；
 - ESLint 0 error，保留 7 个既有 warning；
 - Production build 通过，共 40 个页面/路由；
-- 此前候选逻辑测试使用临时编译方式运行 223/223 通过，每日待办相关测试 16/16 通过；本轮邮件生成进度专项测试 19/19、邮件时间专项测试 6/6 通过；
-- Windows 完整测试运行器因 uv_os_get_passwd ENOMEM 未启动，必须记录为“未运行”，不能算通过；
+- Windows 普通 `tsx` 启动仍会触发 `uv_os_get_passwd ENOMEM`；使用一次性且未写入仓库的启动兼容层后，完整纯逻辑测试实际运行 238/238 通过；
 - 本地和正式域名登录页均可访问且无已观察到的控制台错误；自动化浏览器没有登录态，1.2.2 真实关键流程尚未完整验收；
-- GitHub 提交 `43ad449` 已直接核对可见，正式域名资源已包含 1.2.2；Vercel deployment 与提交 SHA 的精确对应和线上登录后验收仍未完成。
+- 此前 GitHub `43ad449` 和正式域名 1.2.2 资源已直接核对；当前 `8b91207` 的 GitHub 远端、Vercel deployment、正式域名修复资源和登录后真实模型连接测试仍未完成。
 
 当前优先任务：
 先对我提供的具体需求或 Bug 做对抗性诊断。查清复现路径、真实根因、影响 Gmail/腾讯/草稿/发送/飞书/缓存/账号隔离的范围，再给出最小修复方案；按我的当次要求决定是先等确认还是直接实施。不要顺手重构无关模块。

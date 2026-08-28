@@ -2,6 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import {
   buildCompactGmailAIConversation,
+  buildGmailAIThreadMessages,
   buildGmailAIAnalysisCacheKey,
   buildMailAIThreadContextCacheKey,
   buildMailAIThreadContextIdentity,
@@ -15,6 +16,7 @@ import {
   validateMailAIThreadContext,
   type GmailAIHistoryMessage,
 } from '../src/lib/gmail-ai-reply';
+import type { GmailThread } from '../src/lib/types';
 
 function message(index: number, overrides: Partial<GmailAIHistoryMessage> = {}): GmailAIHistoryMessage {
   return {
@@ -154,6 +156,40 @@ On Tue, someone wrote:
   assert.ok(compacted.length <= 1_200);
   assert.match(compacted, /报价 500 欧元/);
   assert.match(compacted, /8 月底发布/);
+});
+
+test('纯文本为空但 HTML 有正文时，AI 仍能读取页面显示的邮件内容', () => {
+  const thread: GmailThread = {
+    id: 'thread-html-only',
+    subject: 'HTML 邮件',
+    snippet: '备用摘要',
+    messages: [{
+      id: 'message-html-only',
+      threadId: 'thread-html-only',
+      from: 'Ryan <creator@example.com>',
+      to: 'me@example.com',
+      subject: 'HTML 邮件',
+      snippet: '',
+      body: '   \n',
+      htmlBody: '<html><head><style>.hidden { display: none; }</style></head><body><p>Hello Ryan &amp; team</p><p>Creator fee: 500 EUR</p><script>alert("hidden")</script></body></html>',
+      date: '2026-08-25T02:43:57.000Z',
+      isRead: true,
+      labels: ['INBOX'],
+      hasAttachments: false,
+    }],
+    participantCount: 2,
+    lastMessageDate: '2026-08-25T02:43:57.000Z',
+    hasUnread: false,
+    labels: ['INBOX'],
+    isStarred: false,
+  };
+
+  const messages = buildGmailAIThreadMessages(thread);
+  const conversation = buildCompactGmailAIConversation(messages);
+
+  assert.match(messages[0]?.body || '', /Hello Ryan & team/);
+  assert.match(conversation.text, /Creator fee: 500 EUR/);
+  assert.doesNotMatch(conversation.text, /display: none|alert\("hidden"\)|<p>/);
 });
 
 test('10 封分析上下文不超过 3 万字符', () => {

@@ -28,6 +28,7 @@ import {
   mailTimestampToIso,
   resolveImapMessageTimestamp,
 } from './mail-message-time';
+import { resolveMailMessageReadableText } from './email-text';
 
 const MAX_LIST_RESULTS = 50;
 const MAX_MESSAGE_BYTES = 32 * 1024 * 1024;
@@ -350,7 +351,11 @@ async function loadTencentThread(options: {
       try {
         const parsed = await simpleParser(item.source);
         const messageId = parsed.messageId || `${options.account.mailAccountId}:${folder}:${uid}`;
-        const body = parsed.text || '';
+        const htmlBody = typeof parsed.html === 'string' ? parsed.html : parsed.textAsHtml;
+        const body = resolveMailMessageReadableText({
+          body: parsed.text || '',
+          htmlBody,
+        });
         const attachments: GmailAttachment[] = parsed.attachments.map((attachment, index) => ({
           id: `${uid}:${index}`,
           filename: attachment.filename || `附件-${index + 1}`,
@@ -376,7 +381,7 @@ async function loadTencentThread(options: {
             subject: parsed.subject || '(无主题)',
             snippet: body.replace(/\s+/g, ' ').trim().slice(0, 240),
             body,
-            htmlBody: typeof parsed.html === 'string' ? parsed.html : parsed.textAsHtml,
+            htmlBody,
             attachments,
             date: mailTimestampToIso(resolveImapMessageTimestamp({
               internalDate: item.internalDate,

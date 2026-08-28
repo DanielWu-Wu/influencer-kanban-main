@@ -1,4 +1,5 @@
 import { ACCOUNT_SCOPE_CHANGED_EVENT, getAccountCacheScope } from '@/lib/account-cache-scope';
+import { resolveMailMessageReadableText } from '@/lib/email-text';
 import { isIgnoredGmailThreadSender } from '@/lib/gmail-thread-contact';
 import type { MailProvider } from '@/lib/mail-accounts';
 import type { GmailThread } from '@/lib/types';
@@ -15,6 +16,8 @@ export type GmailAIHistoryMessage = {
   replyTo?: string;
   date?: string;
   body?: string;
+  htmlBody?: string;
+  snippet?: string;
 };
 
 export type GmailAIConversation = {
@@ -64,7 +67,11 @@ export function buildGmailAIThreadMessages(
       cc: message.cc,
       replyTo: message.replyTo,
       date: message.date,
-      body: message.body,
+      body: resolveMailMessageReadableText({
+        body: message.body,
+        htmlBody: message.htmlBody,
+        snippet: message.snippet || thread.snippet,
+      }),
     }));
   return targetMessageId
     ? scopeGmailAIMessagesToReplyTarget(messages, targetMessageId, targetMessageDate)
@@ -168,7 +175,7 @@ export function buildMailAIThreadContextCacheKey(
     message.id || '',
     message.threadId || '',
     message.date || '',
-    hashCachePart(String(message.body || '')),
+    hashCachePart(resolveMailMessageReadableText(message)),
   ].join(':')).join('|');
   return [
     `thread-context-v${identity.version}`,
@@ -218,7 +225,11 @@ export function validateMailAIThreadContext(input: {
     cc: String(message?.cc || ''),
     replyTo: String(message?.replyTo || ''),
     date: String(message?.date || ''),
-    body: String(message?.body || ''),
+    body: resolveMailMessageReadableText({
+      body: String(message?.body || ''),
+      htmlBody: String(message?.htmlBody || ''),
+      snippet: String(message?.snippet || ''),
+    }),
   }));
   if (messages.some((message) => (
     !message.id
@@ -313,7 +324,7 @@ export function buildCompactGmailAIConversation(
     .sort((a, b) => parseMessageTime(a.date) - parseMessageTime(b.date))
     .slice(-GMAIL_AI_HISTORY_LIMIT);
   const inputCharacters = selectedMessages.reduce(
-    (total, message) => total + String(message.body || '').length,
+    (total, message) => total + resolveMailMessageReadableText(message).length,
     0,
   );
   let remaining = maxCharacters;
@@ -329,7 +340,7 @@ export function buildCompactGmailAIConversation(
 抄送：${message.cc || '无'}
 正文：`;
     const bodyLimit = Math.max(300, Math.min(maxMessageCharacters, remaining - header.length));
-    const body = compactGmailAIMessageBody(String(message.body || ''), bodyLimit);
+    const body = compactGmailAIMessageBody(resolveMailMessageReadableText(message), bodyLimit);
     const section = `${header}${body}`.slice(0, remaining);
     sections.push(section);
     remaining -= section.length + 2;
@@ -385,7 +396,7 @@ export function selectRelevantGmailAIDraftMessages(
     }
   }
   for (let index = sorted.length - 1; index >= 0 && selected.size < limit; index -= 1) {
-    if (BUSINESS_DETAIL_PATTERN.test(String(sorted[index].body || ''))) selected.add(index);
+    if (BUSINESS_DETAIL_PATTERN.test(resolveMailMessageReadableText(sorted[index]))) selected.add(index);
   }
   for (let index = sorted.length - 1; index >= 0 && selected.size < limit; index -= 1) {
     selected.add(index);
