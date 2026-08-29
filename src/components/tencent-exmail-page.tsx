@@ -51,8 +51,9 @@ import { NewEmailComposer } from '@/components/new-email-composer';
 import { getEditableMailDraft, type EditableMailDraft } from '@/lib/mail-draft-edit';
 import {
   collectUnreadMailTargets,
+  copyMailThreadReadState,
+  getMailThreadRowVisualState,
   setMailMessagesReadState,
-  shouldShowMailThreadUnreadStyle,
   type MailMessageReadTarget,
 } from '@/lib/mail-read-state';
 
@@ -829,12 +830,19 @@ export function TencentExmailPage({
                 || Boolean(selectedThread && thread.messages.some((item) => (
                   selectedThread.messages.some((selectedMessage) => selectedMessage.id === item.id)
                 )));
-              const visuallyUnread = shouldShowMailThreadUnreadStyle(thread.hasUnread, selected);
+              const {
+                visuallyUnread,
+                showSelectedIndicator,
+                showSelectedReadBackground,
+              } = getMailThreadRowVisualState(thread.hasUnread, selected);
+              const rowBackgroundClass = visuallyUnread
+                ? 'bg-primary/[0.055] hover:bg-primary/[0.075]'
+                : `${showSelectedReadBackground ? '!bg-white ' : ''}hover:bg-white/82`;
               if (threadListAvatarOnly) {
-                return <button key={thread.id} type="button" title={`${sender} · ${thread.subject || '(无主题)'}`} onClick={() => void openThread(thread)} className={`flex w-full items-center justify-center border-b border-border/45 py-3 outline-none hover:bg-white/82 ${selected ? '!bg-white shadow-[inset_2px_0_0_var(--primary)]' : ''}`}><span className={`flex h-9 w-9 items-center justify-center rounded-full text-xs font-semibold ${visuallyUnread ? 'bg-primary text-primary-foreground' : 'bg-muted text-muted-foreground'}`}>{sender.slice(0, 1).toUpperCase()}</span></button>;
+                return <button key={thread.id} type="button" title={`${sender} · ${thread.subject || '(无主题)'}`} onClick={() => void openThread(thread)} className={`flex w-full items-center justify-center border-b border-border/45 py-3 outline-none ${showSelectedIndicator ? 'shadow-[inset_2px_0_0_var(--primary)]' : ''} ${rowBackgroundClass}`}><span className={`flex h-9 w-9 items-center justify-center rounded-full text-xs font-semibold ${visuallyUnread ? 'bg-primary text-primary-foreground' : 'bg-muted text-muted-foreground'}`}>{sender.slice(0, 1).toUpperCase()}</span></button>;
               }
               return (
-                <div key={thread.id} role="button" tabIndex={0} onClick={() => void openThread(thread)} onKeyDown={(event) => { if (event.key === 'Enter' || event.key === ' ') { event.preventDefault(); void openThread(thread); } }} className={`glass-list-row group cursor-pointer border-b border-border/45 px-3 py-2.5 outline-none transition-colors hover:bg-white/82 ${selected ? '!bg-white shadow-[inset_2px_0_0_var(--primary)]' : ''} ${visuallyUnread ? 'bg-primary/[0.055]' : ''}`}>
+                <div key={thread.id} role="button" tabIndex={0} onClick={() => void openThread(thread)} onKeyDown={(event) => { if (event.key === 'Enter' || event.key === ' ') { event.preventDefault(); void openThread(thread); } }} className={`glass-list-row group cursor-pointer border-b border-border/45 px-3 py-2.5 outline-none transition-colors ${showSelectedIndicator ? 'shadow-[inset_2px_0_0_var(--primary)]' : ''} ${rowBackgroundClass}`}>
                   <div className="flex gap-2">
                     <Button variant="ghost" size="icon" className="mt-0.5 h-8 w-8 shrink-0 rounded-lg" title={thread.isStarred ? '取消星标' : '标星'} disabled={actionLoading} onClick={(event) => { event.stopPropagation(); void updateFlags(thread, { starred: !thread.isStarred }); }}><Star className={`h-4 w-4 ${thread.isStarred ? 'fill-amber-400 text-amber-400' : 'text-muted-foreground'}`} /></Button>
                     <div className="min-w-0 flex-1">
@@ -856,7 +864,7 @@ export function TencentExmailPage({
       {!showSettings && selectedThread && detailExpanded && <div ref={resizeHandleRef} role="separator" aria-label="调整邮件线程列表宽度，双击收缩，再次双击恢复默认宽度" aria-orientation="vertical" aria-valuemin={GMAIL_THREAD_LIST_MIN_WIDTH} aria-valuemax={threadListMaxWidth} aria-valuenow={threadListWidth} tabIndex={0} title="拖动调整邮件列表宽度；双击收缩，再次双击恢复默认宽度" data-testid="tencent-thread-list-resize-handle" className={`group relative z-20 -mx-1 hidden w-2 shrink-0 cursor-col-resize items-stretch justify-center outline-none lg:flex ${resizingThreadList ? 'bg-primary/10' : ''}`} onPointerDown={handleResizePointerDown} onPointerMove={handleResizePointerMove} onPointerUp={handleResizePointerEnd} onPointerCancel={handleResizePointerEnd} onDoubleClick={toggleThreadListWidth} onKeyDown={handleResizeKeyDown}><span className="w-px bg-border/70 transition-colors group-hover:bg-primary/70" /></div>}
 
       <div className={`material-reading min-h-0 min-w-0 flex-col overflow-hidden ${showSettings ? 'flex flex-[1_1_0%]' : selectedThread ? 'flex flex-[1_1_0%]' : 'hidden'}`}>
-        {showSettings ? <GmailSignatureSettings onBack={() => setShowSettings(false)} mailAccount={account} /> : selectedThread ? <EmailDetail key={`${account.mailAccountId}:${selectedThread.id}`} thread={selectedThread} loading={detailLoading} loadError={detailError} onBack={() => { setDetailExpanded(false); setSelectedThread(null); setDetailError(undefined); }} onThreadUpdated={(updatedThread) => { setSelectedThread(updatedThread); setThreads((current) => current.map((thread) => thread.id === updatedThread.id ? updatedThread : thread)); }} openComposerRequest={openComposerRequest} mailAccount={account} /> : null}
+        {showSettings ? <GmailSignatureSettings onBack={() => setShowSettings(false)} mailAccount={account} /> : selectedThread ? <EmailDetail key={`${account.mailAccountId}:${selectedThread.id}`} thread={selectedThread} loading={detailLoading} loadError={detailError} onBack={() => { setDetailExpanded(false); setSelectedThread(null); setDetailError(undefined); }} onThreadUpdated={(updatedThread) => { const updatedMessageIds = new Set(updatedThread.messages.map((message) => message.id)); setSelectedThread(updatedThread); setThreads((current) => current.map((thread) => thread.mailAccountId === updatedThread.mailAccountId && (thread.id === updatedThread.id || threadContainsAnyMessage(thread, updatedMessageIds)) ? copyMailThreadReadState(thread, updatedThread) : thread)); }} openComposerRequest={openComposerRequest} mailAccount={account} /> : null}
       </div>
 
       <NewEmailComposer

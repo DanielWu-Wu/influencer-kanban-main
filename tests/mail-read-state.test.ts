@@ -2,8 +2,9 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 import {
   collectUnreadMailTargets,
+  copyMailThreadReadState,
+  getMailThreadRowVisualState,
   setMailMessagesReadState,
-  shouldShowMailThreadUnreadStyle,
 } from '../src/lib/mail-read-state';
 import type { GmailMessage, GmailThread } from '../src/lib/types';
 
@@ -44,10 +45,46 @@ function thread(messages: GmailMessage[]): GmailThread {
   };
 }
 
-test('当前选中邮件不再使用未读蓝色背景，未选中的未读邮件保持蓝色', () => {
-  assert.equal(shouldShowMailThreadUnreadStyle(true, true), false);
-  assert.equal(shouldShowMailThreadUnreadStyle(true, false), true);
-  assert.equal(shouldShowMailThreadUnreadStyle(false, false), false);
+test('未读邮件无论是否选中都保留未读样式，已读邮件不显示未读样式', () => {
+  assert.deepEqual(getMailThreadRowVisualState(false, false), {
+    visuallyUnread: false,
+    showSelectedIndicator: false,
+    showSelectedReadBackground: false,
+  });
+  assert.deepEqual(getMailThreadRowVisualState(true, false), {
+    visuallyUnread: true,
+    showSelectedIndicator: false,
+    showSelectedReadBackground: false,
+  });
+  assert.deepEqual(getMailThreadRowVisualState(false, true), {
+    visuallyUnread: false,
+    showSelectedIndicator: true,
+    showSelectedReadBackground: true,
+  });
+  assert.deepEqual(getMailThreadRowVisualState(true, true), {
+    visuallyUnread: true,
+    showSelectedIndicator: true,
+    showSelectedReadBackground: false,
+  });
+});
+
+test('腾讯详情会话编号变化时可按真实邮件同步列表未读状态', () => {
+  const listThread = thread([
+    message({ id: 'shared-message', threadId: 'list-thread', isRead: true, labels: ['INBOX'] }),
+  ]);
+  const detailThread = {
+    ...thread([
+      message({ id: 'shared-message', threadId: 'detail-thread', isRead: false, labels: ['INBOX', 'UNREAD'] }),
+    ]),
+    id: 'detail-thread',
+  };
+
+  const updated = copyMailThreadReadState(listThread, detailThread);
+  assert.equal(updated.id, 'thread-1');
+  assert.equal(updated.hasUnread, true);
+  assert.equal(updated.labels.includes('UNREAD'), true);
+  assert.equal(updated.messages[0].isRead, false);
+  assert.equal(updated.messages[0].labels.includes('UNREAD'), true);
 });
 
 test('腾讯自动已读收集当前严格会话中所有可定位的未读真实邮件', () => {

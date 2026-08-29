@@ -1,6 +1,8 @@
 import type { AppSettings } from '@/lib/data';
 import { getAccountCacheScope } from '@/lib/account-cache-scope';
 import { detectEmailLanguage } from '@/lib/email-language';
+import type { MailProvider } from '@/lib/mail-accounts';
+import { repairTextEncoding, splitEmailForTranslation } from '@/lib/email-text';
 
 export const GMAIL_PRIMARY_INBOX_REFRESHED_EVENT = 'gmail-primary-inbox-refreshed';
 
@@ -11,6 +13,17 @@ export type GmailTranslationPrefetchCandidate = {
   subject: string;
   body: string;
   date: string;
+};
+
+export type MailTranslationPrefetchCandidate = GmailTranslationPrefetchCandidate & {
+  provider: MailProvider;
+  mailAccountId: string;
+  mailAddress: string;
+  folderRef?: string;
+  providerMessageRef?: string;
+  rfcMessageId?: string;
+  inReplyTo?: string;
+  references?: string;
 };
 
 export type GmailTranslationRequestResult = {
@@ -33,6 +46,7 @@ const inFlightTranslations = new Map<string, Promise<GmailTranslationRequestResu
 const recentTranslations = new Map<string, { result: GmailTranslationRequestResult; expiresAt: number }>();
 const scopeTranslationTails = new Map<string, Promise<void>>();
 const registeredQueues = new Map<string, GmailTranslationPrefetchQueue>();
+const TRANSLATION_FAILURE_COOLDOWN_MS = 30 * 60_000;
 
 function createTranslationRequestKey(scopeKey: string, messageId: string, text: string) {
   return `${scopeKey}::${messageId}::${text}`;
@@ -117,7 +131,15 @@ async function executeTranslationRequest(
   return { translatedText: state.translatedText.trim(), sourceLang: state.sourceLang };
 }
 
-export function getGmailTranslationScopeKey(gmailEmail?: string, accountScope = getAccountCacheScope()) {
+export function getMailTranslationScopeKey(mailAccountId?: string, accountScope = getAccountCacheScope()) {
+  return `${accountScope}::${mailAccountId?.trim().toLowerCase() || 'unknown-mail-account'}`;
+}
+
+export function getGmailTranslationScopeKey(mailAccountId?: string, accountScope = getAccountCacheScope()) {
+  return getMailTranslationScopeKey(mailAccountId, accountScope);
+}
+
+export function getLegacyGmailTranslationScopeKey(gmailEmail?: string, accountScope = getAccountCacheScope()) {
   return `${accountScope}::${gmailEmail?.trim().toLowerCase() || 'unknown-gmail'}`;
 }
 
@@ -180,39 +202,82 @@ export function selectGmailTranslationPrefetchCandidates(
     .slice(0, Math.max(0, limit));
 }
 
+export function selectDailyMailTranslationPrefetchCandidates<
+  T extends MailTranslationPrefetchCandidate & { answeredAt?: string; completedAt?: string },
+>(candidates: T[], options: { includeCompleted?: boolean } = {}) {
+  const seen = new Set<string>();
+  return [...candidates]
+    .filter((candidate) => {
+      const identity = `${candidate.provider}::${candidate.mailAccountId}::${candidate.messageId}`;
+      if (!candidate.messageId || seen.has(identity)) return false;
+      if (!options.includeCompleted && candidate.completedAt) return false;
+      const incomingAt = Date.parse(candidate.date);
+      const answeredAt = Date.parse(candidate.answeredAt || '');
+      if (Number.isFinite(incomingAt) && Number.isFinite(answeredAt) && answeredAt > incomingAt) return false;
+      const originalText = repairTextEncoding(candidate.body);
+      const currentText = splitEmailForTranslation(originalText).currentText || originalText;
+      if (!currentText.trim()) return false;
+      seen.add(identity);
+      return true;
+    })
+    .sort((left, right) => {
+      const dateDifference = Date.parse(right.date) - Date.parse(left.date);
+      return dateDifference || right.messageId.localeCompare(left.messageId);
+    });
+}
+
 export class GmailTranslationPrefetchQueue {
-  private static readonly MAX_QUEUE_SIZE = 3;
-  private readonly pending = new Map<string, GmailTranslationPrefetchCandidate>();
-  private readonly failed = new Set<string>();
+  private readonly pending = new Map<string, MailTranslationPrefetchCandidate>();
+  private readonly failedUntil = new Map<string, number>();
   private readonly processed = new Set<string>();
   private running = false;
   private runningMessageId: string | null = null;
+  private runningCandidateKey: string | null = null;
   private stopped = false;
 
   constructor(
-    private readonly process: (candidate: GmailTranslationPrefetchCandidate) => Promise<void>,
+    private readonly process: (candidate: MailTranslationPrefetchCandidate) => Promise<void>,
   ) {}
 
-  enqueue(candidates: GmailTranslationPrefetchCandidate[]) {
+  private candidateKey(candidate: Pick<MailTranslationPrefetchCandidate, 'provider' | 'mailAccountId' | 'messageId' | 'body'>) {
+    return `${candidate.provider}::${candidate.mailAccountId}::${candidate.messageId}::${candidate.body}`;
+  }
+
+  enqueue(candidates: MailTranslationPrefetchCandidate[]) {
     if (this.stopped) return;
     candidates.forEach((candidate) => {
+      const key = this.candidateKey(candidate);
+      const retryAt = this.failedUntil.get(key) || 0;
+      if (retryAt && retryAt <= Date.now()) this.failedUntil.delete(key);
       if (
         candidate.messageId
-        && this.pending.size + (this.runningMessageId ? 1 : 0) < GmailTranslationPrefetchQueue.MAX_QUEUE_SIZE
-        && !this.pending.has(candidate.messageId)
-        && !this.failed.has(candidate.messageId)
-        && !this.processed.has(candidate.messageId)
+        && !this.pending.has(key)
+        && this.runningCandidateKey !== key
+        && retryAt <= Date.now()
+        && !this.processed.has(key)
       ) {
-        this.pending.set(candidate.messageId, candidate);
+        this.pending.set(key, candidate);
       }
     });
     void this.drain();
   }
 
-  prioritize(messageId: string) {
-    const candidate = this.pending.get(messageId);
-    if (!candidate) return;
-    const reordered = [[messageId, candidate] as const, ...this.pending.entries()];
+  synchronize(candidates: MailTranslationPrefetchCandidate[]) {
+    const desired = new Set(candidates.map((candidate) => this.candidateKey(candidate)));
+    this.pending.forEach((_candidate, key) => {
+      if (!desired.has(key)) this.pending.delete(key);
+    });
+    this.enqueue(candidates);
+  }
+
+  prioritize(messageId: string, scopeKey?: string) {
+    const entry = [...this.pending.entries()].find(([, candidate]) => (
+      candidate.messageId === messageId
+      && (!scopeKey || getMailTranslationScopeKey(candidate.mailAccountId) === scopeKey)
+    ));
+    if (!entry) return;
+    const [key, candidate] = entry;
+    const reordered = [[key, candidate] as const, ...this.pending.entries()];
     this.pending.clear();
     reordered.forEach(([id, item]) => this.pending.set(id, item));
     if (!this.running) void this.drain();
@@ -224,7 +289,7 @@ export class GmailTranslationPrefetchQueue {
   }
 
   getPendingMessageIds() {
-    return [...this.pending.keys()];
+    return [...this.pending.values()].map((candidate) => candidate.messageId);
   }
 
   private async drain() {
@@ -232,19 +297,21 @@ export class GmailTranslationPrefetchQueue {
     this.running = true;
     try {
       while (!this.stopped && this.pending.size > 0) {
-        const [messageId, candidate] = this.pending.entries().next().value as [
+        const [candidateKey, candidate] = this.pending.entries().next().value as [
           string,
-          GmailTranslationPrefetchCandidate,
+          MailTranslationPrefetchCandidate,
         ];
-        this.pending.delete(messageId);
-        this.processed.add(messageId);
-        this.runningMessageId = messageId;
+        this.pending.delete(candidateKey);
+        this.runningMessageId = candidate.messageId;
+        this.runningCandidateKey = candidateKey;
         try {
           await this.process(candidate);
+          this.processed.add(candidateKey);
         } catch {
-          this.failed.add(messageId);
+          this.failedUntil.set(candidateKey, Date.now() + TRANSLATION_FAILURE_COOLDOWN_MS);
         } finally {
           this.runningMessageId = null;
+          this.runningCandidateKey = null;
         }
       }
     } finally {
@@ -261,7 +328,7 @@ export function registerGmailTranslationPrefetchQueue(scopeKey: string, queue: G
 }
 
 export function prioritizeGmailTranslationPrefetch(messageId: string, scopeKey: string) {
-  registeredQueues.get(scopeKey)?.prioritize(messageId);
+  registeredQueues.get(scopeKey)?.prioritize(messageId, scopeKey);
 }
 
 export function clearGmailTranslationRequests() {

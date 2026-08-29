@@ -1,29 +1,38 @@
 'use client';
 
-import { useCallback, useEffect, useRef } from 'react';
-import { useEmailTranslations, useGmailAuth, useSettings } from '@/lib/data';
+import { useEffect, useMemo, useRef } from 'react';
+import { useEmailTranslations, useSettings } from '@/lib/data';
+import { getAccountCacheScope } from '@/lib/account-cache-scope';
 import { repairTextEncoding, splitEmailForTranslation } from '@/lib/email-text';
 import {
-  GMAIL_PRIMARY_INBOX_REFRESHED_EVENT,
   GmailTranslationPrefetchQueue,
-  getGmailTranslationScopeKey,
+  getLegacyGmailTranslationScopeKey,
+  getMailTranslationScopeKey,
   getMailTranslationStorageMessageId,
   registerGmailTranslationPrefetchQueue,
   requestGmailTranslation,
-  selectGmailTranslationPrefetchCandidates,
-  type GmailTranslationPrefetchCandidate,
+  type MailTranslationPrefetchCandidate,
 } from '@/lib/gmail-translation-prefetch';
 
-export function useGmailTranslationPrefetch(active: boolean) {
-  const { auth } = useGmailAuth();
+function sortCandidates(candidates: MailTranslationPrefetchCandidate[]) {
+  return [...candidates].sort((left, right) => {
+    const dateDifference = Date.parse(right.date) - Date.parse(left.date);
+    return dateDifference || right.messageId.localeCompare(left.messageId);
+  });
+}
+
+export function useMailTranslationPrefetch(
+  active: boolean,
+  candidates: MailTranslationPrefetchCandidate[],
+) {
   const { settings } = useSettings();
   const { translations, addTranslation } = useEmailTranslations();
   const translationsRef = useRef(translations);
   const addTranslationRef = useRef(addTranslation);
   const settingsRef = useRef(settings);
-  const scopeRef = useRef('');
   const queueRef = useRef<GmailTranslationPrefetchQueue | null>(null);
-  const requestInFlightRef = useRef(false);
+  const accountScope = getAccountCacheScope();
+  const sortedCandidates = useMemo(() => sortCandidates(candidates), [candidates]);
 
   useEffect(() => {
     translationsRef.current = translations;
@@ -37,55 +46,45 @@ export function useGmailTranslationPrefetch(active: boolean) {
     settingsRef.current = settings;
   }, [settings]);
 
-  const refreshCandidates = useCallback(async () => {
-    const scopeKey = scopeRef.current;
-    const queue = queueRef.current;
-    if (!scopeKey || !queue || requestInFlightRef.current) return;
-    requestInFlightRef.current = true;
-    try {
-      const response = await fetch('/api/gmail?action=translation-candidates&maxResults=3', {
-        cache: 'no-store',
-      });
-      const result = await response.json().catch(() => null) as {
-        success?: boolean;
-        data?: GmailTranslationPrefetchCandidate[];
-      } | null;
-      if (!response.ok || !result?.success || !Array.isArray(result.data)) return;
-      if (scopeRef.current !== scopeKey || queueRef.current !== queue) return;
-      const cachedMessageIds = result.data.flatMap((candidate) => {
-        const storageMessageId = getMailTranslationStorageMessageId(scopeKey, candidate.messageId);
-        const originalText = repairTextEncoding(candidate.body);
-        return translationsRef.current.some((translation) => (
-          translation.messageId === storageMessageId
-          && translation.originalText === originalText
-        ))
-          ? [candidate.messageId]
-          : [];
-      });
-      queue.enqueue(selectGmailTranslationPrefetchCandidates(result.data, cachedMessageIds, 3));
-    } finally {
-      requestInFlightRef.current = false;
-    }
-  }, []);
-
   useEffect(() => {
-    if (!active || !auth?.isConnected || !auth.email) {
-      scopeRef.current = '';
+    if (!active) {
       queueRef.current?.stop();
       queueRef.current = null;
       return undefined;
     }
 
-    const scopeKey = getGmailTranslationScopeKey(auth.email);
-    scopeRef.current = scopeKey;
+    let disposed = false;
     const queue = new GmailTranslationPrefetchQueue(async (candidate) => {
-      if (scopeRef.current !== scopeKey) return;
+      if (disposed || getAccountCacheScope() !== accountScope) return;
       const originalText = repairTextEncoding(candidate.body);
+      const scopeKey = getMailTranslationScopeKey(candidate.mailAccountId, accountScope);
       const storageMessageId = getMailTranslationStorageMessageId(scopeKey, candidate.messageId);
-      if (translationsRef.current.some((translation) => (
+      const cached = translationsRef.current.find((translation) => (
         translation.messageId === storageMessageId
         && translation.originalText === originalText
-      ))) return;
+      ));
+      if (cached) return;
+
+      if (candidate.provider === 'gmail') {
+        const legacyScopeKey = getLegacyGmailTranslationScopeKey(candidate.mailAddress, accountScope);
+        const legacyStorageMessageId = getMailTranslationStorageMessageId(legacyScopeKey, candidate.messageId);
+        const legacy = translationsRef.current.find((translation) => (
+          translation.messageId === legacyStorageMessageId
+          && translation.originalText === originalText
+        ));
+        if (legacy) {
+          if (disposed || getAccountCacheScope() !== accountScope) return;
+          addTranslationRef.current({
+            messageId: storageMessageId,
+            originalText,
+            translatedText: legacy.translatedText,
+            sourceLang: legacy.sourceLang,
+            targetLang: legacy.targetLang,
+          });
+          return;
+        }
+      }
+
       const currentText = splitEmailForTranslation(originalText).currentText || originalText;
       if (!currentText.trim()) throw new Error('这封邮件没有可翻译的正文。');
       const result = await requestGmailTranslation({
@@ -94,7 +93,7 @@ export function useGmailTranslationPrefetch(active: boolean) {
         text: currentText,
         settings: settingsRef.current,
       });
-      if (scopeRef.current !== scopeKey) return;
+      if (disposed || getAccountCacheScope() !== accountScope) return;
       addTranslationRef.current({
         messageId: storageMessageId,
         originalText,
@@ -104,21 +103,39 @@ export function useGmailTranslationPrefetch(active: boolean) {
       });
     });
     queueRef.current = queue;
-    const unregister = registerGmailTranslationPrefetchQueue(scopeKey, queue);
-    void refreshCandidates();
-
-    const handlePrimaryInboxRefresh = () => {
-      void refreshCandidates();
-    };
-    window.addEventListener(GMAIL_PRIMARY_INBOX_REFRESHED_EVENT, handlePrimaryInboxRefresh);
 
     return () => {
-      window.removeEventListener(GMAIL_PRIMARY_INBOX_REFRESHED_EVENT, handlePrimaryInboxRefresh);
-      unregister();
+      disposed = true;
       queue.stop();
       if (queueRef.current === queue) queueRef.current = null;
-      if (scopeRef.current === scopeKey) scopeRef.current = '';
-      requestInFlightRef.current = false;
     };
-  }, [active, auth?.email, auth?.isConnected, refreshCandidates]);
+  }, [accountScope, active]);
+
+  useEffect(() => {
+    const queue = queueRef.current;
+    if (!active || !queue) return;
+    const pending = sortedCandidates.filter((candidate) => {
+      const originalText = repairTextEncoding(candidate.body);
+      const scopeKey = getMailTranslationScopeKey(candidate.mailAccountId, accountScope);
+      const storageMessageId = getMailTranslationStorageMessageId(scopeKey, candidate.messageId);
+      if (translations.some((translation) => (
+        translation.messageId === storageMessageId
+        && translation.originalText === originalText
+      ))) return false;
+      return true;
+    });
+    queue.synchronize(pending);
+  }, [accountScope, active, sortedCandidates, translations]);
+
+  useEffect(() => {
+    const queue = queueRef.current;
+    if (!active || !queue) return undefined;
+    const unregister = [...new Set(sortedCandidates.map((candidate) => (
+      getMailTranslationScopeKey(candidate.mailAccountId, accountScope)
+    )))].map((scopeKey) => registerGmailTranslationPrefetchQueue(scopeKey, queue));
+    return () => unregister.forEach((cleanup) => cleanup());
+  }, [accountScope, active, sortedCandidates]);
 }
+
+// 保留旧导出名称，避免历史调用方在同一未提交现场中失效。
+export const useGmailTranslationPrefetch = useMailTranslationPrefetch;

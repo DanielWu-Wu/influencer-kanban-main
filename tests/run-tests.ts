@@ -1,5 +1,6 @@
 import './feishu-record-index.test';
 import './feishu-record-cache.test';
+import './mail-creator-profile-cache.test';
 import './feishu-batch.test';
 import './feishu-field-value.test';
 import './cooperation-projects.test';

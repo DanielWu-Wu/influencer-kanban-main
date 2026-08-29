@@ -11,6 +11,7 @@ import {
   buildMailEmailGenerationTaskKey,
   buildOutreachEmailGenerationTaskKey,
   buildOutreachEmailTranslationTaskKey,
+  isEmailGenerationTaskRestorableForContext,
   markInterruptedEmailGenerationTasks,
   normalizeEmailGenerationConcurrency,
   normalizeEmailGenerationProgress,
@@ -21,6 +22,7 @@ import {
   serializeEmailGenerationTasks,
   selectStartableEmailTaskIds,
   updateEmailGenerationTaskAvatar,
+  updateEmailGenerationTaskDraftSavedAt,
   type EmailGenerationTask,
 } from '../src/lib/email-generation-tasks';
 
@@ -125,6 +127,54 @@ test('已结束任务保留 24 小时，运行中任务不会被过期清理', (
   );
 });
 
+test('邮件生成记录只恢复到同一邮箱、回复方式和回复依据', () => {
+  const now = EMAIL_GENERATION_TASK_RETENTION_MS + 20_000;
+  const key = buildMailEmailGenerationTaskKey({
+    kind: 'gmail_ai_reply',
+    mailAccountId: 'gmail:owner@example.com',
+    threadId: 'thread-1',
+    messageId: 'message-1',
+  });
+  const completed = {
+    ...task('restore', 'completed', now - 1_000),
+    key,
+    completedAt: now - 1_000,
+    navigation: {
+      view: 'gmail' as const,
+      threadId: 'thread-1',
+      messageId: 'message-1',
+      composerMode: 'ai' as const,
+    },
+  };
+  const context = {
+    key,
+    kind: 'gmail_ai_reply' as const,
+    provider: 'gmail' as const,
+    mailAccountId: 'gmail:owner@example.com',
+  };
+
+  assert.equal(isEmailGenerationTaskRestorableForContext(completed, context, now), true);
+  assert.equal(isEmailGenerationTaskRestorableForContext(completed, { ...context, mailAccountId: 'gmail:other@example.com' }, now), false);
+  assert.equal(isEmailGenerationTaskRestorableForContext(completed, { ...context, kind: 'gmail_template_reply' }, now), false);
+  assert.equal(isEmailGenerationTaskRestorableForContext(completed, { ...context, key: `${key}:new-message` }, now), false);
+});
+
+test('过期邮件记录不能自动恢复，运行中记录仍可继续显示', () => {
+  const now = EMAIL_GENERATION_TASK_RETENTION_MS + 20_000;
+  const key = 'gmail_ai_reply:thread-v2:thread-1:message-1';
+  const context = {
+    key,
+    kind: 'gmail_ai_reply' as const,
+    provider: 'gmail' as const,
+    mailAccountId: 'gmail:owner@example.com',
+  };
+  const expired = { ...task('expired-restore', 'completed', 1), key, completedAt: 1 };
+  const running = { ...task('running-restore', 'running', 1), key };
+
+  assert.equal(isEmailGenerationTaskRestorableForContext(expired, context, now), false);
+  assert.equal(isEmailGenerationTaskRestorableForContext(running, context, now), true);
+});
+
 test('同一封邮件重新生成时只保留最新任务', () => {
   const previous = { ...task('previous', 'completed', 1), key: 'same-reply' };
   const unrelated = { ...task('unrelated', 'completed', 2), key: 'another-reply' };
@@ -164,7 +214,7 @@ test('云端快照只保留可恢复字段，并能恢复已完成结果', () =>
     retryInput: { userIdeas: '礼貌确认发布时间', targetLang: 'en' },
   };
   const snapshot = serializeEmailGenerationTasks([original]);
-  assert.equal(snapshot.version, 3);
+  assert.equal(snapshot.version, 4);
   const [restored] = readEmailGenerationTaskSnapshot(snapshot);
   assert.equal(restored.id, original.id);
   assert.equal(restored.status, 'completed');
@@ -173,6 +223,77 @@ test('云端快照只保留可恢复字段，并能恢复已完成结果', () =>
   assert.deepEqual(restored.retryInput, original.retryInput);
   assert.equal(restored.avatarUrl, original.avatarUrl);
   assert.equal(restored.progress, 100);
+});
+
+test('草稿保存状态只更新当前系统账号的指定生成任务，并可在正文修改后清除', () => {
+  const completed = { ...task('saved-draft', 'completed', 1), completedAt: 2 };
+  const otherAccount = {
+    ...task('other-account', 'completed', 1),
+    accountUserId: 'account-b',
+    completedAt: 2,
+  };
+  const sameIdOtherMailbox = {
+    ...completed,
+    provider: 'tencent_exmail' as const,
+    mailAccountId: 'tencent_exmail:owner@example.com',
+    mailAddress: 'owner@example.com',
+  };
+  const running = task('running-draft', 'running', 1);
+  const savedAt = 123_456;
+  const updated = updateEmailGenerationTaskDraftSavedAt(
+    [completed, sameIdOtherMailbox, otherAccount, running],
+    completed.id,
+    'account-a',
+    completed.mailAccountId,
+    savedAt,
+  );
+
+  assert.equal(updated[0].draftSavedAt, savedAt);
+  assert.equal(updated[1].draftSavedAt, undefined);
+  assert.equal(updated[2].draftSavedAt, undefined);
+  assert.equal(updated[3].draftSavedAt, undefined);
+
+  const tencentUpdated = updateEmailGenerationTaskDraftSavedAt(
+    updated,
+    sameIdOtherMailbox.id,
+    'account-a',
+    sameIdOtherMailbox.mailAccountId,
+    savedAt + 1,
+  );
+  assert.equal(tencentUpdated[0].draftSavedAt, savedAt);
+  assert.equal(tencentUpdated[1].draftSavedAt, savedAt + 1);
+
+  const [restored] = readEmailGenerationTaskSnapshot(serializeEmailGenerationTasks([updated[0]]));
+  assert.equal(restored.draftSavedAt, savedAt);
+
+  const cleared = updateEmailGenerationTaskDraftSavedAt(
+    updated,
+    completed.id,
+    'account-a',
+    completed.mailAccountId,
+    null,
+  );
+  assert.equal(cleared[0].draftSavedAt, undefined);
+  assert.strictEqual(
+    updateEmailGenerationTaskDraftSavedAt(
+      cleared,
+      otherAccount.id,
+      'account-a',
+      otherAccount.mailAccountId,
+      savedAt,
+    ),
+    cleared,
+  );
+  assert.strictEqual(
+    updateEmailGenerationTaskDraftSavedAt(
+      cleared,
+      running.id,
+      'account-a',
+      running.mailAccountId,
+      savedAt,
+    ),
+    cleared,
+  );
 });
 
 test('旧版云端任务没有百分比时仍可安全恢复', () => {

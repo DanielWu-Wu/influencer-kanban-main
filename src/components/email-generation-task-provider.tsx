@@ -29,6 +29,7 @@ import {
   pruneExpiredEmailGenerationTasks,
   serializeEmailGenerationTasks,
   selectStartableEmailTaskIds,
+  updateEmailGenerationTaskDraftSavedAt,
   type EmailGenerationTask,
   type EmailGenerationTaskKind,
   type EmailGenerationTaskNavigation,
@@ -68,7 +69,9 @@ interface EmailGenerationTaskContextValue {
   cancelTask: (taskId: string) => void;
   retryTask: (taskId: string) => void;
   openTask: (taskId: string) => void;
+  getTaskById: (taskId: string) => EmailGenerationTask | undefined;
   getLatestTaskByKey: (key: string) => EmailGenerationTask | undefined;
+  setTaskDraftSaved: (taskId: string, mailAccountId: string, saved: boolean) => void;
   updateTaskAvatarByKey: (key: string, avatarUrl: string) => void;
 }
 
@@ -406,6 +409,14 @@ export function EmailGenerationTaskProvider({ children }: { children: ReactNode 
     if (task) dispatchOpenTask(task);
   }, []);
 
+  const getTaskById = useCallback((taskId: string) => {
+    return tasksRef.current.find((task) => (
+      task.id === taskId
+      && task.accountUserId === accountUserId
+      && task.status !== 'cancelled'
+    ));
+  }, [accountUserId]);
+
   const getLatestTaskByKey = useCallback((key: string) => {
     return [...tasksRef.current]
       .reverse()
@@ -415,6 +426,26 @@ export function EmailGenerationTaskProvider({ children }: { children: ReactNode 
         && task.status !== 'cancelled'
       ));
   }, [activeMailAccountId]);
+
+  const setTaskDraftSaved = useCallback((taskId: string, mailAccountId: string, saved: boolean) => {
+    const target = tasksRef.current.find((task) => (
+      task.id === taskId
+      && task.accountUserId === accountUserId
+      && task.mailAccountId === mailAccountId
+    ));
+    if (!target) return;
+    const nextSavedAt = saved ? Date.now() : null;
+    const nextTasks = updateEmailGenerationTaskDraftSavedAt(
+      tasksRef.current,
+      taskId,
+      accountUserId,
+      mailAccountId,
+      nextSavedAt,
+    );
+    if (nextTasks === tasksRef.current) return;
+    replaceTasks(() => nextTasks);
+    persistCloudTasks(true);
+  }, [accountUserId, persistCloudTasks, replaceTasks]);
 
   const updateTaskAvatarByKey = useCallback((key: string, avatarUrl: string) => {
     const normalizedAvatarUrl = avatarUrl.trim();
@@ -521,15 +552,19 @@ export function EmailGenerationTaskProvider({ children }: { children: ReactNode 
     cancelTask,
     retryTask,
     openTask,
+    getTaskById,
     getLatestTaskByKey,
+    setTaskDraftSaved,
     updateTaskAvatarByKey,
   }), [
     cancelTask,
     concurrency,
     enqueueTask,
+    getTaskById,
     getLatestTaskByKey,
     openTask,
     retryTask,
+    setTaskDraftSaved,
     setConcurrency,
     tasks,
     updateTaskAvatarByKey,

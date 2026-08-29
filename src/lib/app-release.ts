@@ -9,6 +9,17 @@ export const APP_RELEASE_LAST_SEEN_STORAGE_KEY = 'influencer-board-last-seen-rel
 
 export const APP_RELEASES: readonly AppRelease[] = [
   {
+    version: '1.2.4',
+    releasedAt: '2026-08-29',
+    title: '邮件处理体验与稳定性优化',
+    highlights: [
+      '优化 Gmail 与腾讯企业邮箱的待办邮件预翻译，打开来信时更快看到中文内容。',
+      '支持恢复近期生成的 AI 邮件内容，减少重复生成和等待。',
+      '提升红人识别稳定性，避免翻译或页面刷新时重复匹配。',
+      '优化未读邮件样式、AI 回复布局和邮件草稿状态提示。',
+    ],
+  },
+  {
     version: '1.2.3',
     releasedAt: '2026-08-28',
     title: '邮件处理与工作流体验优化',

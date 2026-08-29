@@ -6,8 +6,37 @@ export type MailMessageReadTarget = {
   providerMessageRef: string;
 };
 
-export function shouldShowMailThreadUnreadStyle(hasUnread: boolean, selected: boolean) {
-  return hasUnread && !selected;
+export function getMailThreadRowVisualState(hasUnread: boolean, selected: boolean) {
+  return {
+    visuallyUnread: hasUnread,
+    showSelectedIndicator: selected,
+    showSelectedReadBackground: selected && !hasUnread,
+  };
+}
+
+export function copyMailThreadReadState(
+  targetThread: GmailThread,
+  stateThread: GmailThread,
+) {
+  const stateMessages = new Map(stateThread.messages.map((message) => [message.id, message]));
+  return {
+    ...targetThread,
+    hasUnread: stateThread.hasUnread,
+    labels: stateThread.hasUnread
+      ? Array.from(new Set([...targetThread.labels, 'UNREAD']))
+      : targetThread.labels.filter((label) => label !== 'UNREAD'),
+    messages: targetThread.messages.map((message) => {
+      const stateMessage = stateMessages.get(message.id);
+      if (!stateMessage) return message;
+      return {
+        ...message,
+        isRead: stateMessage.isRead,
+        labels: stateMessage.isRead
+          ? message.labels.filter((label) => label !== 'UNREAD')
+          : Array.from(new Set([...message.labels, 'UNREAD'])),
+      };
+    }),
+  };
 }
 
 export function collectUnreadMailTargets(thread: GmailThread) {

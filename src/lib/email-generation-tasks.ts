@@ -1,5 +1,5 @@
 export const EMAIL_GENERATION_TASK_RETENTION_MS = 24 * 60 * 60 * 1000;
-export const EMAIL_GENERATION_TASKS_SCHEMA_VERSION = 3;
+export const EMAIL_GENERATION_TASKS_SCHEMA_VERSION = 4;
 export const EMAIL_GENERATION_TASK_OPEN_EVENT = 'email-generation-task-open';
 export const EMAIL_GENERATION_TOASTER_ID = 'email-generation-tasks';
 export const MAIL_AI_TASK_CONTEXT_VERSION = 'thread-v2';
@@ -72,6 +72,7 @@ export interface EmailGenerationTask {
   createdAt: number;
   startedAt?: number;
   completedAt?: number;
+  draftSavedAt?: number;
   result?: unknown;
   partialResult?: unknown;
   rollbackResult?: unknown;
@@ -212,6 +213,9 @@ function parseTask(value: unknown): EmailGenerationTask | null {
     createdAt: value.createdAt,
     startedAt: typeof value.startedAt === 'number' ? value.startedAt : undefined,
     completedAt: typeof value.completedAt === 'number' ? value.completedAt : undefined,
+    draftSavedAt: typeof value.draftSavedAt === 'number' && Number.isFinite(value.draftSavedAt)
+      ? value.draftSavedAt
+      : undefined,
     result: cloneJsonValue(value.result),
     partialResult: cloneJsonValue(value.partialResult),
     rollbackResult: cloneJsonValue(value.rollbackResult),
@@ -284,6 +288,27 @@ export function pruneExpiredEmailGenerationTasks(
   });
 }
 
+export function isEmailGenerationTaskRestorableForContext(
+  task: EmailGenerationTask,
+  context: {
+    key: string;
+    kind: 'gmail_ai_reply' | 'gmail_template_reply' | 'tencent_ai_reply' | 'tencent_template_reply';
+    provider: 'gmail' | 'tencent_exmail';
+    mailAccountId: string;
+  },
+  now = Date.now(),
+) {
+  if (
+    task.key !== context.key
+    || task.kind !== context.kind
+    || task.provider !== context.provider
+    || task.mailAccountId !== context.mailAccountId
+    || task.status === 'cancelled'
+  ) return false;
+  if (task.status === 'queued' || task.status === 'running') return true;
+  return now - (task.completedAt || task.createdAt) < EMAIL_GENERATION_TASK_RETENTION_MS;
+}
+
 export function replaceEmailGenerationTaskForKey(
   tasks: EmailGenerationTask[],
   nextTask: EmailGenerationTask,
@@ -292,6 +317,36 @@ export function replaceEmailGenerationTaskForKey(
     ...tasks.filter((task) => task.key !== nextTask.key || task.mailAccountId !== nextTask.mailAccountId),
     nextTask,
   ];
+}
+
+export function updateEmailGenerationTaskDraftSavedAt(
+  tasks: EmailGenerationTask[],
+  taskId: string,
+  accountUserId: string,
+  mailAccountId: string,
+  draftSavedAt: number | null,
+) {
+  const normalizedSavedAt = typeof draftSavedAt === 'number' && Number.isFinite(draftSavedAt)
+    ? draftSavedAt
+    : undefined;
+  let changed = false;
+  const updated = tasks.map((task) => {
+    if (
+      task.id !== taskId
+      || task.accountUserId !== accountUserId
+      || task.mailAccountId !== mailAccountId
+      || (normalizedSavedAt !== undefined && task.status !== 'completed')
+      || task.draftSavedAt === normalizedSavedAt
+    ) return task;
+    changed = true;
+    if (normalizedSavedAt === undefined) {
+      const clearedTask = { ...task };
+      delete clearedTask.draftSavedAt;
+      return clearedTask;
+    }
+    return { ...task, draftSavedAt: normalizedSavedAt };
+  });
+  return changed ? updated : tasks;
 }
 
 export function buildMailEmailGenerationTaskKey(input: {

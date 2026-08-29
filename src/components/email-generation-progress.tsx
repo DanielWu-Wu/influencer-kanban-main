@@ -5,6 +5,7 @@ import {
   Check,
   Clock3,
   LoaderCircle,
+  MailCheck,
   RotateCcw,
   X,
 } from 'lucide-react';
@@ -123,7 +124,15 @@ function TaskRow({
             {mailSource}
           </p>
         </div>
-        <p className="mt-0.5 truncate text-xs text-muted-foreground/80">{task.stage}</p>
+        <div className="mt-0.5 flex min-h-5 items-center justify-between gap-2">
+          <p className="min-w-0 truncate text-xs text-muted-foreground/80">{task.stage}</p>
+          {task.status === 'completed' && task.draftSavedAt ? (
+            <span className="inline-flex shrink-0 items-center gap-1 rounded-full border border-emerald-200 bg-emerald-50 px-2 py-0.5 text-[10px] font-semibold text-emerald-700">
+              <MailCheck className="size-3" />
+              已保存邮件草稿
+            </span>
+          ) : null}
+        </div>
         <div className="mt-1.5 flex items-center gap-2">
           <Progress
             value={progress}

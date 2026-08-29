@@ -63,6 +63,7 @@ import {
   buildGmailEmailTranslationTaskKey,
   buildMailEmailGenerationTaskKey,
   EMAIL_GENERATION_PROGRESS,
+  isEmailGenerationTaskRestorableForContext,
   MAIL_AI_TASK_CONTEXT_VERSION,
 } from '@/lib/email-generation-tasks';
 import type { MailAccount, MailDraftLocator } from '@/lib/mail-accounts';
@@ -90,6 +91,7 @@ interface EmailComposerProps {
   onClose: () => void;
   initialMessage?: string;
   onDraftSaved?: (content: string) => void;
+  restoreTaskId?: string;
   autoRetryRequest?: { taskId: string; retryInput?: unknown };
   avatarUrl?: string;
   mailAccount?: MailAccount;
@@ -197,6 +199,7 @@ export function EmailComposer({
   onClose,
   initialMessage,
   onDraftSaved,
+  restoreTaskId,
   autoRetryRequest,
   avatarUrl,
   mailAccount,
@@ -208,7 +211,13 @@ export function EmailComposer({
   const { settings, loading: settingsLoading } = useSettings();
   const { scheduleEmail } = useDelayedEmailSender();
   const { captureEvent } = useRecordAssistant();
-  const { enqueueTask, getLatestTaskByKey, updateTaskAvatarByKey } = useEmailGenerationTasks();
+  const {
+    enqueueTask,
+    getTaskById,
+    getLatestTaskByKey,
+    setTaskDraftSaved,
+    updateTaskAvatarByKey,
+  } = useEmailGenerationTasks();
   const [replyContent, setReplyContent] = useState(initialMessage || '');
   const [userIdeas, setUserIdeas] = useState('');
   const [analysis, setAnalysis] = useState<CollaborationAnalysis | null>(null);
@@ -222,6 +231,7 @@ export function EmailComposer({
   const [aiLoading, setAiLoading] = useState(false);
   const [aiError, setAiError] = useState('');
   const [suggestion, setSuggestion] = useState<AISuggestion | null>(null);
+  const [strategyEditing, setStrategyEditing] = useState(false);
   const [savingDraft, setSavingDraft] = useState(false);
   const [sending, setSending] = useState(false);
   const [smtpChecking, setSmtpChecking] = useState(false);
@@ -250,8 +260,10 @@ export function EmailComposer({
   const generationRunRef = useRef(0);
   const optimizationRunRef = useRef(0);
   const appliedGenerationTaskRef = useRef('');
+  const draftSourceTaskIdRef = useRef('');
   const targetLangLockedRef = useRef(false);
   const handledAutoRetryTaskRef = useRef('');
+  const localDraftDirtyRef = useRef(false);
   const targetContextKeyRef = useRef('');
   const isTencent = mailAccount?.provider === 'tencent_exmail';
   const providerLabel = isTencent ? '腾讯企业邮箱' : 'Gmail';
@@ -292,7 +304,22 @@ export function EmailComposer({
         threadId: thread.id,
         messageId: replyTarget?.messageId,
       });
-  const generationTask = getLatestTaskByKey(generationTaskKey);
+  const requestedTask = restoreTaskId ? getTaskById(restoreTaskId) : undefined;
+  const expectedTaskKind = isTencent ? 'tencent_ai_reply' : 'gmail_ai_reply';
+  const requestedGenerationTask = requestedTask?.kind === expectedTaskKind ? requestedTask : undefined;
+  const requestedTaskMatchesContext = Boolean(requestedGenerationTask && isEmailGenerationTaskRestorableForContext(
+    requestedGenerationTask,
+    {
+      key: generationTaskKey,
+      kind: expectedTaskKind,
+      provider: isTencent ? 'tencent_exmail' : 'gmail',
+      mailAccountId,
+    },
+  ));
+  const generationTask = requestedGenerationTask
+    ? (requestedTaskMatchesContext ? requestedGenerationTask : undefined)
+    : getLatestTaskByKey(generationTaskKey);
+  const generationTaskId = generationTask?.id || '';
   const translationTaskKey = isTencent
     ? `email_translation:${MAIL_AI_TASK_CONTEXT_VERSION}:${mailAccountId}:ai:${thread.id}:${replyTarget?.messageId || ''}`
     : buildGmailEmailTranslationTaskKey({
@@ -301,6 +328,13 @@ export function EmailComposer({
         messageId: replyTarget?.messageId,
       });
   const translationTask = getLatestTaskByKey(translationTaskKey);
+  const updateCurrentDraftSavedStatus = (saved: boolean) => {
+    const savedTranslationTaskId = translationTask?.status === 'completed' && translationTask.draftSavedAt
+      ? translationTask.id
+      : '';
+    const taskId = draftSourceTaskIdRef.current || savedTranslationTaskId || generationTaskId;
+    if (taskId) setTaskDraftSaved(taskId, mailAccountId, saved);
+  };
 
   useEffect(() => {
     if (!isTencent || !mailAccount || smtpReady) return undefined;
@@ -396,7 +430,6 @@ export function EmailComposer({
     analysisRunRef.current = runId;
     setAnalysisLoading(true);
     setAnalysisError('');
-    setSuggestion(null);
 
     try {
       const analysisKey = buildGmailAIAnalysisCacheKey(strictHistoryKey, {
@@ -475,25 +508,24 @@ export function EmailComposer({
       return;
     }
     if (appliedGenerationTaskRef.current === generationTask.id) return;
+    if (localDraftDirtyRef.current) return;
     appliedGenerationTaskRef.current = generationTask.id;
     setAiLoading(false);
     setGenerationStage('');
 
     if (generationTask.status === 'failed' || generationTask.status === 'interrupted') {
-      if (generationTask.status === 'interrupted') {
-        const retryInput = generationTask.retryInput as {
-          userIdeas?: string;
-          targetLang?: string;
-          targetLangName?: string;
-          replyTone?: ReplyTone;
-        } | undefined;
-        setUserIdeas((current) => current.trim() ? current : retryInput?.userIdeas || '');
-        if (!targetLangLockedRef.current && retryInput?.targetLang) {
-          setTargetLang(retryInput.targetLang);
-          setTargetLangName(retryInput.targetLangName || retryInput.targetLang);
-        }
-        if (retryInput?.replyTone) setReplyTone(retryInput.replyTone);
+      const retryInput = generationTask.retryInput as {
+        userIdeas?: string;
+        targetLang?: string;
+        targetLangName?: string;
+        replyTone?: ReplyTone;
+      } | undefined;
+      setUserIdeas((current) => current.trim() ? current : retryInput?.userIdeas || '');
+      if (!targetLangLockedRef.current && retryInput?.targetLang) {
+        setTargetLang(retryInput.targetLang);
+        setTargetLangName(retryInput.targetLangName || retryInput.targetLang);
       }
+      if (retryInput?.replyTone) setReplyTone(retryInput.replyTone);
       setSuggestion(rollback?.suggestion || null);
       setReplyContent(rollback?.replyContent || '');
       setEditedChineseReply(rollback?.editedChineseReply || '');
@@ -501,12 +533,25 @@ export function EmailComposer({
       setSynchronizedDraft(rollback?.synchronizedDraft || null);
       setDraftUsedAnalysis(Boolean(rollback?.draftUsedAnalysis));
       setGeneratedLangName(rollback?.generatedLangName || '');
+      if (rollback?.suggestion) setStrategyEditing(false);
       setAiError(generationTask.error || '任务已中断，请重新点击生成。');
       return;
     }
     if (generationTask.status !== 'completed') return;
     const result = generationTask.result as GmailAIReplyTaskResult | undefined;
-    if (!result?.suggestion?.suggestedReply) return;
+    if (!result?.suggestion?.suggestedReply) {
+      setAiError('这条生成记录缺少可恢复的邮件正文，请重新生成。');
+      return;
+    }
+    draftSourceTaskIdRef.current = generationTask.id;
+    const retryInput = generationTask.retryInput as {
+      userIdeas?: string;
+      targetLang?: string;
+      targetLangName?: string;
+      replyTone?: ReplyTone;
+    } | undefined;
+    setUserIdeas(retryInput?.userIdeas || '');
+    if (retryInput?.replyTone) setReplyTone(retryInput.replyTone);
     const completedSuggestion = result.suggestion;
     targetLangLockedRef.current = true;
     setTargetLang(result.targetLang);
@@ -524,8 +569,14 @@ export function EmailComposer({
     } : null);
     setDraftUsedAnalysis(result.usedAnalysis);
     setGeneratedLangName(result.targetLangName);
+    setStrategyEditing(false);
     setAiError('');
   }, [generationTask]);
+
+  useEffect(() => {
+    if (!requestedGenerationTask || requestedTaskMatchesContext) return;
+    setAiError('这条生成记录与当前邮箱、邮件线程或回复依据不一致，未自动套用旧正文。');
+  }, [requestedGenerationTask, requestedTaskMatchesContext]);
 
   useEffect(() => {
     if (!translationTask) return;
@@ -554,6 +605,7 @@ export function EmailComposer({
     );
     if (!translatedReply.trim()) return;
     appliedGenerationTaskRef.current = `translation:${translationTask.id}`;
+    draftSourceTaskIdRef.current = translationTask.id;
     setReplyContent(translatedReply);
     setSuggestion((current) => current ? {
       ...current,
@@ -652,6 +704,8 @@ export function EmailComposer({
 
   const generateReply = () => {
     if (!userIdeas.trim()) return;
+    updateCurrentDraftSavedStatus(false);
+    localDraftDirtyRef.current = false;
     const generationMessages = threadMessages;
     if (generationMessages.length === 0) {
       setAiError('当前邮件还没有可用于起草的正文，请稍后重试。');
@@ -1085,6 +1139,7 @@ export function EmailComposer({
 
   const applyOptimizedSuggestion = () => {
     if (!optimizedSuggestion) return;
+    updateCurrentDraftSavedStatus(false);
     setSuggestion(optimizedSuggestion);
     setReplyContent(optimizedSuggestion.suggestedReply);
     setEditedChineseReply(optimizedSuggestion.translatedReply);
@@ -1306,6 +1361,7 @@ export function EmailComposer({
         body: emailHtmlToText(outgoing.finalReply),
       });
       onDraftSaved?.(outgoing.finalReply);
+      updateCurrentDraftSavedStatus(true);
       setCompletion('draft');
     } catch (error) {
       setAiError(error instanceof Error ? error.message : `保存${providerLabel}草稿失败`);
@@ -1375,6 +1431,7 @@ export function EmailComposer({
               body: emailHtmlToText(outgoing.finalReply),
             },
           });
+          updateCurrentDraftSavedStatus(false);
           setCompletion('sent');
           onDraftSaved?.('');
         },
@@ -1406,6 +1463,7 @@ export function EmailComposer({
     }
 
     setAttachments(nextFiles);
+    updateCurrentDraftSavedStatus(false);
     setAttachmentError('');
     if (fileInputRef.current) fileInputRef.current.value = '';
   };
@@ -1472,6 +1530,7 @@ export function EmailComposer({
             aria-label={`移除附件 ${file.name}`}
             onClick={() => {
               setAttachments((current) => current.filter((_, fileIndex) => fileIndex !== index));
+              updateCurrentDraftSavedStatus(false);
               setAttachmentError('');
             }}
           >
@@ -1538,6 +1597,8 @@ export function EmailComposer({
           className="h-9 min-w-36 rounded-md border border-gray-300 bg-white px-3 text-sm font-normal text-gray-900 outline-none transition hover:border-gray-400 focus:border-primary focus:ring-2 focus:ring-primary/15 disabled:cursor-not-allowed disabled:opacity-50"
           disabled={aiLoading || translatingEditedReply}
           onChange={(event) => {
+            localDraftDirtyRef.current = true;
+            updateCurrentDraftSavedStatus(false);
             const language = LANGUAGE_OPTIONS.find(([code]) => code === event.target.value);
             targetLangLockedRef.current = true;
             setTargetLangNeedsConfirmation(false);
@@ -1562,7 +1623,10 @@ export function EmailComposer({
           value={replyTone}
           className="h-9 min-w-28 rounded-md border border-gray-300 bg-white px-3 text-sm font-normal text-gray-900 outline-none transition hover:border-gray-400 focus:border-primary focus:ring-2 focus:ring-primary/15 disabled:cursor-not-allowed disabled:opacity-50"
           disabled={aiLoading || translatingEditedReply}
-          onChange={(event) => setReplyTone(event.target.value as ReplyTone)}
+          onChange={(event) => {
+            localDraftDirtyRef.current = true;
+            setReplyTone(event.target.value as ReplyTone);
+          }}
         >
           {REPLY_TONE_OPTIONS.map((option) => (
             <option key={option.value} value={option.value}>{option.label}</option>
@@ -1574,18 +1638,6 @@ export function EmailComposer({
 
   const aiBody = (
     <div className="flex flex-col gap-3 px-4 py-4 @2xl/email-composer:px-5">
-      {(analysisLoading || settingsLoading) && (
-        <div className="flex items-center gap-3 rounded-lg border border-gray-200 bg-white p-4">
-          <Loader2 className="size-5 animate-spin text-primary" />
-          <div>
-            <p className="text-sm font-medium">正在后台分析最近往来</p>
-            <p className="text-xs text-muted-foreground">
-              不影响填写和生成；完成后会补充合作判断和风险提醒。
-            </p>
-          </div>
-        </div>
-      )}
-
       {analysisError && (
         <ErrorMessage message={analysisError}>
           <Button variant="outline" size="sm" onClick={() => void analyzeThread(true)}>重新分析</Button>
@@ -1595,7 +1647,7 @@ export function EmailComposer({
       {attachmentList}
       {attachmentError && <p className="text-xs text-destructive">{attachmentError}</p>}
 
-      {!suggestion && (
+      {(!suggestion || strategyEditing) && (
         <section className="rounded-lg border border-gray-300 bg-white shadow-sm transition focus-within:border-primary focus-within:ring-2 focus-within:ring-primary/15">
           <div className="border-b border-gray-100 px-4 py-3">
             <div className="flex items-center justify-between gap-3">
@@ -1613,7 +1665,10 @@ export function EmailComposer({
           <Textarea
             id="ai-reply-strategy"
             value={userIdeas}
-            onChange={(event) => setUserIdeas(event.target.value)}
+            onChange={(event) => {
+              localDraftDirtyRef.current = true;
+              setUserIdeas(event.target.value);
+            }}
             placeholder="例如：价格可以接受，但需要确认视频发布时间；请礼貌询问能否在月底前发布..."
             className="min-h-28 resize-y rounded-none border-0 bg-white px-4 py-3 shadow-none focus-visible:ring-0"
           />
@@ -1625,7 +1680,10 @@ export function EmailComposer({
                 variant="ghost"
                 size="sm"
                 className="h-8 bg-gray-50 px-2.5 text-xs font-normal text-gray-600 hover:bg-gray-100 hover:text-gray-900"
-                onClick={() => setUserIdeas((current) => current ? `${current}\n${text}` : text)}
+                onClick={() => {
+                  localDraftDirtyRef.current = true;
+                  setUserIdeas((current) => current ? `${current}\n${text}` : text);
+                }}
               >
                 {label}
               </Button>
@@ -1634,7 +1692,19 @@ export function EmailComposer({
         </section>
       )}
 
-      {analysis && !suggestion && (
+      {(analysisLoading || settingsLoading) && (
+        <div className="flex items-center gap-3 rounded-lg border border-gray-200 bg-white p-4">
+          <Loader2 className="size-5 animate-spin text-primary" />
+          <div>
+            <p className="text-sm font-medium">正在后台分析最近往来</p>
+            <p className="text-xs text-muted-foreground">
+              不影响填写和生成；完成后会补充合作判断和风险提醒。
+            </p>
+          </div>
+        </div>
+      )}
+
+      {analysis && (!suggestion || strategyEditing) && (
         <>
           <section className="overflow-hidden rounded-lg border border-gray-200 bg-white">
             <div className="border-b border-gray-100 px-4 py-3">
@@ -1868,6 +1938,8 @@ export function EmailComposer({
             <RichEmailEditor
               value={replyContent}
               onChange={(value) => {
+                localDraftDirtyRef.current = true;
+                updateCurrentDraftSavedStatus(false);
                 setReplyContent(value);
                 setTranslationUpdated(false);
               }}
@@ -1896,6 +1968,8 @@ export function EmailComposer({
                   <Textarea
                     value={editedChineseReply}
                     onChange={(event) => {
+                      localDraftDirtyRef.current = true;
+                      updateCurrentDraftSavedStatus(false);
                       setEditedChineseReply(event.target.value);
                     }}
                     placeholder="修改中文邮件正文..."
@@ -1978,7 +2052,7 @@ export function EmailComposer({
         {!embedded ? header : null}
         <ScrollArea className="min-h-0 flex-1 bg-[#F7F8FA]">{aiBody}</ScrollArea>
         <div className="shrink-0 border-t border-gray-200 bg-white px-4 py-3 shadow-[0_-4px_12px_rgba(15,23,42,0.035)]">
-          {!suggestion ? (
+          {!suggestion || strategyEditing ? (
             <div className="flex flex-col gap-3 @3xl/email-composer:flex-row @3xl/email-composer:items-center @3xl/email-composer:justify-between">
               {generationSettings}
               <Button
@@ -2014,7 +2088,7 @@ export function EmailComposer({
                   disabled={aiLoading || optimizationLoading || translatingEditedReply || translationEditing || sending || savingDraft}
                   onClick={() => {
                     optimizationRunRef.current += 1;
-                    setSuggestion(null);
+                    setStrategyEditing(true);
                     setOptimizedSuggestion(null);
                     setOptimizationError('');
                     setDraftUsedAnalysis(false);

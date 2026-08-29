@@ -43,8 +43,17 @@ import {
 import { outreachLanguageLabel } from '@/lib/outreach-languages';
 import {
   fetchFeishuRecordsCached,
+  invalidateFeishuRecordsCache,
   type CachedFeishuRecord as FeishuRecord,
 } from '@/lib/feishu-record-cache';
+import { getAccountCacheScope } from '@/lib/account-cache-scope';
+import {
+  buildMailCreatorProfileLookupKey,
+  parseMailCreatorProfileLookupKey,
+  readMailCreatorProfileCache,
+  writeMailCreatorProfileCache,
+  type MailCreatorProfile as FeishuCreatorProfile,
+} from '@/lib/mail-creator-profile-cache';
 import { normalizeEmail, type RecordAssistantLog } from '@/lib/record-assistant';
 import {
   buildChannelAvatarLookup,
@@ -59,6 +68,7 @@ import { useEmailGenerationTasks } from './email-generation-task-provider';
 import { GmailReplyTargetBar } from './gmail-reply-target-bar';
 import {
   getGmailTranslationScopeKey,
+  getLegacyGmailTranslationScopeKey,
   getMailTranslationStorageMessageId,
   prioritizeGmailTranslationPrefetch,
   requestGmailTranslation,
@@ -88,20 +98,6 @@ interface EmailDetailProps {
   };
   mailAccount?: MailAccount;
 }
-
-type FeishuCreatorProfile = {
-  recordId: string;
-  email: string;
-  matchedBy: string;
-  channelName: string;
-  channelUrl: string;
-  channelId: string;
-  region: string;
-  platform: string;
-  followers: string;
-  collaborationStatus: string;
-  hasReply: string;
-};
 
 type FeishuQuickAction = {
   id: string;
@@ -470,7 +466,10 @@ export function EmailDetail({
   const [translateErrors, setTranslateErrors] = useState<Record<string, string>>({});
   const [translationProgress, setTranslationProgress] = useState<Record<string, string>>({});
   const [streamingTranslations, setStreamingTranslations] = useState<Record<string, string>>({});
-  const [creatorProfile, setCreatorProfile] = useState<FeishuCreatorProfile | null>(null);
+  const [creatorProfileState, setCreatorProfileState] = useState<{
+    lookupKey: string;
+    profile: FeishuCreatorProfile | null;
+  }>({ lookupKey: '', profile: null });
   const [creatorProfileLoading, setCreatorProfileLoading] = useState(false);
   const [creatorProfileError, setCreatorProfileError] = useState('');
   const [channelAvatar, setChannelAvatar] = useState<ChannelAvatarState>({ status: 'idle' });
@@ -479,6 +478,25 @@ export function EmailDetail({
   const [profileActionMessage, setProfileActionMessage] = useState('');
   const [profileActionLogs, setProfileActionLogs] = useState<RecordAssistantLog[]>([]);
   const { settings } = useSettings();
+  const profileContactEmails = useMemo(() => {
+    return getGmailThreadContact(thread, ownEmail).emails;
+  }, [ownEmail, thread]);
+  const creatorProfileLookupKey = settings.feishuUrl
+    && settings.feishuFieldMapping?.email
+    && profileContactEmails.length
+    ? buildMailCreatorProfileLookupKey({
+        accountScope: getAccountCacheScope(),
+        provider: isTencent ? 'tencent_exmail' : 'gmail',
+        mailAccountId: thread.mailAccountId || mailAccount?.mailAccountId || mailScope,
+        threadId: thread.id,
+        contactEmails: profileContactEmails,
+        feishuUrl: settings.feishuUrl,
+        mapping: settings.feishuFieldMapping,
+      })
+    : '';
+  const creatorProfile = creatorProfileState.lookupKey === creatorProfileLookupKey
+    ? creatorProfileState.profile
+    : null;
   const { appendLog } = useRecordAssistant();
   const {
     tasks: emailGenerationTasks,
@@ -625,27 +643,34 @@ export function EmailDetail({
     setExpandedMessages(new Set(newestDisplayMessageId ? [newestDisplayMessageId] : []));
   }, [newestDisplayMessageId, thread.id]);
 
-  const profileContactEmails = useMemo(() => {
-    return getGmailThreadContact(thread, ownEmail).emails;
-  }, [ownEmail, thread]);
-
   useEffect(() => {
     let cancelled = false;
-    const feishuUrl = settings.feishuUrl;
-    const mapping = settings.feishuFieldMapping || {};
+    const activeLookup = parseMailCreatorProfileLookupKey(creatorProfileLookupKey);
+    const mapping = activeLookup?.mapping || {};
     const emailField = mapping.email;
 
-    if (!feishuUrl || !emailField || !profileContactEmails.length) {
-      setCreatorProfile(null);
+    if (!activeLookup || !emailField || !activeLookup.contactEmails.length) {
+      setCreatorProfileState({ lookupKey: creatorProfileLookupKey, profile: null });
       setCreatorProfileError('');
       setCreatorProfileLoading(false);
       return;
     }
-    const activeFeishuUrl = feishuUrl;
+    const activeFeishuUrl = activeLookup.feishuUrl;
     const activeEmailField = emailField;
+    const activeContactEmails = activeLookup.contactEmails;
+    const cachedMatch = readMailCreatorProfileCache(creatorProfileLookupKey);
 
     async function loadCreatorProfile() {
-      setCreatorProfileLoading(true);
+      if (cachedMatch) {
+        setCreatorProfileState({
+          lookupKey: creatorProfileLookupKey,
+          profile: cachedMatch.profile,
+        });
+        setCreatorProfileLoading(false);
+      } else {
+        setCreatorProfileState({ lookupKey: creatorProfileLookupKey, profile: null });
+        setCreatorProfileLoading(true);
+      }
       setCreatorProfileError('');
 
       try {
@@ -654,7 +679,7 @@ export function EmailDetail({
           .map((record) => {
             const emailValue = stringifyFeishuValue(record.fields[activeEmailField]);
             const emails = extractEmails(emailValue);
-            const matchedEmail = profileContactEmails.find((email) => emails.includes(email));
+            const matchedEmail = activeContactEmails.find((email) => emails.includes(email));
             const profile = matchedEmail
               ? {
                   channelName: getMappedFeishuValue(record, mapping, 'channelName') || '未填写频道名',
@@ -677,13 +702,13 @@ export function EmailDetail({
         if (cancelled) return;
 
         if (!matched) {
-          setCreatorProfile(null);
+          setCreatorProfileState({ lookupKey: creatorProfileLookupKey, profile: null });
+          writeMailCreatorProfileCache(creatorProfileLookupKey, null);
           return;
         }
 
         const matchedRecord = matched.record;
-
-        setCreatorProfile({
+        const matchedProfile: FeishuCreatorProfile = {
           recordId: matchedRecord.record_id,
           email: matched.matchedEmail,
           matchedBy: `邮箱：${matched.matchedEmail}`,
@@ -695,11 +720,21 @@ export function EmailDetail({
           followers: getMappedFeishuValue(matchedRecord, mapping, 'followers') || '未填写',
           collaborationStatus: getMappedFeishuValue(matchedRecord, mapping, 'collaborationStatus') || '未填写',
           hasReply: getMappedFeishuValue(matchedRecord, mapping, 'hasReply') || '未填写',
-        });
+        };
+        setCreatorProfileState({ lookupKey: creatorProfileLookupKey, profile: matchedProfile });
+        writeMailCreatorProfileCache(creatorProfileLookupKey, matchedProfile);
       } catch (error) {
         if (cancelled) return;
-        setCreatorProfile(null);
-        setCreatorProfileError(error instanceof Error ? error.message : '读取飞书红人资料失败。');
+        if (cachedMatch) {
+          setCreatorProfileState({
+            lookupKey: creatorProfileLookupKey,
+            profile: cachedMatch.profile,
+          });
+          setCreatorProfileError('');
+        } else {
+          setCreatorProfileState({ lookupKey: creatorProfileLookupKey, profile: null });
+          setCreatorProfileError(error instanceof Error ? error.message : '读取飞书红人资料失败。');
+        }
       } finally {
         if (!cancelled) setCreatorProfileLoading(false);
       }
@@ -710,7 +745,7 @@ export function EmailDetail({
     return () => {
       cancelled = true;
     };
-  }, [profileContactEmails, settings.feishuFieldMapping, settings.feishuUrl]);
+  }, [creatorProfileLookupKey]);
 
   useEffect(() => {
     let cancelled = false;
@@ -849,14 +884,16 @@ export function EmailDetail({
       const log = buildProfileWriteLog(creatorProfile, pendingProfileAction, mapping, 'synced');
       appendLog(log);
       setProfileActionLogs((current) => [log, ...current].slice(0, 5));
-      setCreatorProfile((current) => {
-        if (!current || current.recordId !== creatorProfile.recordId) return current;
-        return {
-          ...current,
-          collaborationStatus: pendingProfileAction.fields.collaborationStatus || current.collaborationStatus,
-          hasReply: pendingProfileAction.fields.hasReply || current.hasReply,
-        };
-      });
+      const updatedProfile = {
+        ...creatorProfile,
+        collaborationStatus: pendingProfileAction.fields.collaborationStatus || creatorProfile.collaborationStatus,
+        hasReply: pendingProfileAction.fields.hasReply || creatorProfile.hasReply,
+      };
+      setCreatorProfileState({ lookupKey: creatorProfileLookupKey, profile: updatedProfile });
+      if (creatorProfileLookupKey) {
+        writeMailCreatorProfileCache(creatorProfileLookupKey, updatedProfile);
+      }
+      invalidateFeishuRecordsCache(settings.feishuUrl);
       setProfileActionMessage(`已写回飞书：${pendingProfileAction.label}`);
       setPendingProfileAction(null);
     } catch (error) {
@@ -894,10 +931,28 @@ export function EmailDetail({
     getMailTranslationStorageMessageId(getGmailTranslationScopeKey(mailScope), messageId);
 
   const getScopedTranslation = (message: GmailMessage) => {
+    const originalText = repairTextEncoding(message.body);
     const translation = getTranslation(getTranslationStorageMessageId(message.id));
-    return translation?.originalText === repairTextEncoding(message.body)
-      ? translation
-      : undefined;
+    if (translation?.originalText === originalText) return translation;
+    if (isTencent || !ownEmail) return undefined;
+    const legacyStorageMessageId = getMailTranslationStorageMessageId(
+      getLegacyGmailTranslationScopeKey(ownEmail),
+      message.id,
+    );
+    const legacyTranslation = getTranslation(legacyStorageMessageId);
+    return legacyTranslation?.originalText === originalText ? legacyTranslation : undefined;
+  };
+
+  const migrateLegacyTranslation = (message: GmailMessage) => {
+    const translation = getScopedTranslation(message);
+    if (!translation || translation.messageId === getTranslationStorageMessageId(message.id)) return;
+    addTranslation({
+      messageId: getTranslationStorageMessageId(message.id),
+      originalText: translation.originalText,
+      translatedText: translation.translatedText,
+      sourceLang: translation.sourceLang,
+      targetLang: translation.targetLang,
+    });
   };
 
   const handleTranslateLegacy = async (message: GmailMessage) => {
@@ -975,6 +1030,7 @@ export function EmailDetail({
     prioritizeGmailTranslationPrefetch(message.id, translationScopeKey);
 
     if (getScopedTranslation(message)) {
+      migrateLegacyTranslation(message);
       setShowingTranslationIds((current) => new Set(current).add(message.id));
       return;
     }
@@ -1949,6 +2005,7 @@ export function EmailDetail({
                     mailAccount={mailAccount}
                     onClose={() => setComposerState('closed')}
                     onDraftSaved={setSavedReplyDraft}
+                    restoreTaskId={openComposerRequest?.taskId}
                     autoRetryRequest={openComposerRequest?.retryRequested && openComposerRequest.taskId
                       ? { taskId: openComposerRequest.taskId, retryInput: openComposerRequest.retryInput }
                       : undefined}
@@ -1968,6 +2025,7 @@ export function EmailDetail({
                     mailAccount={mailAccount}
                     onClose={() => setComposerState('closed')}
                     onDraftSaved={setSavedReplyDraft}
+                    restoreTaskId={openComposerRequest?.taskId}
                     autoRetryRequest={openComposerRequest?.retryRequested && openComposerRequest.taskId
                       ? { taskId: openComposerRequest.taskId, retryInput: openComposerRequest.retryInput }
                       : undefined}

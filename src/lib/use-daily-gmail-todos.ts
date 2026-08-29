@@ -25,6 +25,10 @@ import {
 } from '@/lib/youtube-channel-avatar';
 import { useMailAccounts } from '@/components/mail-account-provider';
 import type { MailProvider } from '@/lib/mail-accounts';
+import {
+  selectDailyMailTranslationPrefetchCandidates,
+  type MailTranslationPrefetchCandidate,
+} from '@/lib/gmail-translation-prefetch';
 
 type DailyGmailMessage = {
   messageId: string;
@@ -157,6 +161,8 @@ export function useDailyGmailTodos(settings: AppSettings, active = true) {
   const [refreshing, setRefreshing] = useState(false);
   const [error, setError] = useState('');
   const [sourceStatus, setSourceStatus] = useState<DailyMailboxStatus[]>([]);
+  const [translationCandidates, setTranslationCandidates] = useState<MailTranslationPrefetchCandidate[]>([]);
+  const freshTranslationCandidatesRef = useRef<MailTranslationPrefetchCandidate[]>([]);
   const runIdRef = useRef(0);
   const loadInFlightRef = useRef<{ scope: string; request: Promise<void> } | null>(null);
   const lastSuccessfulRefreshAtRef = useRef(0);
@@ -194,6 +200,21 @@ export function useDailyGmailTodos(settings: AppSettings, active = true) {
     settings.feishuUrl?.trim() || '',
     JSON.stringify(settings.feishuFieldMapping || {}),
   ].join('|');
+  const connectedMailAccountIds = useMemo(
+    () => new Set(accounts
+      .filter((mailAccount) => mailAccount.connectionStatus === 'connected')
+      .map((mailAccount) => mailAccount.mailAccountId)),
+    [accounts],
+  );
+
+  useEffect(() => {
+    freshTranslationCandidatesRef.current = freshTranslationCandidatesRef.current.filter((candidate) => (
+      connectedMailAccountIds.has(candidate.mailAccountId)
+    ));
+    setTranslationCandidates((current) => current.filter((candidate) => (
+      connectedMailAccountIds.has(candidate.mailAccountId)
+    )));
+  }, [connectedMailAccountIds]);
 
   const getAccessToken = useCallback(async (force = false) => {
     if (!auth?.isConnected) throw new Error('请先连接 Gmail。');
@@ -479,6 +500,30 @@ export function useDailyGmailTodos(settings: AppSettings, active = true) {
         if (item.summaryPending) pendingSummaryKeys.add(messageCacheKey(item));
       });
       taskCacheRef.current = nextTaskCache;
+      const candidateSnapshots = matched.map((item) => ({
+          provider: item.provider,
+          mailAccountId: item.mailAccountId,
+          mailAddress: item.mailAddress,
+          messageId: item.messageId,
+          threadId: item.threadId,
+          from: item.from,
+          subject: item.subject,
+          body: item.body,
+          date: item.date,
+          folderRef: item.folderRef,
+          providerMessageRef: item.providerMessageRef,
+          rfcMessageId: item.rfcMessageId,
+          inReplyTo: item.inReplyTo,
+          references: item.references,
+          answeredAt: item.answeredAt,
+          completedAt: nextTaskCache[dailyTaskKey(item)]?.completedAt,
+        }));
+      const freshTranslationCandidates = selectDailyMailTranslationPrefetchCandidates(
+        candidateSnapshots,
+        { includeCompleted: true },
+      );
+      freshTranslationCandidatesRef.current = freshTranslationCandidates;
+      setTranslationCandidates(selectDailyMailTranslationPrefetchCandidates(candidateSnapshots));
       saveAccountData(USER_DATA_KEYS.DAILY_MAIL_TASKS_V3, nextTaskCache);
       setItems(taskCacheToItems(nextTaskCache).map((item) => ({
         ...item,
@@ -598,6 +643,8 @@ export function useDailyGmailTodos(settings: AppSettings, active = true) {
 
   useEffect(() => {
     if (!active) {
+      freshTranslationCandidatesRef.current = [];
+      setTranslationCandidates([]);
       const cachedItems = taskCacheToItems(taskCacheRef.current);
       setItems(cachedItems);
       setLoading(cachedItems.length === 0);
@@ -637,6 +684,12 @@ export function useDailyGmailTodos(settings: AppSettings, active = true) {
     const completedAt = completed ? new Date().toISOString() : undefined;
     const updatedTask = { ...task, completedAt };
     taskCacheRef.current = { ...taskCacheRef.current, [taskId]: updatedTask };
+    setTranslationCandidates((current) => {
+      if (completed) return current.filter((candidate) => dailyTaskKey(candidate) !== taskId);
+      const restored = freshTranslationCandidatesRef.current.find((candidate) => dailyTaskKey(candidate) === taskId);
+      if (!restored || current.some((candidate) => dailyTaskKey(candidate) === taskId)) return current;
+      return [...current, restored].sort((left, right) => Date.parse(right.date) - Date.parse(left.date));
+    });
     saveAccountData(USER_DATA_KEYS.DAILY_MAIL_TASKS_V3, taskCacheRef.current);
     setItems((current) => current.map((item) => (
       dailyTaskKey(item) === taskId
@@ -651,6 +704,7 @@ export function useDailyGmailTodos(settings: AppSettings, active = true) {
     refreshing,
     error,
     sourceStatus,
+    translationCandidates,
     refresh: () => load(true),
     toggleCompleted,
   };

@@ -74,6 +74,7 @@ import {
   buildGmailEmailTranslationTaskKey,
   buildMailEmailGenerationTaskKey,
   EMAIL_GENERATION_PROGRESS,
+  isEmailGenerationTaskRestorableForContext,
   MAIL_AI_TASK_CONTEXT_VERSION,
 } from '@/lib/email-generation-tasks';
 import type { MailAccount, MailDraftLocator } from '@/lib/mail-accounts';
@@ -137,6 +138,7 @@ export function AITemplateReplyComposer({
   onMinimize,
   onClose,
   onDraftSaved,
+  restoreTaskId,
   autoRetryRequest,
   avatarUrl,
   mailAccount,
@@ -147,6 +149,7 @@ export function AITemplateReplyComposer({
   onMinimize?: () => void;
   onClose: () => void;
   onDraftSaved?: (content: string) => void;
+  restoreTaskId?: string;
   autoRetryRequest?: { taskId: string; retryInput?: unknown };
   avatarUrl?: string;
   mailAccount?: MailAccount;
@@ -156,7 +159,13 @@ export function AITemplateReplyComposer({
   const { addDraft } = useEmailDrafts();
   const { auth, connect } = useGmailAuth();
   const { settings, loading: settingsLoading } = useSettings();
-  const { enqueueTask, getLatestTaskByKey, updateTaskAvatarByKey } = useEmailGenerationTasks();
+  const {
+    enqueueTask,
+    getTaskById,
+    getLatestTaskByKey,
+    setTaskDraftSaved,
+    updateTaskAvatarByKey,
+  } = useEmailGenerationTasks();
   const aiTemplates = useMemo(() => getAIReplyTemplates(templates), [templates]);
   const [selectedTemplateId, setSelectedTemplateId] = useState('ai-reply-logistics');
   const selectedTemplate = useMemo(
@@ -186,8 +195,10 @@ export function AITemplateReplyComposer({
   const [factEditorOpen, setFactEditorOpen] = useState(false);
   const factEditorTextareaRef = useRef<HTMLTextAreaElement | null>(null);
   const appliedGenerationTaskRef = useRef('');
+  const draftSourceTaskIdRef = useRef('');
   const restoringTaskSettingsRef = useRef(false);
   const handledAutoRetryTaskRef = useRef('');
+  const localDraftDirtyRef = useRef(false);
   const targetLangLockedRef = useRef(false);
   const isTencent = mailAccount?.provider === 'tencent_exmail';
   const providerLabel = isTencent ? '腾讯企业邮箱' : 'Gmail';
@@ -226,7 +237,22 @@ export function AITemplateReplyComposer({
         threadId: thread.id,
         messageId: replyTarget?.messageId,
       });
-  const generationTask = getLatestTaskByKey(generationTaskKey);
+  const requestedTask = restoreTaskId ? getTaskById(restoreTaskId) : undefined;
+  const expectedTaskKind = isTencent ? 'tencent_template_reply' : 'gmail_template_reply';
+  const requestedGenerationTask = requestedTask?.kind === expectedTaskKind ? requestedTask : undefined;
+  const requestedTaskMatchesContext = Boolean(requestedGenerationTask && isEmailGenerationTaskRestorableForContext(
+    requestedGenerationTask,
+    {
+      key: generationTaskKey,
+      kind: expectedTaskKind,
+      provider: isTencent ? 'tencent_exmail' : 'gmail',
+      mailAccountId,
+    },
+  ));
+  const generationTask = requestedGenerationTask
+    ? (requestedTaskMatchesContext ? requestedGenerationTask : undefined)
+    : getLatestTaskByKey(generationTaskKey);
+  const generationTaskId = generationTask?.id || '';
   const translationTaskKey = isTencent
     ? `email_translation:${MAIL_AI_TASK_CONTEXT_VERSION}:${mailAccountId}:template:${thread.id}:${replyTarget?.messageId || ''}`
     : buildGmailEmailTranslationTaskKey({
@@ -235,6 +261,13 @@ export function AITemplateReplyComposer({
         messageId: replyTarget?.messageId,
       });
   const translationTask = getLatestTaskByKey(translationTaskKey);
+  const updateCurrentDraftSavedStatus = (saved: boolean) => {
+    const savedTranslationTaskId = translationTask?.status === 'completed' && translationTask.draftSavedAt
+      ? translationTask.id
+      : '';
+    const taskId = draftSourceTaskIdRef.current || savedTranslationTaskId || generationTaskId;
+    if (taskId) setTaskDraftSaved(taskId, mailAccountId, saved);
+  };
 
   const detectedReplyLanguage = externalMessage?.body
     ? detectReplyLanguage(emailHtmlToText(externalMessage.body))
@@ -298,26 +331,25 @@ export function AITemplateReplyComposer({
       return;
     }
     if (appliedGenerationTaskRef.current === generationTask.id) return;
+    if (localDraftDirtyRef.current) return;
     appliedGenerationTaskRef.current = generationTask.id;
     setLoading(false);
     setStage('');
 
     if (generationTask.status === 'failed' || generationTask.status === 'interrupted') {
-      if (generationTask.status === 'interrupted') {
-        const retryInput = generationTask.retryInput as {
-          selectedTemplateId?: string;
-          userIdeas?: string;
-          targetLang?: string;
-          replyTone?: ReplyTone;
-        } | undefined;
-        setUserIdeas((current) => current.trim() ? current : retryInput?.userIdeas || '');
-        if (retryInput?.selectedTemplateId && retryInput.selectedTemplateId !== selectedTemplateId) {
-          restoringTaskSettingsRef.current = true;
-          setSelectedTemplateId(retryInput.selectedTemplateId);
-        }
-        if (retryInput?.targetLang) setTargetLang(retryInput.targetLang);
-        if (retryInput?.replyTone) setReplyTone(retryInput.replyTone);
+      const retryInput = generationTask.retryInput as {
+        selectedTemplateId?: string;
+        userIdeas?: string;
+        targetLang?: string;
+        replyTone?: ReplyTone;
+      } | undefined;
+      setUserIdeas((current) => current.trim() ? current : retryInput?.userIdeas || '');
+      if (retryInput?.selectedTemplateId && retryInput.selectedTemplateId !== selectedTemplateId) {
+        restoringTaskSettingsRef.current = true;
+        setSelectedTemplateId(retryInput.selectedTemplateId);
       }
+      if (retryInput?.targetLang) setTargetLang(retryInput.targetLang);
+      if (retryInput?.replyTone) setReplyTone(retryInput.replyTone);
       setReplyContent(rollback?.replyContent || '');
       setSuggestion(rollback?.suggestion || null);
       setEditedChineseReply(rollback?.editedChineseReply || '');
@@ -330,7 +362,23 @@ export function AITemplateReplyComposer({
     }
     if (generationTask.status !== 'completed') return;
     const result = generationTask.result as GmailTemplateReplyTaskResult | undefined;
-    if (!result?.suggestion?.suggestedReply) return;
+    if (!result?.suggestion?.suggestedReply) {
+      setError('这条生成记录缺少可恢复的邮件正文，请重新生成。');
+      return;
+    }
+    draftSourceTaskIdRef.current = generationTask.id;
+    const retryInput = generationTask.retryInput as {
+      selectedTemplateId?: string;
+      userIdeas?: string;
+      targetLang?: string;
+      replyTone?: ReplyTone;
+    } | undefined;
+    setUserIdeas(retryInput?.userIdeas || '');
+    if (retryInput?.selectedTemplateId && retryInput.selectedTemplateId !== selectedTemplateId) {
+      restoringTaskSettingsRef.current = true;
+      setSelectedTemplateId(retryInput.selectedTemplateId);
+    }
+    if (retryInput?.replyTone) setReplyTone(retryInput.replyTone);
     setTargetLang(result.targetLang);
     setSuggestion(result.suggestion);
     setReplyContent(result.suggestion.suggestedReply);
@@ -346,6 +394,11 @@ export function AITemplateReplyComposer({
     setTranslationOpen(true);
     setError('');
   }, [generationTask, selectedTemplateId]);
+
+  useEffect(() => {
+    if (!requestedGenerationTask || requestedTaskMatchesContext) return;
+    setError('这条生成记录与当前邮箱、邮件线程或回复依据不一致，未自动套用旧正文。');
+  }, [requestedGenerationTask, requestedTaskMatchesContext]);
 
   useEffect(() => {
     if (!translationTask) return;
@@ -375,6 +428,7 @@ export function AITemplateReplyComposer({
     );
     if (!translatedReply.trim()) return;
     appliedGenerationTaskRef.current = taskMarker;
+    draftSourceTaskIdRef.current = translationTask.id;
     setReplyContent(translatedReply);
     setSuggestion((current) => current ? {
       ...current,
@@ -429,6 +483,8 @@ export function AITemplateReplyComposer({
 
   const generate = () => {
     if (!selectedTemplate || !userIdeas.trim() || settingsLoading) return;
+    updateCurrentDraftSavedStatus(false);
+    localDraftDirtyRef.current = false;
     const generationDetectedLanguage = targetLangLockedRef.current ? '' : detectedReplyLanguage;
     const generationTargetLang = generationDetectedLanguage || targetLang;
     if (externalMessage?.body?.trim() && !generationDetectedLanguage && targetLangNeedsConfirmation && !targetLangLockedRef.current) {
@@ -821,6 +877,7 @@ export function AITemplateReplyComposer({
       }
       addDraft({ to: recipientEmail, subject, body: cleanText });
       onDraftSaved?.(replyContent);
+      updateCurrentDraftSavedStatus(true);
       setDraftSaved(true);
     } catch (saveError) {
       setError(saveError instanceof Error ? saveError.message : `保存${providerLabel}草稿失败。`);
@@ -862,6 +919,8 @@ export function AITemplateReplyComposer({
                 value={selectedTemplate?.id}
                 disabled={loading || translatingChinese}
                 onValueChange={(value) => {
+                  localDraftDirtyRef.current = true;
+                  updateCurrentDraftSavedStatus(false);
                   setSelectedTemplateId(value);
                   setSuggestion(null);
                   setReplyContent('');
@@ -898,7 +957,10 @@ export function AITemplateReplyComposer({
               <Textarea
                 aria-label="邮件事实"
                 value={userIdeas}
-                onChange={(event) => setUserIdeas(event.target.value)}
+                onChange={(event) => {
+                  localDraftDirtyRef.current = true;
+                  setUserIdeas(event.target.value);
+                }}
                 placeholder="例如：产品今天已经发出，请他收到后告诉我，并确认大概什么时候可以拍摄。"
                 className="h-28 min-h-28 max-h-28 resize-none overflow-y-auto px-3 py-3 text-sm leading-6 shadow-inner"
               />
@@ -919,6 +981,8 @@ export function AITemplateReplyComposer({
                   value={targetLang}
                   disabled={loading || translatingChinese}
                   onValueChange={(value) => {
+                    localDraftDirtyRef.current = true;
+                    updateCurrentDraftSavedStatus(false);
                     targetLangLockedRef.current = true;
                     setTargetLang(value);
                     setTargetLangNeedsConfirmation(false);
@@ -935,7 +999,10 @@ export function AITemplateReplyComposer({
                     ))}
                   </SelectContent>
                 </Select>
-                <Select value={replyTone} onValueChange={(value) => setReplyTone(value as ReplyTone)}>
+                <Select value={replyTone} onValueChange={(value) => {
+                  localDraftDirtyRef.current = true;
+                  setReplyTone(value as ReplyTone);
+                }}>
                   <SelectTrigger className="w-full"><SelectValue /></SelectTrigger>
                   <SelectContent>
                     <SelectItem value="friendly">自然友好</SelectItem>
@@ -978,6 +1045,8 @@ export function AITemplateReplyComposer({
               <RichEmailEditor
                 value={replyContent}
                 onChange={(value) => {
+                  localDraftDirtyRef.current = true;
+                  updateCurrentDraftSavedStatus(false);
                   setReplyContent(value);
                   setDraftSaved(false);
                 }}
@@ -1023,6 +1092,8 @@ export function AITemplateReplyComposer({
                       <Textarea
                         value={editedChineseReply}
                         onChange={(event) => {
+                          localDraftDirtyRef.current = true;
+                          updateCurrentDraftSavedStatus(false);
                           setEditedChineseReply(event.target.value);
                           setChineseDirty(event.target.value.trim() !== suggestion.translatedReply.trim());
                           setTranslationUpdated(false);
@@ -1105,7 +1176,10 @@ export function AITemplateReplyComposer({
               ref={factEditorTextareaRef}
               aria-label="邮件事实"
               value={userIdeas}
-              onChange={(event) => setUserIdeas(event.target.value)}
+              onChange={(event) => {
+                localDraftDirtyRef.current = true;
+                setUserIdeas(event.target.value);
+              }}
               placeholder="例如：货今天已经发了，走 DHL，单号是 123456，预计下周二送达。请他收到后告诉我，并确认大概什么时候可以拍摄。"
               className="h-full min-h-0 resize-none px-4 py-3 text-base leading-7 shadow-inner"
             />
@@ -1125,6 +1199,7 @@ export function AITemplateReplyComposer({
         onUpdate={updateTemplate}
         onDelete={deleteTemplate}
         onSelect={(id) => {
+          localDraftDirtyRef.current = true;
           setSelectedTemplateId(id);
           setManagerOpen(false);
         }}

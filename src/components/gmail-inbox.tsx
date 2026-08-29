@@ -80,7 +80,7 @@ import {
   shouldRollbackAutomaticGmailRead,
   waitForAutomaticGmailRead,
 } from '@/lib/gmail-read-state';
-import { shouldShowMailThreadUnreadStyle } from '@/lib/mail-read-state';
+import { getMailThreadRowVisualState } from '@/lib/mail-read-state';
 
 const GMAIL_PAGE_SIZE = 50;
 const GMAIL_DETAIL_BATCH_SIZE = 16;
@@ -1968,7 +1968,14 @@ export function GmailInbox({
             const threadOpening = openingThreadId === thread.id;
             const avatar = threadAvatars[thread.id] || { status: 'idle' as const };
             const selected = selectedThreadId === thread.id;
-            const visuallyUnread = shouldShowMailThreadUnreadStyle(thread.hasUnread, selected);
+            const {
+              visuallyUnread,
+              showSelectedIndicator,
+              showSelectedReadBackground,
+            } = getMailThreadRowVisualState(thread.hasUnread, selected);
+            const rowBackgroundClass = visuallyUnread
+              ? 'bg-primary/[0.055] hover:bg-primary/[0.075] active:bg-primary/[0.09]'
+              : `${showSelectedReadBackground ? '!bg-white ' : ''}hover:bg-white/82 active:bg-white/90`;
 
             return (
               <div
@@ -1978,11 +1985,11 @@ export function GmailInbox({
                 aria-busy={threadOpening}
                 aria-label={avatarOnly ? `${sender}：${displaySubject || '(无主题)'}` : undefined}
                 title={avatarOnly ? `${sender}\n${displaySubject || '(无主题)'}` : undefined}
-                className={`glass-list-row group cursor-pointer border-b border-border/45 py-2.5 outline-none transition-[background-color,box-shadow] duration-200 ease-out hover:bg-white/82 active:bg-white/90 focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring/40 motion-reduce:transition-none ${
+                className={`glass-list-row group cursor-pointer border-b border-border/45 py-2.5 outline-none transition-[background-color,box-shadow] duration-200 ease-out focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring/40 motion-reduce:transition-none ${
                   avatarOnly ? 'px-2' : 'px-3'
-                } ${
-                  selected ? '!bg-white shadow-[inset_2px_0_0_var(--primary)]' : ''
-                } ${visuallyUnread ? 'bg-primary/[0.055]' : ''} ${threadOpening ? 'cursor-wait bg-white/85' : ''}`}
+                } ${showSelectedIndicator ? 'shadow-[inset_2px_0_0_var(--primary)]' : ''} ${rowBackgroundClass} ${
+                  threadOpening ? 'cursor-wait bg-white/85' : ''
+                }`}
                 onClick={() => handleOpenThread(thread)}
                 onMouseEnter={() => prefetchThread(thread)}
                 onMouseLeave={cancelThreadPrefetch}
