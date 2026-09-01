@@ -55,6 +55,7 @@ export type GmailThreadOpenRequest = {
   retryInput?: unknown;
   messageId?: string;
   composerMode?: 'ai' | 'template';
+  autoShowTranslation?: boolean;
 };
 
 export function GmailPage({

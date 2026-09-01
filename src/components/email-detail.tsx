@@ -6,7 +6,7 @@ import { Badge } from '@/components/ui/badge';
 import { ScrollArea } from '@/components/ui/scroll-area';
 import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover';
 import { Tabs, TabsList, TabsTrigger } from '@/components/ui/tabs';
-import { GmailAttachment, GmailThread, GmailMessage } from '@/lib/types';
+import { GmailAttachment, GmailThread, GmailMessage, type EmailTranslation } from '@/lib/types';
 import { useEmailTranslations, useGmailAuth, useSettings } from '@/lib/data';
 import { 
   ArrowLeft, Reply, MoreHorizontal, Globe, Languages,
@@ -70,6 +70,7 @@ import {
   getGmailTranslationScopeKey,
   getLegacyGmailTranslationScopeKey,
   getMailTranslationStorageMessageId,
+  publishMailTranslationPrefetchStatus,
   prioritizeGmailTranslationPrefetch,
   requestGmailTranslation,
 } from '@/lib/gmail-translation-prefetch';
@@ -95,6 +96,7 @@ interface EmailDetailProps {
     retryInput?: unknown;
     messageId?: string;
     composerMode?: 'ai' | 'template';
+    autoShowTranslation?: boolean;
   };
   mailAccount?: MailAccount;
 }
@@ -277,6 +279,12 @@ export function EmailDetail({
   );
   const replyAnchorManuallySelectedRef = useRef(false);
   const handledOpenComposerRequestRef = useRef(0);
+  const handledAutoTranslationRequestRef = useRef(0);
+  const autoShowTranslationMessageIdRef = useRef('');
+  const ensureTranslationRef = useRef<(message: GmailMessage) => Promise<void>>(async () => undefined);
+  const getScopedTranslationRef = useRef<(message: GmailMessage) => EmailTranslation | undefined>(
+    () => undefined,
+  );
   const [recipientOverrides, setRecipientOverrides] = useState<Record<string, string>>({});
   const [savedReplyDraft, setSavedReplyDraft] = useState('');
   const [changingReadStateId, setChangingReadStateId] = useState<string | null>(null);
@@ -287,7 +295,7 @@ export function EmailDetail({
     content: string;
     attachments: File[];
   } | null>(null);
-  const { addTranslation, getTranslation } = useEmailTranslations();
+  const { translations, addTranslation, getTranslation } = useEmailTranslations();
   const { auth, connect } = useGmailAuth();
   const isTencent = mailAccount?.provider === 'tencent_exmail' || thread.provider === 'tencent_exmail';
   const ownEmail = mailAccount?.email || auth?.email || '';
@@ -942,6 +950,7 @@ export function EmailDetail({
     const legacyTranslation = getTranslation(legacyStorageMessageId);
     return legacyTranslation?.originalText === originalText ? legacyTranslation : undefined;
   };
+  getScopedTranslationRef.current = getScopedTranslation;
 
   const migrateLegacyTranslation = (message: GmailMessage) => {
     const translation = getScopedTranslation(message);
@@ -1016,22 +1025,25 @@ export function EmailDetail({
 
   void handleTranslateLegacy;
 
-  const handleTranslate = async (message: GmailMessage) => {
-    if (showingTranslationIds.has(message.id)) {
-      setShowingTranslationIds((current) => {
-        const next = new Set(current);
-        next.delete(message.id);
-        return next;
-      });
-      return;
-    }
-
+  const ensureTranslation = async (message: GmailMessage) => {
     const translationScopeKey = getGmailTranslationScopeKey(mailScope);
     prioritizeGmailTranslationPrefetch(message.id, translationScopeKey);
 
     if (getScopedTranslation(message)) {
       migrateLegacyTranslation(message);
+      setTranslateErrors((current) => {
+        if (!current[message.id]) return current;
+        const next = { ...current };
+        delete next[message.id];
+        return next;
+      });
       setShowingTranslationIds((current) => new Set(current).add(message.id));
+      publishMailTranslationPrefetchStatus({
+        scopeKey: translationScopeKey,
+        messageId: message.id,
+        originalText: repairTextEncoding(message.body),
+        status: 'ready',
+      });
       return;
     }
 
@@ -1051,9 +1063,15 @@ export function EmailDetail({
       const { currentText, quotedText } = splitEmailForTranslation(originalText);
       if (!currentText) throw new Error('这封邮件没有可翻译的正文。');
 
+      publishMailTranslationPrefetchStatus({
+        scopeKey: translationScopeKey,
+        messageId: message.id,
+        originalText,
+        status: 'translating',
+      });
+
       const hasQuotedHistory = Boolean(quotedText.trim());
       const translationPrefix = hasQuotedHistory ? '【当前邮件翻译】\n' : '';
-      setShowingTranslationIds((current) => new Set(current).add(message.id));
       setStreamingTranslations((current) => ({
         ...current,
         [message.id]: translationPrefix,
@@ -1076,11 +1094,30 @@ export function EmailDetail({
         targetLang: 'zh',
       });
       setShowingTranslationIds((current) => new Set(current).add(message.id));
+      publishMailTranslationPrefetchStatus({
+        scopeKey: translationScopeKey,
+        messageId: message.id,
+        originalText,
+        status: 'ready',
+      });
     } catch (error) {
+      const errorMessage = error instanceof Error ? error.message : '翻译失败，请稍后重试';
       setTranslateErrors((current) => ({
         ...current,
-        [message.id]: error instanceof Error ? error.message : '翻译失败，请稍后重试',
+        [message.id]: errorMessage,
       }));
+      setShowingTranslationIds((current) => {
+        const next = new Set(current);
+        next.delete(message.id);
+        return next;
+      });
+      publishMailTranslationPrefetchStatus({
+        scopeKey: translationScopeKey,
+        messageId: message.id,
+        originalText: repairTextEncoding(message.body),
+        status: 'failed',
+        error: errorMessage,
+      });
     } finally {
       setTranslatingIds((current) => {
         const next = new Set(current);
@@ -1099,6 +1136,51 @@ export function EmailDetail({
       });
     }
   };
+  ensureTranslationRef.current = ensureTranslation;
+
+  const handleTranslate = (message: GmailMessage) => {
+    if (showingTranslationIds.has(message.id)) {
+      setShowingTranslationIds((current) => {
+        const next = new Set(current);
+        next.delete(message.id);
+        return next;
+      });
+      return;
+    }
+    void ensureTranslation(message);
+  };
+
+  useEffect(() => {
+    if (
+      !openComposerRequest?.autoShowTranslation
+      || handledAutoTranslationRequestRef.current === openComposerRequest.requestId
+    ) return;
+    const message = openComposerRequest.messageId
+      ? thread.messages.find((item) => item.id === openComposerRequest.messageId)
+      : undefined;
+    if (!message) return;
+    handledAutoTranslationRequestRef.current = openComposerRequest.requestId;
+    autoShowTranslationMessageIdRef.current = message.id;
+    setExpandedMessages((current) => new Set(current).add(message.id));
+    void ensureTranslationRef.current(message);
+  }, [openComposerRequest, thread.messages]);
+
+  useEffect(() => {
+    const translatedMessageIds = thread.messages.flatMap((message) => (
+      getScopedTranslationRef.current(message) ? [message.id] : []
+    ));
+    if (!translatedMessageIds.length) return;
+    const translatedSet = new Set(translatedMessageIds);
+    setTranslateErrors((current) => {
+      const next = { ...current };
+      translatedMessageIds.forEach((messageId) => delete next[messageId]);
+      return next;
+    });
+    const autoShowMessageId = autoShowTranslationMessageIdRef.current;
+    if (autoShowMessageId && translatedSet.has(autoShowMessageId)) {
+      setShowingTranslationIds((current) => new Set(current).add(autoShowMessageId));
+    }
+  }, [translations, thread.messages]);
 
   const hasQuotedHistory = (message: GmailMessage) => {
     const originalText = repairTextEncoding(message.body);
@@ -1738,7 +1820,7 @@ export function EmailDetail({
                             {showingTranslationIds.has(message.id) ? '中文翻译' : '原文'}
                           </Badge>
                           <Badge variant="secondary" className="bg-white/80 text-xs font-normal text-slate-600">
-                            {sourceLanguage}
+                            原文：{sourceLanguage}
                           </Badge>
                         </div>
                       </div>
@@ -1750,6 +1832,28 @@ export function EmailDetail({
                         {message.bcc ? <p><span className="text-muted-foreground">密送：</span>{message.bcc}</p> : null}
                         {message.replyTo ? <p><span className="text-muted-foreground">Reply-To：</span>{message.replyTo}</p> : null}
                       </div>
+
+                      {translatingIds.has(message.id) && !showingTranslationIds.has(message.id) ? (
+                        <div className="flex items-center gap-2 rounded-lg border border-blue-100 bg-blue-50/80 px-3 py-2 text-xs text-blue-700">
+                          <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                          正在准备中文，完成后会自动显示，无需再次点击。
+                        </div>
+                      ) : null}
+
+                      {translateErrors[message.id] && !showingTranslationIds.has(message.id) ? (
+                        <div className="flex items-center justify-between gap-3 rounded-lg border border-red-200 bg-red-50/80 px-3 py-2 text-xs text-red-700">
+                          <span>中文翻译失败：{translateErrors[message.id]}</span>
+                          <Button
+                            type="button"
+                            size="sm"
+                            variant="outline"
+                            className="h-7 shrink-0 border-red-200 bg-white px-2 text-xs text-red-700"
+                            onClick={() => void ensureTranslation(message)}
+                          >
+                            重试
+                          </Button>
+                        </div>
+                      ) : null}
 
                       {showingTranslationIds.has(message.id) && visibleTranslationText ? (
                         <div className="prose prose-sm max-w-none">
@@ -1883,9 +1987,6 @@ export function EmailDetail({
                             </>
                           )}
                         </Button>
-                        {translateErrors[message.id] && (
-                          <span className="text-xs text-destructive">{translateErrors[message.id]}</span>
-                        )}
                       </div>
                     </div>
                   )}

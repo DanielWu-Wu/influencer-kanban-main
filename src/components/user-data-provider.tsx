@@ -45,6 +45,7 @@ type UserDataContextValue = {
   loading: boolean;
   error: string;
   save: (key: UserDataKey, value: unknown) => void;
+  update: (key: UserDataKey, updater: (current: unknown) => unknown) => void;
 };
 
 const UserDataContext = createContext<UserDataContextValue | null>(null);
@@ -101,6 +102,7 @@ export function UserDataProvider({ children }: { children: React.ReactNode }) {
   const accountMustChangePassword = account?.mustChangePassword;
   const accountIsAdmin = account?.isAdmin;
   const [data, setData] = useState<Record<string, unknown>>({});
+  const dataRef = useRef<Record<string, unknown>>({});
   const [dataOwnerId, setDataOwnerId] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
@@ -173,10 +175,15 @@ export function UserDataProvider({ children }: { children: React.ReactNode }) {
     return () => { active = false; };
   }, [accountIsAdmin, accountMustChangePassword, accountStatus, accountUserId, ensureSession]);
 
+  useEffect(() => {
+    dataRef.current = data;
+  }, [data]);
+
   const save = useCallback((key: UserDataKey, value: unknown) => {
     const ownerId = accountUserId;
     if (!ownerId) return;
-    setData((current) => ({ ...current, [key]: value }));
+    dataRef.current = { ...dataRef.current, [key]: value };
+    setData(dataRef.current);
     const previous = writeQueues.current.get(key) || Promise.resolve();
     const next = previous
       .catch(() => undefined)
@@ -207,7 +214,14 @@ export function UserDataProvider({ children }: { children: React.ReactNode }) {
     writeQueues.current.set(key, next);
   }, [accountUserId, ensureSession]);
 
-  const value = useMemo<UserDataContextValue>(() => ({ data, loading, error, save }), [data, error, loading, save]);
+  const update = useCallback((key: UserDataKey, updater: (current: unknown) => unknown) => {
+    save(key, updater(dataRef.current[key]));
+  }, [save]);
+
+  const value = useMemo<UserDataContextValue>(
+    () => ({ data, loading, error, save, update }),
+    [data, error, loading, save, update],
+  );
   if (
     account?.status === 'active'
     && !account.mustChangePassword

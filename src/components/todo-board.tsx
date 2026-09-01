@@ -13,9 +13,14 @@ import {
   Flame, AlertCircle, Sparkles, Mail, RefreshCw, RotateCcw, ArrowRight, ChevronDown, ChevronRight
 } from 'lucide-react';
 import { formatLocalDateKey, parseLocalDateKey } from '@/lib/local-date';
-import { getDailyGmailTaskKey, isCompletedToday } from '@/lib/daily-gmail-todos';
+import { getDailyGmailTaskKey, isCompletedToday, isWithinDailyGmailWindow } from '@/lib/daily-gmail-todos';
 import type { DailyGmailTodo, DailyMailboxStatus } from '@/lib/use-daily-gmail-todos';
 import { YouTubeChannelAvatar } from '@/components/youtube-channel-avatar';
+import {
+  getMailTranslationScopeKey,
+  getMailTranslationStatusKey,
+  type MailTranslationPrefetchStatusInfo,
+} from '@/lib/gmail-translation-prefetch';
 
 interface TodoBoardProps {
   todos: TodoItem[];
@@ -28,9 +33,11 @@ interface TodoBoardProps {
   gmailRefreshing: boolean;
   gmailError: string;
   sourceStatus: DailyMailboxStatus[];
+  translationStatuses: Record<string, MailTranslationPrefetchStatusInfo>;
   onRefreshGmail: () => void;
   onOpenGmail: (item: DailyGmailTodo) => void;
   onToggleGmail: (messageId: string) => void;
+  onRetryTranslation: (item: DailyGmailTodo) => void;
 }
 
 const PRIORITY_CONFIG: Record<TodoPriority, { label: string; color: string; bgColor: string; icon: React.ReactNode }> = {
@@ -81,6 +88,48 @@ function dailyMailTaskKey(item: DailyGmailTodo) {
   );
 }
 
+function DailyMailTranslationStatus({
+  item,
+  statuses,
+  onRetry,
+}: {
+  item: DailyGmailTodo;
+  statuses: Record<string, MailTranslationPrefetchStatusInfo>;
+  onRetry: (item: DailyGmailTodo) => void;
+}) {
+  if (!isWithinDailyGmailWindow(item.date)) return null;
+  const scopeKey = getMailTranslationScopeKey(item.mailAccountId);
+  const info = statuses[getMailTranslationStatusKey(scopeKey, item.messageId)];
+  if (!info) return null;
+  const status = info.status;
+  if (status === 'ready') {
+    return <span className="shrink-0 rounded-md bg-emerald-50 px-1.5 py-0.5 text-[9px] font-medium text-emerald-600">中文已备好</span>;
+  }
+  if (status === 'failed') {
+    return (
+      <button
+        type="button"
+        className="shrink-0 rounded-md bg-red-50 px-1.5 py-0.5 text-[9px] font-medium text-red-600 hover:bg-red-100"
+        title={info?.error || '翻译失败，点击重试'}
+        onClick={() => onRetry(item)}
+      >
+        翻译失败 · 重试
+      </button>
+    );
+  }
+  if (status === 'translating' || status === 'retrying') {
+    return (
+      <span
+        className="inline-flex shrink-0 items-center gap-1 rounded-md bg-blue-50 px-1.5 py-0.5 text-[9px] font-medium text-blue-600"
+        title={status === 'retrying' ? (info?.error || '翻译失败，正在自动重试') : '正在提前翻译邮件正文'}
+      >
+        <RefreshCw className="h-2.5 w-2.5 animate-spin" />正在翻译
+      </span>
+    );
+  }
+  return <span className="shrink-0 rounded-md bg-slate-100 px-1.5 py-0.5 text-[9px] font-medium text-slate-500">等待翻译</span>;
+}
+
 export function TodoBoard({
   todos,
   onAdd,
@@ -92,9 +141,11 @@ export function TodoBoard({
   gmailRefreshing,
   gmailError,
   sourceStatus,
+  translationStatuses,
   onRefreshGmail,
   onOpenGmail,
   onToggleGmail,
+  onRetryTranslation,
 }: TodoBoardProps) {
   const [dialogMode, setDialogMode] = useState<'add' | 'edit' | null>(null);
   const [editingTodoId, setEditingTodoId] = useState<string | null>(null);
@@ -249,6 +300,7 @@ export function TodoBoard({
             <div className="flex min-w-0 items-center gap-2">
               <p className="truncate text-xs line-through">{entry.item.channelName}</p>
               <Badge variant="outline" className="h-5 shrink-0 px-1.5 text-[9px]">{entry.item.provider === 'tencent_exmail' ? '腾讯邮箱' : 'Gmail'}</Badge>
+              <DailyMailTranslationStatus item={entry.item} statuses={translationStatuses} onRetry={onRetryTranslation} />
               <span className="min-w-0 flex-1 truncate text-[10px] line-through">{entry.item.subject || '无主题'}</span>
             </div>
             <p className="mt-1 truncate text-[11px] text-slate-500 line-through">
@@ -415,6 +467,7 @@ export function TodoBoard({
                   <div className="flex min-w-0 items-center gap-2">
                     <p className="max-w-[300px] truncate text-[13px] font-semibold text-foreground">{entry.item.channelName}</p>
                     <Badge variant="outline" className="h-5 shrink-0 border-blue-100 bg-blue-50 px-1.5 text-[9px] font-medium text-blue-600"><Mail className="mr-1 h-2.5 w-2.5" />{entry.item.provider === 'tencent_exmail' ? '腾讯邮箱' : 'Gmail'}</Badge>
+                    <DailyMailTranslationStatus item={entry.item} statuses={translationStatuses} onRetry={onRetryTranslation} />
                     <span className="min-w-0 truncate text-[11px] text-muted-foreground">{entry.item.subject || '无主题'}</span>
                   </div>
                   <p className="mt-1 truncate text-[11px] text-slate-600">{entry.item.summary}{entry.item.summaryPending && <span className="ml-2 text-[10px] text-blue-500">AI 正在优化摘要…</span>}</p>

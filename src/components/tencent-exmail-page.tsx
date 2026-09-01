@@ -180,6 +180,7 @@ export type TencentExmailOpenRequest = {
   composerMode?: 'ai' | 'template';
   retryRequested?: boolean;
   retryInput?: unknown;
+  autoShowTranslation?: boolean;
 };
 
 export function TencentExmailPage({
@@ -758,6 +759,7 @@ export function TencentExmailPage({
       retryInput: openMessageRequest.retryInput,
       composerMode: openMessageRequest.composerMode,
       messageId: targetMessage.id,
+      autoShowTranslation: openMessageRequest.autoShowTranslation,
     };
   }, [openMessageRequest, selectedThread]);
 

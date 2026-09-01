@@ -10,8 +10,10 @@ import {
   requestGmailTranslation,
   selectDailyMailTranslationPrefetchCandidates,
   selectGmailTranslationPrefetchCandidates,
+  subscribeMailTranslationPrefetchStatus,
   type MailTranslationPrefetchCandidate,
 } from '../src/lib/gmail-translation-prefetch';
+import { upsertEmailTranslation } from '../src/lib/email-translations';
 
 function candidate(messageId: string, date: string): MailTranslationPrefetchCandidate {
   return {
@@ -44,7 +46,7 @@ test('Gmail 预翻译候选按时间排序、去重、跳过缓存且最多保�
   assert.deepEqual(selected.map((item) => item.messageId), ['newest', 'middle', 'old']);
 });
 
-test('每日待办预翻译覆盖 Gmail 和腾讯全部未完成来信并忽略已读状态', () => {
+test('每日待办预翻译覆盖 Gmail 和腾讯全部来信、包含已完成待办并忽略已读状态', () => {
   const selected = selectDailyMailTranslationPrefetchCandidates([
     { ...candidate('gmail-read', '2026-08-18T10:00:00.000Z') },
     { ...candidate('gmail-completed', '2026-08-18T09:00:00.000Z'), completedAt: '2026-08-18T09:30:00.000Z' },
@@ -56,12 +58,12 @@ test('每日待办预翻译覆盖 Gmail 和腾讯全部未完成来信并忽略�
     },
     { ...candidate('answered', '2026-08-18T07:00:00.000Z'), answeredAt: '2026-08-18T07:30:00.000Z' },
     { ...candidate('empty', '2026-08-18T06:00:00.000Z'), body: '   ' },
-  ]);
+  ], { includeCompleted: true });
 
-  assert.deepEqual(selected.map((item) => item.messageId), ['gmail-read', 'tencent']);
+  assert.deepEqual(selected.map((item) => item.messageId), ['gmail-read', 'gmail-completed', 'tencent']);
 });
 
-test('Gmail 预翻译队列严格单并发并按顺序继续处理', async () => {
+test('Gmail 预翻译队列默认最多两封并发并按候选顺序开始处理', async () => {
   const order: string[] = [];
   let active = 0;
   let maxActive = 0;
@@ -83,11 +85,11 @@ test('Gmail 预翻译队列严格单并发并按顺序继续处理', async () =>
   await nextTurn();
   await nextTurn();
 
-  assert.equal(maxActive, 1);
+  assert.equal(maxActive, 2);
   assert.deepEqual(order, ['10:00', '09:00', '08:00']);
 });
 
-test('统一预翻译队列不再限制三封并保持 Gmail 与腾讯单并发', async () => {
+test('统一预翻译队列不再限制三封并保持 Gmail 与腾讯总并发为二', async () => {
   const order: string[] = [];
   let active = 0;
   let maxActive = 0;
@@ -109,7 +111,7 @@ test('统一预翻译队列不再限制三封并保持 Gmail 与腾讯单并发'
   queue.enqueue(candidates);
   for (let index = 0; index < 8; index += 1) await nextTurn();
 
-  assert.equal(maxActive, 1);
+  assert.equal(maxActive, 2);
   assert.deepEqual(order, [
     'gmail:gmail-1',
     'gmail:gmail-2',
@@ -126,7 +128,7 @@ test('用户打开排队邮件时会将它提升为下一项', async () => {
   const queue = new GmailTranslationPrefetchQueue(async (item) => {
     order.push(item.messageId);
     if (item.messageId === '10:00') await firstBlocked;
-  });
+  }, { concurrency: 1 });
 
   queue.enqueue([
     candidate('10:00', '2026-08-18T10:00:00.000Z'),
@@ -140,7 +142,7 @@ test('用户打开排队邮件时会将它提升为下一项', async () => {
   assert.deepEqual(order, ['10:00', '08:00', '09:00']);
 });
 
-test('完成待办会从尚未开始的队列移除，恢复后可以重新加入', async () => {
+test('候选从同步列表消失时会退出等待队列，重新出现后可以再次加入', async () => {
   const order: string[] = [];
   let releaseFirst: (() => void) | undefined;
   const firstBlocked = new Promise<void>((resolve) => { releaseFirst = resolve; });
@@ -149,7 +151,7 @@ test('完成待办会从尚未开始的队列移除，恢复后可以重新加�
   const queue = new GmailTranslationPrefetchQueue(async (item) => {
     order.push(item.messageId);
     if (item.messageId === 'first') await firstBlocked;
-  });
+  }, { concurrency: 1 });
 
   queue.synchronize([first, removed]);
   queue.synchronize([first]);
@@ -162,20 +164,28 @@ test('完成待办会从尚未开始的队列移除，恢复后可以重新加�
   assert.deepEqual(order, ['first', 'removed']);
 });
 
-test('后台失败任务本轮不会自动重复进入队列', async () => {
+test('后台失败任务自动重试三次后停止并发布失败状态', async () => {
   let attempts = 0;
+  const statuses: string[] = [];
   const failed = candidate('failed', '2026-08-18T10:00:00.000Z');
   const queue = new GmailTranslationPrefetchQueue(async () => {
     attempts += 1;
     throw new Error('temporary failure');
+  }, { concurrency: 1, retryDelaysMs: [0, 0, 0] });
+  const unsubscribe = subscribeMailTranslationPrefetchStatus((update) => {
+    if (update.messageId === failed.messageId) statuses.push(update.status);
   });
 
-  queue.enqueue([failed]);
-  await nextTurn();
-  queue.enqueue([failed]);
-  await nextTurn();
+  try {
+    queue.enqueue([failed]);
+    for (let index = 0; index < 12; index += 1) await nextTurn();
 
-  assert.equal(attempts, 1);
+    assert.equal(attempts, 4);
+    assert.equal(statuses.at(-1), 'failed');
+  } finally {
+    unsubscribe();
+    queue.stop();
+  }
 });
 
 test('翻译作用域同时隔离系统账号和 Gmail 邮箱', () => {
@@ -248,7 +258,7 @@ test('相同邮件的手动翻译与后台翻译复用同一个请求', async ()
   }
 });
 
-test('同一账号和 Gmail 邮箱的翻译请求严格单并发', async () => {
+test('不同邮件的翻译请求可以并发，前台请求不再等待后台队列尾部', async () => {
   clearGmailTranslationRequests();
   const originalFetch = globalThis.fetch;
   const releases: Array<() => void> = [];
@@ -279,16 +289,38 @@ test('同一账号和 Gmail 邮箱的翻译请求严格单并发', async () => {
       settings: {},
     });
     await nextTurn();
-    assert.equal(activeRequests, 1);
+    assert.equal(activeRequests, 2);
     releases.shift()?.();
     await first;
     await nextTurn();
     assert.equal(activeRequests, 1);
     releases.shift()?.();
     await second;
-    assert.equal(maxActiveRequests, 1);
+    assert.equal(maxActiveRequests, 2);
   } finally {
     globalThis.fetch = originalFetch;
     clearGmailTranslationRequests();
   }
+});
+
+test('并发完成的多封译文使用合并更新时不会互相覆盖', () => {
+  const first = {
+    id: 'translation-1',
+    messageId: 'message-1',
+    originalText: 'Hola',
+    translatedText: '你好',
+    targetLang: 'zh',
+    createdAt: '2026-09-01T00:00:00.000Z',
+  };
+  const second = {
+    id: 'translation-2',
+    messageId: 'message-2',
+    originalText: 'Buenos dias',
+    translatedText: '早上好',
+    targetLang: 'zh',
+    createdAt: '2026-09-01T00:00:01.000Z',
+  };
+
+  const merged = upsertEmailTranslation(upsertEmailTranslation([], first), second);
+  assert.deepEqual(merged.map((item) => item.messageId), ['message-2', 'message-1']);
 });

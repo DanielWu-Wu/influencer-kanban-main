@@ -226,7 +226,7 @@ export default function DashboardPage() {
       && !mailAccountsLoading
     ),
   );
-  useMailTranslationPrefetch(
+  const mailTranslationPrefetch = useMailTranslationPrefetch(
     Boolean(user && account?.status === 'active' && !account.mustChangePassword),
     dailyGmail.translationCandidates,
   );
@@ -242,9 +242,13 @@ export default function DashboardPage() {
     setOpenCooperationProjectId(projectId);
     changeView('kanban');
   }, [changeView]);
-  const handleOpenGmailThread = useCallback((threadId: string) => {
+  const handleOpenGmailThread = useCallback((
+    threadId: string,
+    options: { messageId?: string; autoShowTranslation?: boolean } = {},
+  ) => {
     setGmailThreadOpenRequest((current) => ({
       threadId,
+      ...options,
       requestId: (current?.requestId || 0) + 1,
     }));
     changeView('gmail');
@@ -266,12 +270,16 @@ export default function DashboardPage() {
         folderRef: item.folderRef || '',
         providerMessageRef: item.providerMessageRef || '',
         rfcMessageId: item.rfcMessageId,
+        autoShowTranslation: true,
       }));
       changeView('gmail');
       return;
     }
     selectAccount(targetAccount.mailAccountId);
-    handleOpenGmailThread(item.threadId);
+    handleOpenGmailThread(item.threadId, {
+      messageId: item.messageId,
+      autoShowTranslation: true,
+    });
   }, [changeView, handleOpenGmailThread, mailAccounts, selectAccount]);
 
   useEffect(() => {
@@ -740,9 +748,13 @@ export default function DashboardPage() {
                 gmailRefreshing={dailyGmail.refreshing}
                 gmailError={dailyGmail.error}
                 sourceStatus={dailyGmail.sourceStatus}
+                translationStatuses={mailTranslationPrefetch.translationStatuses}
                 onRefreshGmail={dailyGmail.refresh}
                 onOpenGmail={handleOpenDailyMail}
                 onToggleGmail={dailyGmail.toggleCompleted}
+                onRetryTranslation={(item) => {
+                  mailTranslationPrefetch.retryTranslation(item.messageId, item.mailAccountId);
+                }}
               />
             </div>
           )}

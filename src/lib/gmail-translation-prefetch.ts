@@ -44,9 +44,24 @@ type GmailTranslationRequestOptions = {
 
 const inFlightTranslations = new Map<string, Promise<GmailTranslationRequestResult>>();
 const recentTranslations = new Map<string, { result: GmailTranslationRequestResult; expiresAt: number }>();
-const scopeTranslationTails = new Map<string, Promise<void>>();
 const registeredQueues = new Map<string, GmailTranslationPrefetchQueue>();
-const TRANSLATION_FAILURE_COOLDOWN_MS = 30 * 60_000;
+const translationStatusListeners = new Set<(update: MailTranslationPrefetchStatusUpdate) => void>();
+
+export type MailTranslationPrefetchStatus = 'queued' | 'translating' | 'retrying' | 'ready' | 'failed';
+
+export type MailTranslationPrefetchStatusInfo = {
+  status: MailTranslationPrefetchStatus;
+  error?: string;
+  originalText: string;
+};
+
+export type MailTranslationPrefetchStatusUpdate = MailTranslationPrefetchStatusInfo & {
+  scopeKey: string;
+  messageId: string;
+};
+
+export const MAIL_TRANSLATION_BACKGROUND_CONCURRENCY = 2;
+export const MAIL_TRANSLATION_RETRY_DELAYS_MS = [5_000, 30_000, 120_000] as const;
 
 function createTranslationRequestKey(scopeKey: string, messageId: string, text: string) {
   return `${scopeKey}::${messageId}::${text}`;
@@ -147,6 +162,23 @@ export function getMailTranslationStorageMessageId(scopeKey: string, messageId: 
   return `${scopeKey}::${messageId}`;
 }
 
+export function getMailTranslationStatusKey(scopeKey: string, messageId: string) {
+  return `${scopeKey}::${messageId}`;
+}
+
+export function publishMailTranslationPrefetchStatus(update: MailTranslationPrefetchStatusUpdate) {
+  translationStatusListeners.forEach((listener) => listener(update));
+}
+
+export function subscribeMailTranslationPrefetchStatus(
+  listener: (update: MailTranslationPrefetchStatusUpdate) => void,
+) {
+  translationStatusListeners.add(listener);
+  return () => {
+    translationStatusListeners.delete(listener);
+  };
+}
+
 export function requestGmailTranslation(options: GmailTranslationRequestOptions) {
   const key = createTranslationRequestKey(options.scopeKey, options.messageId, options.text);
   const recent = recentTranslations.get(key);
@@ -161,10 +193,7 @@ export function requestGmailTranslation(options: GmailTranslationRequestOptions)
     return existing;
   }
 
-  const previous = scopeTranslationTails.get(options.scopeKey) || Promise.resolve();
-  const request = previous
-    .catch(() => undefined)
-    .then(() => executeTranslationRequest(options))
+  const request = executeTranslationRequest(options)
     .then((result) => {
       recentTranslations.set(key, { result, expiresAt: Date.now() + 60_000 });
       return result;
@@ -173,12 +202,6 @@ export function requestGmailTranslation(options: GmailTranslationRequestOptions)
       if (inFlightTranslations.get(key) === request) inFlightTranslations.delete(key);
     });
   inFlightTranslations.set(key, request);
-  const tail = request.then(() => undefined, () => undefined).finally(() => {
-    if (scopeTranslationTails.get(options.scopeKey) === tail) {
-      scopeTranslationTails.delete(options.scopeKey);
-    }
-  });
-  scopeTranslationTails.set(options.scopeKey, tail);
   return request;
 }
 
@@ -228,44 +251,83 @@ export function selectDailyMailTranslationPrefetchCandidates<
 
 export class GmailTranslationPrefetchQueue {
   private readonly pending = new Map<string, MailTranslationPrefetchCandidate>();
-  private readonly failedUntil = new Map<string, number>();
   private readonly processed = new Set<string>();
-  private running = false;
-  private runningMessageId: string | null = null;
-  private runningCandidateKey: string | null = null;
+  private readonly knownCandidates = new Map<string, MailTranslationPrefetchCandidate>();
+  private readonly failureCounts = new Map<string, number>();
+  private readonly retryTimers = new Map<string, ReturnType<typeof setTimeout>>();
+  private readonly runningCandidateKeys = new Set<string>();
+  private desiredCandidateKeys = new Set<string>();
+  private activeCount = 0;
   private stopped = false;
 
   constructor(
     private readonly process: (candidate: MailTranslationPrefetchCandidate) => Promise<void>,
+    private readonly options: {
+      concurrency?: number;
+      retryDelaysMs?: readonly number[];
+      accountScope?: string;
+    } = {},
   ) {}
 
   private candidateKey(candidate: Pick<MailTranslationPrefetchCandidate, 'provider' | 'mailAccountId' | 'messageId' | 'body'>) {
     return `${candidate.provider}::${candidate.mailAccountId}::${candidate.messageId}::${candidate.body}`;
   }
 
+  private emitStatus(
+    candidate: MailTranslationPrefetchCandidate,
+    status: MailTranslationPrefetchStatus,
+    error?: string,
+  ) {
+    publishMailTranslationPrefetchStatus({
+      scopeKey: getMailTranslationScopeKey(candidate.mailAccountId, this.options.accountScope),
+      messageId: candidate.messageId,
+      originalText: repairTextEncoding(candidate.body),
+      status,
+      error,
+    });
+  }
+
+  private addPendingFirst(key: string, candidate: MailTranslationPrefetchCandidate) {
+    const reordered = [[key, candidate] as const, ...this.pending.entries()];
+    this.pending.clear();
+    reordered.forEach(([candidateKey, item]) => this.pending.set(candidateKey, item));
+  }
+
   enqueue(candidates: MailTranslationPrefetchCandidate[]) {
     if (this.stopped) return;
     candidates.forEach((candidate) => {
       const key = this.candidateKey(candidate);
-      const retryAt = this.failedUntil.get(key) || 0;
-      if (retryAt && retryAt <= Date.now()) this.failedUntil.delete(key);
+      this.knownCandidates.set(key, candidate);
+      this.desiredCandidateKeys.add(key);
       if (
         candidate.messageId
         && !this.pending.has(key)
-        && this.runningCandidateKey !== key
-        && retryAt <= Date.now()
+        && !this.runningCandidateKeys.has(key)
+        && !this.retryTimers.has(key)
         && !this.processed.has(key)
       ) {
         this.pending.set(key, candidate);
+        this.emitStatus(candidate, 'queued');
       }
     });
-    void this.drain();
+    this.drain();
   }
 
   synchronize(candidates: MailTranslationPrefetchCandidate[]) {
     const desired = new Set(candidates.map((candidate) => this.candidateKey(candidate)));
+    this.desiredCandidateKeys = desired;
+    candidates.forEach((candidate) => this.knownCandidates.set(this.candidateKey(candidate), candidate));
     this.pending.forEach((_candidate, key) => {
       if (!desired.has(key)) this.pending.delete(key);
+    });
+    this.retryTimers.forEach((timer, key) => {
+      if (desired.has(key)) return;
+      clearTimeout(timer);
+      this.retryTimers.delete(key);
+      this.failureCounts.delete(key);
+    });
+    this.knownCandidates.forEach((_candidate, key) => {
+      if (!desired.has(key) && !this.runningCandidateKeys.has(key)) this.knownCandidates.delete(key);
     });
     this.enqueue(candidates);
   }
@@ -273,49 +335,95 @@ export class GmailTranslationPrefetchQueue {
   prioritize(messageId: string, scopeKey?: string) {
     const entry = [...this.pending.entries()].find(([, candidate]) => (
       candidate.messageId === messageId
-      && (!scopeKey || getMailTranslationScopeKey(candidate.mailAccountId) === scopeKey)
+      && (!scopeKey || getMailTranslationScopeKey(candidate.mailAccountId, this.options.accountScope) === scopeKey)
+    ));
+    if (entry) {
+      const [key, candidate] = entry;
+      this.pending.delete(key);
+      this.addPendingFirst(key, candidate);
+      this.drain();
+      return;
+    }
+    this.retry(messageId, scopeKey);
+  }
+
+  retry(messageId: string, scopeKey?: string) {
+    const entry = [...this.knownCandidates.entries()].find(([, candidate]) => (
+      candidate.messageId === messageId
+      && (!scopeKey || getMailTranslationScopeKey(candidate.mailAccountId, this.options.accountScope) === scopeKey)
     ));
     if (!entry) return;
     const [key, candidate] = entry;
-    const reordered = [[key, candidate] as const, ...this.pending.entries()];
-    this.pending.clear();
-    reordered.forEach(([id, item]) => this.pending.set(id, item));
-    if (!this.running) void this.drain();
+    const timer = this.retryTimers.get(key);
+    if (timer) clearTimeout(timer);
+    this.retryTimers.delete(key);
+    this.failureCounts.delete(key);
+    this.processed.delete(key);
+    if (!this.runningCandidateKeys.has(key)) {
+      this.pending.delete(key);
+      this.addPendingFirst(key, candidate);
+      this.emitStatus(candidate, 'queued');
+      this.drain();
+    }
   }
 
   stop() {
     this.stopped = true;
     this.pending.clear();
+    this.retryTimers.forEach((timer) => clearTimeout(timer));
+    this.retryTimers.clear();
+    this.knownCandidates.clear();
+    this.desiredCandidateKeys.clear();
   }
 
   getPendingMessageIds() {
     return [...this.pending.values()].map((candidate) => candidate.messageId);
   }
 
-  private async drain() {
-    if (this.running || this.stopped) return;
-    this.running = true;
-    try {
-      while (!this.stopped && this.pending.size > 0) {
-        const [candidateKey, candidate] = this.pending.entries().next().value as [
-          string,
-          MailTranslationPrefetchCandidate,
-        ];
-        this.pending.delete(candidateKey);
-        this.runningMessageId = candidate.messageId;
-        this.runningCandidateKey = candidateKey;
-        try {
-          await this.process(candidate);
+  private drain() {
+    const concurrency = Math.max(1, this.options.concurrency || MAIL_TRANSLATION_BACKGROUND_CONCURRENCY);
+    while (!this.stopped && this.activeCount < concurrency && this.pending.size > 0) {
+      const [candidateKey, candidate] = this.pending.entries().next().value as [
+        string,
+        MailTranslationPrefetchCandidate,
+      ];
+      this.pending.delete(candidateKey);
+      this.activeCount += 1;
+      this.runningCandidateKeys.add(candidateKey);
+      this.emitStatus(candidate, 'translating');
+      void this.process(candidate)
+        .then(() => {
+          if (this.stopped || !this.desiredCandidateKeys.has(candidateKey)) return;
           this.processed.add(candidateKey);
-        } catch {
-          this.failedUntil.set(candidateKey, Date.now() + TRANSLATION_FAILURE_COOLDOWN_MS);
-        } finally {
-          this.runningMessageId = null;
-          this.runningCandidateKey = null;
-        }
-      }
-    } finally {
-      this.running = false;
+          this.failureCounts.delete(candidateKey);
+          this.emitStatus(candidate, 'ready');
+        })
+        .catch((error) => {
+          if (this.stopped || !this.desiredCandidateKeys.has(candidateKey)) return;
+          const failureCount = (this.failureCounts.get(candidateKey) || 0) + 1;
+          this.failureCounts.set(candidateKey, failureCount);
+          const retryDelays = this.options.retryDelaysMs || MAIL_TRANSLATION_RETRY_DELAYS_MS;
+          const retryDelay = retryDelays[failureCount - 1];
+          const errorMessage = error instanceof Error ? error.message : '翻译失败，请稍后重试';
+          if (retryDelay === undefined) {
+            this.emitStatus(candidate, 'failed', errorMessage);
+            return;
+          }
+          this.emitStatus(candidate, 'retrying', errorMessage);
+          const timer = setTimeout(() => {
+            this.retryTimers.delete(candidateKey);
+            if (this.stopped || this.processed.has(candidateKey)) return;
+            this.pending.set(candidateKey, candidate);
+            this.emitStatus(candidate, 'queued');
+            this.drain();
+          }, retryDelay);
+          this.retryTimers.set(candidateKey, timer);
+        })
+        .finally(() => {
+          this.activeCount = Math.max(0, this.activeCount - 1);
+          this.runningCandidateKeys.delete(candidateKey);
+          this.drain();
+        });
     }
   }
 }
@@ -331,10 +439,13 @@ export function prioritizeGmailTranslationPrefetch(messageId: string, scopeKey: 
   registeredQueues.get(scopeKey)?.prioritize(messageId, scopeKey);
 }
 
+export function retryMailTranslationPrefetch(messageId: string, scopeKey: string) {
+  registeredQueues.get(scopeKey)?.retry(messageId, scopeKey);
+}
+
 export function clearGmailTranslationRequests() {
   inFlightTranslations.clear();
   recentTranslations.clear();
-  scopeTranslationTails.clear();
   registeredQueues.forEach((queue) => queue.stop());
   registeredQueues.clear();
 }

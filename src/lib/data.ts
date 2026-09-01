@@ -33,6 +33,7 @@ import { formatLocalDateKey, parseLocalDateKey } from './local-date';
 import { BUILT_IN_AI_REPLY_TEMPLATES, mergeBuiltInAIReplyTemplates } from './ai-reply-templates';
 import { useUserDataStore } from '@/components/user-data-provider';
 import { USER_DATA_KEYS, type UserDataKey } from '@/lib/account-data-keys';
+import { upsertEmailTranslation } from '@/lib/email-translations';
 
 export const STORAGE_KEYS = {
   INFLUENCERS: 'influencer-board-influencers',
@@ -206,11 +207,15 @@ Best regards,
 ];
 
 function useCloudUserData<T>(key: UserDataKey, defaultValue: T) {
-  const { data, loading, error, save: saveStoreValue } = useUserDataStore();
+  const { data, loading, error, save: saveStoreValue, update: updateStoreValue } = useUserDataStore();
+  const [initialDefaultValue] = useState(defaultValue);
   const hasValue = Object.prototype.hasOwnProperty.call(data, key);
-  const value = hasValue ? data[key] as T : defaultValue;
+  const value = hasValue ? data[key] as T : initialDefaultValue;
   const save = useCallback((next: T) => saveStoreValue(key, next), [key, saveStoreValue]);
-  return { value, save, loading, error };
+  const update = useCallback((updater: (current: T) => T) => {
+    updateStoreValue(key, (current) => updater((current === undefined ? initialDefaultValue : current) as T));
+  }, [initialDefaultValue, key, updateStoreValue]);
+  return { value, save, update, loading, error };
 }
 
 function getCloudSafeSettings(settings: AppSettings) {
@@ -924,7 +929,7 @@ export function useGmailThreads() {
 }
 
 export function useEmailTranslations() {
-  const { value: translations, save: saveTranslations } = useCloudUserData<EmailTranslation[]>(USER_DATA_KEYS.GMAIL_TRANSLATIONS, []);
+  const { value: translations, update: updateTranslations } = useCloudUserData<EmailTranslation[]>(USER_DATA_KEYS.GMAIL_TRANSLATIONS, []);
 
   const addTranslation = useCallback(
     (translation: Omit<EmailTranslation, 'id' | 'createdAt'>) => {
@@ -933,13 +938,10 @@ export function useEmailTranslations() {
         id: generateId(),
         createdAt: new Date().toISOString(),
       };
-      saveTranslations([
-        newTranslation,
-        ...translations.filter((item) => item.messageId !== translation.messageId),
-      ]);
+      updateTranslations((current) => upsertEmailTranslation(current, newTranslation));
       return newTranslation;
     },
-    [saveTranslations, translations],
+    [updateTranslations],
   );
 
   const getTranslation = useCallback(
