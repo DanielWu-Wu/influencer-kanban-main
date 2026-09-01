@@ -75,8 +75,9 @@ import {
 } from '@/lib/tencent-mail-transport';
 import {
   EMAIL_TRANSLATION_RETRY_OPERATION,
-  canApplyEmailTranslationResult,
+  canApplyRestoredEmailTranslationResult,
   isEmailTranslationRetryInput,
+  isEmailTranslationTaskRestorableForContext,
   isEmailTranslationTaskResult,
   requestEmailTranslation,
   type EmailTranslationRetryInput,
@@ -304,8 +305,16 @@ export function EmailComposer({
         threadId: thread.id,
         messageId: replyTarget?.messageId,
       });
-  const requestedTask = restoreTaskId ? getTaskById(restoreTaskId) : undefined;
   const expectedTaskKind = isTencent ? 'tencent_ai_reply' : 'gmail_ai_reply';
+  const expectedTranslationSource = isTencent ? 'tencent_ai_reply' : 'gmail_ai_reply';
+  const translationTaskKey = isTencent
+    ? `email_translation:${MAIL_AI_TASK_CONTEXT_VERSION}:${mailAccountId}:ai:${thread.id}:${replyTarget?.messageId || ''}`
+    : buildGmailEmailTranslationTaskKey({
+        composerMode: 'ai',
+        threadId: thread.id,
+        messageId: replyTarget?.messageId,
+      });
+  const requestedTask = restoreTaskId ? getTaskById(restoreTaskId) : undefined;
   const requestedGenerationTask = requestedTask?.kind === expectedTaskKind ? requestedTask : undefined;
   const requestedTaskMatchesContext = Boolean(requestedGenerationTask && isEmailGenerationTaskRestorableForContext(
     requestedGenerationTask,
@@ -320,14 +329,20 @@ export function EmailComposer({
     ? (requestedTaskMatchesContext ? requestedGenerationTask : undefined)
     : getLatestTaskByKey(generationTaskKey);
   const generationTaskId = generationTask?.id || '';
-  const translationTaskKey = isTencent
-    ? `email_translation:${MAIL_AI_TASK_CONTEXT_VERSION}:${mailAccountId}:ai:${thread.id}:${replyTarget?.messageId || ''}`
-    : buildGmailEmailTranslationTaskKey({
-        composerMode: 'ai',
-        threadId: thread.id,
-        messageId: replyTarget?.messageId,
-      });
-  const translationTask = getLatestTaskByKey(translationTaskKey);
+  const requestedTranslationTask = requestedTask?.kind === 'email_translation' ? requestedTask : undefined;
+  const requestedTranslationTaskMatchesContext = Boolean(requestedTranslationTask
+    && isEmailTranslationTaskRestorableForContext(requestedTranslationTask, {
+      key: translationTaskKey,
+      provider: isTencent ? 'tencent_exmail' : 'gmail',
+      mailAccountId,
+      source: expectedTranslationSource,
+    }));
+  const translationTask = requestedTranslationTask
+    ? (requestedTranslationTaskMatchesContext ? requestedTranslationTask : undefined)
+    : getLatestTaskByKey(translationTaskKey);
+  const restoringRequestedTranslationTask = Boolean(
+    requestedTranslationTaskMatchesContext && translationTask?.id === requestedTranslationTask?.id,
+  );
   const updateCurrentDraftSavedStatus = (saved: boolean) => {
     const savedTranslationTaskId = translationTask?.status === 'completed' && translationTask.draftSavedAt
       ? translationTask.id
@@ -579,6 +594,11 @@ export function EmailComposer({
   }, [requestedGenerationTask, requestedTaskMatchesContext]);
 
   useEffect(() => {
+    if (!requestedTranslationTask || requestedTranslationTaskMatchesContext) return;
+    setAiError('这条外文更新记录与当前邮箱、邮件线程或回复方式不一致，未自动套用旧正文。');
+  }, [requestedTranslationTask, requestedTranslationTaskMatchesContext]);
+
+  useEffect(() => {
     if (!translationTask) return;
     if (translationTask.status === 'queued' || translationTask.status === 'running') {
       setTranslatingEditedReply(true);
@@ -590,14 +610,16 @@ export function EmailComposer({
       setAiError(translationTask.error || '翻译任务已中断，请在邮件生成进度中重试。');
       return;
     }
-    if (translationTask.status !== 'completed' || !suggestion || !editedChineseReply.trim()) return;
+    if (translationTask.status !== 'completed' || !suggestion) return;
     if (appliedGenerationTaskRef.current === `translation:${translationTask.id}`) return;
     if (!isEmailTranslationTaskResult(translationTask.result)) return;
     const translationResult = translationTask.result;
-    if (!canApplyEmailTranslationResult({
+    if (!canApplyRestoredEmailTranslationResult({
       result: translationResult,
       chineseBody: editedChineseReply,
       targetLang,
+      restoringRequestedTask: restoringRequestedTranslationTask,
+      localDraftDirty: localDraftDirtyRef.current,
     })) return;
     const translatedReply = stripConfiguredEmailSignature(
       translationResult.foreignBody,
@@ -606,6 +628,9 @@ export function EmailComposer({
     if (!translatedReply.trim()) return;
     appliedGenerationTaskRef.current = `translation:${translationTask.id}`;
     draftSourceTaskIdRef.current = translationTask.id;
+    targetLangLockedRef.current = true;
+    setTargetLang(translationResult.targetLang);
+    setTargetLangName(translationResult.targetLangName);
     setReplyContent(translatedReply);
     setSuggestion((current) => current ? {
       ...current,
@@ -613,6 +638,8 @@ export function EmailComposer({
       translatedReply: translationResult.chineseBody,
     } : current);
     setEditedChineseReply(translationResult.chineseBody);
+    setTranslationExpanded(true);
+    setTranslationEditing(false);
     setGeneratedLangName(translationResult.targetLangName);
     setTranslationUpdated(true);
     setSynchronizedDraft({
@@ -621,7 +648,7 @@ export function EmailComposer({
       targetLanguage: translationResult.targetLang,
     });
     setAiError('');
-  }, [editedChineseReply, settings.emailSignature, suggestion, targetLang, translationTask]);
+  }, [editedChineseReply, restoringRequestedTranslationTask, settings.emailSignature, suggestion, targetLang, translationTask]);
 
   const translateDraftToChinese = async (
     text: string,
@@ -1637,7 +1664,7 @@ export function EmailComposer({
   );
 
   const aiBody = (
-    <div className="flex flex-col gap-3 px-4 py-4 @2xl/email-composer:px-5">
+    <div className="flex w-full min-w-0 max-w-full flex-col gap-3 overflow-x-clip px-4 py-4 @2xl/email-composer:px-5">
       {analysisError && (
         <ErrorMessage message={analysisError}>
           <Button variant="outline" size="sm" onClick={() => void analyzeThread(true)}>重新分析</Button>
@@ -1648,7 +1675,7 @@ export function EmailComposer({
       {attachmentError && <p className="text-xs text-destructive">{attachmentError}</p>}
 
       {(!suggestion || strategyEditing) && (
-        <section className="rounded-lg border border-gray-300 bg-white shadow-sm transition focus-within:border-primary focus-within:ring-2 focus-within:ring-primary/15">
+        <section className="min-w-0 max-w-full overflow-hidden rounded-lg border border-gray-300 bg-white shadow-sm transition focus-within:border-primary focus-within:ring-2 focus-within:ring-primary/15">
           <div className="border-b border-gray-100 px-4 py-3">
             <div className="flex items-center justify-between gap-3">
               <div>
@@ -1670,7 +1697,7 @@ export function EmailComposer({
               setUserIdeas(event.target.value);
             }}
             placeholder="例如：价格可以接受，但需要确认视频发布时间；请礼貌询问能否在月底前发布..."
-            className="min-h-28 resize-y rounded-none border-0 bg-white px-4 py-3 shadow-none focus-visible:ring-0"
+            className="field-sizing-fixed min-h-28 min-w-0 max-w-full resize-y overflow-x-hidden break-words rounded-none border-0 bg-white px-4 py-3 shadow-none [overflow-wrap:anywhere] focus-visible:ring-0"
           />
           <div className="flex flex-wrap gap-1.5 border-t border-gray-100 px-3 py-2">
             {QUICK_REPLY_IDEAS.map(([label, text]) => (
@@ -1973,7 +2000,7 @@ export function EmailComposer({
                       setEditedChineseReply(event.target.value);
                     }}
                     placeholder="修改中文邮件正文..."
-                    className="min-h-56 resize-y rounded-none border-0 bg-white px-4 py-3 text-sm leading-6 shadow-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-primary/20"
+                    className="field-sizing-fixed min-h-56 min-w-0 max-w-full resize-y overflow-x-hidden break-words rounded-none border-0 bg-white px-4 py-3 text-sm leading-6 shadow-none [overflow-wrap:anywhere] focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-primary/20"
                     disabled={translatingEditedReply}
                   />
                   <div className="flex flex-wrap items-center justify-between gap-3 border-t border-gray-100 bg-gray-50/70 px-4 py-3">
@@ -2048,10 +2075,10 @@ export function EmailComposer({
 
   if (mode === 'ai') {
     return (
-      <div className="@container/email-composer flex h-full min-h-0 flex-col bg-white text-gray-900">
+      <div className="@container/email-composer flex h-full min-h-0 min-w-0 max-w-full flex-col overflow-x-hidden bg-white text-gray-900">
         {!embedded ? header : null}
-        <ScrollArea className="min-h-0 flex-1 bg-[#F7F8FA]">{aiBody}</ScrollArea>
-        <div className="shrink-0 border-t border-gray-200 bg-white px-4 py-3 shadow-[0_-4px_12px_rgba(15,23,42,0.035)]">
+        <ScrollArea disableHorizontalScroll className="min-h-0 min-w-0 max-w-full flex-1 bg-[#F7F8FA]">{aiBody}</ScrollArea>
+        <div className="min-w-0 max-w-full shrink-0 overflow-x-hidden border-t border-gray-200 bg-white px-4 py-3 shadow-[0_-4px_12px_rgba(15,23,42,0.035)]">
           {!suggestion || strategyEditing ? (
             <div className="flex flex-col gap-3 @3xl/email-composer:flex-row @3xl/email-composer:items-center @3xl/email-composer:justify-between">
               {generationSettings}
@@ -2129,7 +2156,7 @@ export function EmailComposer({
 
   return (
     <div className={cn(
-      '@container/email-composer flex flex-col gap-4',
+      '@container/email-composer flex min-w-0 max-w-full flex-col gap-4 overflow-x-hidden',
       embedded && 'h-full min-h-0 overflow-y-auto p-3',
     )}>
       {!embedded ? <div className="flex items-center justify-between">

@@ -23,6 +23,22 @@ export interface EmailTranslationTaskResult {
   foreignBody: string;
 }
 
+interface RestorableEmailTranslationTask {
+  kind: string;
+  key: string;
+  provider: string;
+  mailAccountId: string;
+  retryInput?: unknown;
+  result?: unknown;
+}
+
+interface EmailTranslationTaskContext {
+  key: string;
+  provider: 'gmail' | 'tencent_exmail';
+  mailAccountId: string;
+  source: EmailTranslationSource;
+}
+
 export interface EmailTranslationRequestOptions {
   chineseBody: string;
   targetLang: string;
@@ -95,6 +111,24 @@ export function isEmailTranslationTaskResult(value: unknown): value is EmailTran
     && typeof result.foreignBody === 'string';
 }
 
+export function isEmailTranslationTaskRestorableForContext(
+  task: RestorableEmailTranslationTask,
+  context: EmailTranslationTaskContext,
+) {
+  if (task.kind !== 'email_translation'
+    || task.key !== context.key
+    || task.provider !== context.provider
+    || task.mailAccountId !== context.mailAccountId) {
+    return false;
+  }
+  const taskSource = isEmailTranslationTaskResult(task.result)
+    ? task.result.source
+    : isEmailTranslationRetryInput(task.retryInput)
+      ? task.retryInput.source
+      : '';
+  return taskSource === context.source;
+}
+
 export function canApplyEmailTranslationResult(options: {
   result: EmailTranslationTaskResult;
   chineseBody: string;
@@ -103,4 +137,15 @@ export function canApplyEmailTranslationResult(options: {
   return normalizeEmailTranslationText(options.result.chineseBody)
       === normalizeEmailTranslationText(options.chineseBody)
     && options.result.targetLang.trim() === options.targetLang.trim();
+}
+
+export function canApplyRestoredEmailTranslationResult(options: {
+  result: EmailTranslationTaskResult;
+  chineseBody: string;
+  targetLang: string;
+  restoringRequestedTask: boolean;
+  localDraftDirty: boolean;
+}) {
+  if (options.restoringRequestedTask) return !options.localDraftDirty;
+  return canApplyEmailTranslationResult(options);
 }

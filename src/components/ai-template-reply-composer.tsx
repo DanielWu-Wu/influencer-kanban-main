@@ -81,8 +81,9 @@ import type { MailAccount, MailDraftLocator } from '@/lib/mail-accounts';
 import { saveTencentMailDraft } from '@/lib/tencent-mail-transport';
 import {
   EMAIL_TRANSLATION_RETRY_OPERATION,
-  canApplyEmailTranslationResult,
+  canApplyRestoredEmailTranslationResult,
   isEmailTranslationRetryInput,
+  isEmailTranslationTaskRestorableForContext,
   isEmailTranslationTaskResult,
   requestEmailTranslation,
   type EmailTranslationRetryInput,
@@ -237,8 +238,16 @@ export function AITemplateReplyComposer({
         threadId: thread.id,
         messageId: replyTarget?.messageId,
       });
-  const requestedTask = restoreTaskId ? getTaskById(restoreTaskId) : undefined;
   const expectedTaskKind = isTencent ? 'tencent_template_reply' : 'gmail_template_reply';
+  const expectedTranslationSource = isTencent ? 'tencent_template_reply' : 'gmail_template_reply';
+  const translationTaskKey = isTencent
+    ? `email_translation:${MAIL_AI_TASK_CONTEXT_VERSION}:${mailAccountId}:template:${thread.id}:${replyTarget?.messageId || ''}`
+    : buildGmailEmailTranslationTaskKey({
+        composerMode: 'template',
+        threadId: thread.id,
+        messageId: replyTarget?.messageId,
+      });
+  const requestedTask = restoreTaskId ? getTaskById(restoreTaskId) : undefined;
   const requestedGenerationTask = requestedTask?.kind === expectedTaskKind ? requestedTask : undefined;
   const requestedTaskMatchesContext = Boolean(requestedGenerationTask && isEmailGenerationTaskRestorableForContext(
     requestedGenerationTask,
@@ -253,14 +262,20 @@ export function AITemplateReplyComposer({
     ? (requestedTaskMatchesContext ? requestedGenerationTask : undefined)
     : getLatestTaskByKey(generationTaskKey);
   const generationTaskId = generationTask?.id || '';
-  const translationTaskKey = isTencent
-    ? `email_translation:${MAIL_AI_TASK_CONTEXT_VERSION}:${mailAccountId}:template:${thread.id}:${replyTarget?.messageId || ''}`
-    : buildGmailEmailTranslationTaskKey({
-        composerMode: 'template',
-        threadId: thread.id,
-        messageId: replyTarget?.messageId,
-      });
-  const translationTask = getLatestTaskByKey(translationTaskKey);
+  const requestedTranslationTask = requestedTask?.kind === 'email_translation' ? requestedTask : undefined;
+  const requestedTranslationTaskMatchesContext = Boolean(requestedTranslationTask
+    && isEmailTranslationTaskRestorableForContext(requestedTranslationTask, {
+      key: translationTaskKey,
+      provider: isTencent ? 'tencent_exmail' : 'gmail',
+      mailAccountId,
+      source: expectedTranslationSource,
+    }));
+  const translationTask = requestedTranslationTask
+    ? (requestedTranslationTaskMatchesContext ? requestedTranslationTask : undefined)
+    : getLatestTaskByKey(translationTaskKey);
+  const restoringRequestedTranslationTask = Boolean(
+    requestedTranslationTaskMatchesContext && translationTask?.id === requestedTranslationTask?.id,
+  );
   const updateCurrentDraftSavedStatus = (saved: boolean) => {
     const savedTranslationTaskId = translationTask?.status === 'completed' && translationTask.draftSavedAt
       ? translationTask.id
@@ -401,6 +416,11 @@ export function AITemplateReplyComposer({
   }, [requestedGenerationTask, requestedTaskMatchesContext]);
 
   useEffect(() => {
+    if (!requestedTranslationTask || requestedTranslationTaskMatchesContext) return;
+    setError('这条外文更新记录与当前邮箱、邮件线程或回复方式不一致，未自动套用旧正文。');
+  }, [requestedTranslationTask, requestedTranslationTaskMatchesContext]);
+
+  useEffect(() => {
     if (!translationTask) return;
     if (translationTask.status === 'queued' || translationTask.status === 'running') {
       setTranslatingChinese(true);
@@ -412,13 +432,15 @@ export function AITemplateReplyComposer({
       setError(translationTask.error || '翻译任务已中断，请在邮件生成进度中重试。');
       return;
     }
-    if (translationTask.status !== 'completed' || !suggestion || !editedChineseReply.trim()) return;
+    if (translationTask.status !== 'completed' || !suggestion) return;
     if (!isEmailTranslationTaskResult(translationTask.result)) return;
     const translationResult = translationTask.result;
-    if (!canApplyEmailTranslationResult({
+    if (!canApplyRestoredEmailTranslationResult({
       result: translationResult,
       chineseBody: editedChineseReply,
       targetLang,
+      restoringRequestedTask: restoringRequestedTranslationTask,
+      localDraftDirty: localDraftDirtyRef.current,
     })) return;
     const taskMarker = `translation:${translationTask.id}`;
     if (appliedGenerationTaskRef.current === taskMarker) return;
@@ -429,6 +451,8 @@ export function AITemplateReplyComposer({
     if (!translatedReply.trim()) return;
     appliedGenerationTaskRef.current = taskMarker;
     draftSourceTaskIdRef.current = translationTask.id;
+    targetLangLockedRef.current = true;
+    setTargetLang(translationResult.targetLang);
     setReplyContent(translatedReply);
     setSuggestion((current) => current ? {
       ...current,
@@ -436,6 +460,7 @@ export function AITemplateReplyComposer({
       translatedReply: translationResult.chineseBody,
     } : current);
     setEditedChineseReply(translationResult.chineseBody);
+    setTranslationOpen(true);
     setChineseDirty(false);
     setTranslationUpdated(true);
     setSyncedTargetLang(translationResult.targetLang);
@@ -445,7 +470,7 @@ export function AITemplateReplyComposer({
       targetLanguage: translationResult.targetLang,
     });
     setError('');
-  }, [editedChineseReply, settings.emailSignature, suggestion, targetLang, translationTask]);
+  }, [editedChineseReply, restoringRequestedTranslationTask, settings.emailSignature, suggestion, targetLang, translationTask]);
 
   const getAccessToken = async (signal?: AbortSignal) => {
     if (!auth?.accessToken) throw new Error('请先连接 Gmail。');
@@ -887,7 +912,7 @@ export function AITemplateReplyComposer({
   };
 
   return (
-    <div className="@container/email-composer flex h-full min-h-0 flex-col bg-white">
+    <div className="@container/email-composer flex h-full min-h-0 min-w-0 max-w-full flex-col overflow-x-hidden bg-white">
       {!embedded ? <div className="flex h-14 shrink-0 items-center gap-3 border-b px-4">
         <span className="flex size-8 items-center justify-center rounded-lg bg-primary/10 text-primary">
           <FileText className="size-4" />
@@ -902,9 +927,9 @@ export function AITemplateReplyComposer({
         <Button variant="ghost" size="icon" title="关闭" onClick={onClose}><X /></Button>
       </div> : null}
 
-      <ScrollArea className="min-h-0 flex-1">
-        <div className="grid gap-4 p-4 @3xl/email-composer:grid-cols-[minmax(280px,0.85fr)_minmax(380px,1.25fr)]">
-          <div className="space-y-4">
+      <ScrollArea disableHorizontalScroll className="min-h-0 min-w-0 max-w-full flex-1">
+        <div className="grid w-full min-w-0 max-w-full gap-4 overflow-x-clip p-4 @3xl/email-composer:grid-cols-[minmax(280px,0.85fr)_minmax(380px,1.25fr)]">
+          <div className="min-w-0 space-y-4">
             <div className="rounded-xl border bg-slate-50/70 p-4">
               <div className="mb-3 flex items-center justify-between gap-3">
                 <div>
@@ -962,7 +987,7 @@ export function AITemplateReplyComposer({
                   setUserIdeas(event.target.value);
                 }}
                 placeholder="例如：产品今天已经发出，请他收到后告诉我，并确认大概什么时候可以拍摄。"
-                className="h-28 min-h-28 max-h-28 resize-none overflow-y-auto px-3 py-3 text-sm leading-6 shadow-inner"
+                className="field-sizing-fixed h-28 min-h-28 min-w-0 max-h-28 max-w-full resize-none overflow-x-hidden overflow-y-auto break-words px-3 py-3 text-sm leading-6 shadow-inner [overflow-wrap:anywhere]"
               />
               <div className="mt-2 flex items-center justify-between gap-3">
                 <span className="text-xs text-muted-foreground">{userIdeas.length} 字</span>
@@ -1021,7 +1046,7 @@ export function AITemplateReplyComposer({
             </div>
           </div>
 
-          <div className="space-y-3">
+          <div className="min-w-0 space-y-3">
             <div className="flex min-h-9 items-center justify-between gap-3">
               <div>
                 <p className="text-sm font-semibold">3. 检查并编辑草稿</p>
@@ -1100,7 +1125,7 @@ export function AITemplateReplyComposer({
                           setDraftSaved(false);
                         }}
                         placeholder="修改中文邮件正文..."
-                        className="min-h-56 resize-y rounded-none border-0 px-3 py-3 text-sm leading-6 shadow-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-primary/20"
+                        className="field-sizing-fixed min-h-56 min-w-0 max-w-full resize-y overflow-x-hidden break-words rounded-none border-0 px-3 py-3 text-sm leading-6 shadow-none [overflow-wrap:anywhere] focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-primary/20"
                         disabled={translatingChinese}
                       />
                       <div className="flex flex-wrap items-center justify-between gap-3 border-t bg-slate-50/70 px-3 py-2.5">
@@ -1181,7 +1206,7 @@ export function AITemplateReplyComposer({
                 setUserIdeas(event.target.value);
               }}
               placeholder="例如：货今天已经发了，走 DHL，单号是 123456，预计下周二送达。请他收到后告诉我，并确认大概什么时候可以拍摄。"
-              className="h-full min-h-0 resize-none px-4 py-3 text-base leading-7 shadow-inner"
+              className="field-sizing-fixed h-full min-h-0 min-w-0 max-w-full resize-none overflow-x-hidden break-words px-4 py-3 text-base leading-7 shadow-inner [overflow-wrap:anywhere]"
             />
           </div>
           <div className="flex items-center justify-between gap-3">

@@ -196,12 +196,12 @@ export function RichEmailEditor({
   return (
     <div
       className={cn(
-        'overflow-hidden rounded-lg border border-white/65 bg-white/75 shadow-sm backdrop-blur-xl',
+        'min-w-0 max-w-full overflow-hidden rounded-lg border border-white/65 bg-white/75 shadow-sm backdrop-blur-xl',
         fillHeight && 'flex min-h-0 flex-col',
         className,
       )}
     >
-      <div className={cn('relative', fillHeight && 'min-h-0 flex-1')}>
+      <div className={cn('relative min-w-0 max-w-full', fillHeight && 'min-h-0 flex-1')}>
         {isEmailContentEmpty(value) && (
           <div className="pointer-events-none absolute left-3 top-3 text-sm text-muted-foreground">
             {placeholder}
@@ -215,7 +215,7 @@ export function RichEmailEditor({
           aria-label="邮件正文"
           aria-multiline="true"
           className={cn(
-            'overflow-y-auto px-3 py-3 outline-none [&_a]:text-blue-600 [&_a]:underline [&_blockquote]:border-l-4 [&_blockquote]:border-muted-foreground/30 [&_blockquote]:pl-3 [&_blockquote]:text-muted-foreground [&_img]:my-2 [&_img]:max-w-full [&_ol]:ml-5 [&_ol]:list-decimal [&_ul]:ml-5 [&_ul]:list-disc',
+            'min-w-0 max-w-full overflow-x-hidden overflow-y-auto break-words px-3 py-3 outline-none [overflow-wrap:anywhere] [&_a]:break-all [&_a]:text-blue-600 [&_a]:underline [&_blockquote]:border-l-4 [&_blockquote]:border-muted-foreground/30 [&_blockquote]:pl-3 [&_blockquote]:text-muted-foreground [&_img]:my-2 [&_img]:max-w-full [&_ol]:ml-5 [&_ol]:list-decimal [&_ul]:ml-5 [&_ul]:list-disc',
             fillHeight && 'absolute inset-0',
           )}
           style={{

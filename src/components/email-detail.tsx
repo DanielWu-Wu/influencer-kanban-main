@@ -1932,7 +1932,7 @@ export function EmailDetail({
           ) : null}
 
           <div
-            className={composerState === 'expanded' ? 'flex h-full min-h-0 flex-col' : 'hidden'}
+            className={composerState === 'expanded' ? 'flex h-full min-h-0 min-w-0 max-w-full flex-col overflow-x-clip' : 'hidden'}
             aria-hidden={composerState !== 'expanded'}
           >
             <div className="flex h-14 shrink-0 items-center gap-3 border-b border-border/55 px-4">
@@ -1977,9 +1977,9 @@ export function EmailDetail({
               />
             ) : null}
 
-            <div className="relative min-h-0 flex-1 overflow-hidden">
+            <div className="relative min-h-0 min-w-0 max-w-full flex-1 overflow-hidden overflow-x-clip">
               {visitedReplyModes.has('compose') ? (
-                <div className={replyMode === 'compose' ? 'absolute inset-0 flex min-h-0 flex-col' : 'hidden'}>
+                <div className={replyMode === 'compose' ? 'absolute inset-0 flex min-h-0 min-w-0 max-w-full flex-col overflow-x-clip' : 'hidden'}>
                   <EmailComposer
                     key={`${mailScope}-${thread.id}-compose-${replyTarget?.messageId || 'default'}`}
                     thread={thread}
@@ -1996,7 +1996,7 @@ export function EmailDetail({
               ) : null}
 
               {visitedReplyModes.has('template') ? (
-                <div className={replyMode === 'template' ? 'absolute inset-0 flex min-h-0 flex-col' : 'hidden'}>
+                <div className={replyMode === 'template' ? 'absolute inset-0 flex min-h-0 min-w-0 max-w-full flex-col overflow-x-clip' : 'hidden'}>
                   <AITemplateReplyComposer
                     key={`template-${mailScope}-${thread.id}-${replyTarget?.messageId || 'default'}`}
                     thread={thread}
@@ -2015,7 +2015,7 @@ export function EmailDetail({
               ) : null}
 
               {visitedReplyModes.has('ai') ? (
-                <div className={replyMode === 'ai' ? 'absolute inset-0 flex min-h-0 flex-col' : 'hidden'}>
+                <div className={replyMode === 'ai' ? 'absolute inset-0 flex min-h-0 min-w-0 max-w-full flex-col overflow-x-clip' : 'hidden'}>
                   <EmailComposer
                     key={`${mailScope}-${thread.id}-ai-${replyTarget?.messageId || 'default'}`}
                     thread={thread}
