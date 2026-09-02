@@ -11,6 +11,7 @@ import './gmail-reply-target.test';
 import './gmail-bilingual-draft.test';
 import './gmail-compose-html.test';
 import './email-remote-content.test';
+import './isolated-email-document.test';
 import './daily-gmail-todos.test';
 import './outreach-follow-up-sync.test';
 import './outreach-email-rendering.test';

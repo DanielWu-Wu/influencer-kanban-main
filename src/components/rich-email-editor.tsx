@@ -31,9 +31,11 @@ import {
   Unlink,
 } from 'lucide-react';
 import { Button } from '@/components/ui/button';
+import { Alert, AlertDescription } from '@/components/ui/alert';
 import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover';
 import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip';
-import { isEmailContentEmpty, textToEmailHtml } from '@/lib/email-content';
+import { isEmailContentEmpty } from '@/lib/email-content';
+import { sanitizeEmailHtmlForEditor } from '@/lib/email-editor-html';
 import { cn } from '@/lib/utils';
 
 const EMOJIS = [
@@ -104,19 +106,28 @@ export function RichEmailEditor({
 }) {
   const editorRef = useRef<HTMLDivElement>(null);
   const savedRangeRef = useRef<Range | null>(null);
+  const lastEmittedValue = useRef<string | null>(null);
+  const composing = useRef(false);
+  const [formatSimplified, setFormatSimplified] = useState(false);
   const [activeCommands, setActiveCommands] = useState<Set<string>>(new Set());
   const [textColor, setTextColor] = useState('#202124');
   const [highlightColor, setHighlightColor] = useState('#fff2a8');
 
   useEffect(() => {
     const editor = editorRef.current;
-    if (!editor) return;
-    const nextHtml = textToEmailHtml(value);
-    if (editor.innerHTML !== nextHtml) editor.innerHTML = nextHtml;
+    if (!editor || composing.current || value === lastEmittedValue.current) return;
+    const cleaned = sanitizeEmailHtmlForEditor(value);
+    if (editor.innerHTML !== cleaned.html) {
+      editor.innerHTML = cleaned.html;
+      savedRangeRef.current = null;
+    }
+    setFormatSimplified(cleaned.simplified);
   }, [value]);
 
   const emitChange = useCallback(() => {
-    onChange(editorRef.current?.innerHTML || '');
+    const html = editorRef.current?.innerHTML || '';
+    lastEmittedValue.current = html;
+    onChange(html);
   }, [onChange]);
 
   const updateCommandState = useCallback(() => {
@@ -160,6 +171,16 @@ export function RichEmailEditor({
     emitChange();
   }, [emitChange, restoreSelection, saveSelection]);
 
+  const insertExternalContent = useCallback((html: string, text: string) => {
+    if (html) {
+      const cleaned = sanitizeEmailHtmlForEditor(html);
+      if (cleaned.simplified) setFormatSimplified(true);
+      runCommand('insertHTML', cleaned.html);
+    } else {
+      runCommand('insertText', text);
+    }
+  }, [runCommand]);
+
   const insertLink = useCallback(() => {
     const url = window.prompt('请输入链接地址，例如 https://example.com');
     if (!url) return;
@@ -170,7 +191,14 @@ export function RichEmailEditor({
       document.execCommand(
         'insertHTML',
         false,
-        `<a href="${normalized.replace(/"/g, '&quot;')}" target="_blank">${normalized}</a>`,
+        (() => {
+          const link = document.createElement('a');
+          link.href = normalized;
+          link.target = '_blank';
+          link.rel = 'noopener noreferrer';
+          link.textContent = normalized;
+          return sanitizeEmailHtmlForEditor(link.outerHTML).html;
+        })(),
       );
       emitChange();
       saveSelection();
@@ -201,7 +229,7 @@ export function RichEmailEditor({
         className,
       )}
     >
-      <div className={cn('relative min-w-0 max-w-full', fillHeight && 'min-h-0 flex-1')}>
+      <div className={cn('relative isolate min-w-0 max-w-full overflow-hidden [contain:inline-size_layout_paint]', fillHeight && 'min-h-0 flex-1')}>
         {isEmailContentEmpty(value) && (
           <div className="pointer-events-none absolute left-3 top-3 text-sm text-muted-foreground">
             {placeholder}
@@ -223,9 +251,36 @@ export function RichEmailEditor({
             fontFamily: 'Arial, sans-serif',
             fontSize: '14px',
             lineHeight: 'normal',
+            maxHeight: fillHeight ? undefined : 'min(60vh, 40rem)',
             ...(fillHeight ? {} : { minHeight }),
           }}
           onFocus={saveSelection}
+          onCompositionStart={() => { composing.current = true; }}
+          onCompositionEnd={() => {
+            composing.current = false;
+            emitChange();
+            saveSelection();
+          }}
+          onPaste={(event) => {
+            const html = event.clipboardData.getData('text/html');
+            const text = event.clipboardData.getData('text/plain');
+            if (!html && !text) return; // File/attachment handling stays with its owner.
+            event.preventDefault();
+            saveSelection();
+            insertExternalContent(html, text);
+          }}
+          onDragOver={(event) => {
+            if (event.dataTransfer.types.some((type) => type === 'text/html' || type === 'text/plain')) event.preventDefault();
+          }}
+          onDrop={(event) => {
+            const html = event.dataTransfer.getData('text/html');
+            const text = event.dataTransfer.getData('text/plain');
+            if (!html && !text) return;
+            event.preventDefault();
+            const range = document.caretRangeFromPoint(event.clientX, event.clientY);
+            if (range && editorRef.current?.contains(range.commonAncestorContainer)) savedRangeRef.current = range;
+            insertExternalContent(html, text);
+          }}
           onInput={() => {
             emitChange();
             saveSelection();
@@ -235,6 +290,11 @@ export function RichEmailEditor({
         />
       </div>
 
+      {formatSimplified && (
+        <Alert role="status" className="shrink-0 rounded-none border-x-0 px-3 py-1">
+          <AlertDescription>为保护工作台布局，已简化部分邮件格式</AlertDescription>
+        </Alert>
+      )}
       <div className="flex flex-wrap items-center gap-0.5 border-t border-white/60 bg-white/65 px-2 py-1">
         <ToolbarButton label="撤销" icon={<Undo2 className="h-4 w-4" />} onAction={() => runCommand('undo')} />
         <ToolbarButton label="重做" icon={<Redo2 className="h-4 w-4" />} onAction={() => runCommand('redo')} />

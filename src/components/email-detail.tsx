@@ -19,6 +19,7 @@ import {
   Users,
 } from 'lucide-react';
 import { EmailComposer } from './email-composer';
+import { IsolatedEmailBody } from './isolated-email-body';
 import { AITemplateReplyComposer } from './ai-template-reply-composer';
 import { NewEmailComposer } from './new-email-composer';
 import { YouTubeChannelAvatar } from './youtube-channel-avatar';
@@ -1870,9 +1871,16 @@ export function EmailDetail({
                               </Button>
                             </div>
                           ) : null}
-                          <div
-                            className="email-html-content max-w-full overflow-hidden rounded-lg border border-border/55 bg-white p-4 text-sm leading-relaxed shadow-sm"
-                            dangerouslySetInnerHTML={{ __html: sanitizedDisplayHtml.html }}
+                          <IsolatedEmailBody
+                            messageIdentity={JSON.stringify([translationAccountScope, mailScope, thread.id, message.id])}
+                            html={sanitizedDisplayHtml.html}
+                            plainText={displayBody}
+                            title={message.subject || thread.subject}
+                            blockRemoteContent={shouldBlockRemoteEmailContent(
+                              message.labels,
+                              remoteContentPermission.scope === remoteContentPermissionScope
+                                && remoteContentPermission.messageIds.has(message.id),
+                            )}
                           />
                         </div>
                       ) : (

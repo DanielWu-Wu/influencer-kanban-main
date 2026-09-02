@@ -75,7 +75,7 @@ export function sanitizeEmailHtmlForDisplay(
     }
   });
   content
-    .querySelectorAll('script, iframe, object, embed, form, input, button, meta, base')
+    .querySelectorAll('script, iframe, object, embed, form, input, button, meta, base, template')
     .forEach((element) => element.remove());
 
   content.querySelectorAll<HTMLStyleElement>('style').forEach((styleElement) => {
@@ -87,7 +87,7 @@ export function sanitizeEmailHtmlForDisplay(
 
   content.querySelectorAll<HTMLElement>('*').forEach((element) => {
     Array.from(element.attributes).forEach((attribute) => {
-      if (attribute.name.toLowerCase().startsWith('on')) {
+      if (attribute.name.toLowerCase().startsWith('on') || ['autofocus', 'autoplay', 'download', 'ping', 'referrerpolicy', 'contenteditable'].includes(attribute.name.toLowerCase())) {
         element.removeAttribute(attribute.name);
       }
     });
@@ -138,7 +138,7 @@ export function sanitizeEmailHtmlForDisplay(
     if (blocksPrimaryImage) element.remove();
   });
 
-  content.querySelectorAll<HTMLAnchorElement>('a[href]').forEach((link) => {
+  content.querySelectorAll<HTMLAnchorElement>('a[href], area[href]').forEach((link) => {
     const href = link.getAttribute('href') || '';
     if (!/^(https?:|mailto:)/i.test(href)) {
       link.removeAttribute('href');
@@ -147,6 +147,8 @@ export function sanitizeEmailHtmlForDisplay(
       link.rel = 'noopener noreferrer';
     }
   });
+
+  content.querySelectorAll('a, area, link').forEach((element) => element.setAttribute('referrerpolicy', 'no-referrer'));
 
   content.querySelectorAll<HTMLImageElement>('img').forEach((image) => {
     const source = image.getAttribute('src') || '';
