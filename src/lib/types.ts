@@ -278,6 +278,8 @@ export interface GmailAttachment {
 export type MailAttachment = GmailAttachment;
 
 export interface GmailThread {
+  /** 仅含待办已读到的来信，历史和附件未加载完成；禁止用于回复。 */
+  isPartial?: boolean;
   id: string;
   subject: string;
   snippet: string;

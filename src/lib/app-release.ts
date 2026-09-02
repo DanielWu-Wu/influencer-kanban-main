@@ -9,6 +9,15 @@ export const APP_RELEASE_LAST_SEEN_STORAGE_KEY = 'influencer-board-last-seen-rel
 
 export const APP_RELEASES: readonly AppRelease[] = [
   {
+    version: '1.2.5',
+    releasedAt: '2026-09-02',
+    title: '来信中文预翻译优化',
+    highlights: [
+      '优化 Gmail 与腾讯企业邮箱的来信预翻译，每日待办识别到来信后，自动提前准备中文。',
+      '更新醒目的网页缩略图图标',
+    ],
+  },
+  {
     version: '1.2.4',
     releasedAt: '2026-08-29',
     title: '邮件处理体验与稳定性优化',

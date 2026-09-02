@@ -172,6 +172,7 @@ async function markTencentMessageRead(
 }
 
 export type TencentExmailOpenRequest = {
+  mailAccountId: string;
   requestId: number;
   folderRef: string;
   providerMessageRef: string;
@@ -181,6 +182,7 @@ export type TencentExmailOpenRequest = {
   retryRequested?: boolean;
   retryInput?: unknown;
   autoShowTranslation?: boolean;
+  previewThread?: GmailThread;
 };
 
 export function TencentExmailPage({
@@ -202,6 +204,7 @@ export function TencentExmailPage({
   const [hasNextPage, setHasNextPage] = useState(false);
   const [threads, setThreads] = useState<GmailThread[]>([]);
   const [selectedThread, setSelectedThread] = useState<GmailThread | null>(null);
+  const [selection, setSelection] = useState<{ id: number; request?: TencentExmailOpenRequest }>({ id: 0 });
   const [loading, setLoading] = useState(false);
   const [detailLoading, setDetailLoading] = useState(false);
   const [detailError, setDetailError] = useState<string>();
@@ -224,6 +227,7 @@ export function TencentExmailPage({
   const mailboxRef = useRef(mailbox);
   const threadsRef = useRef(threads);
   const handledOpenRequestRef = useRef(0);
+  const pendingNavigationRequestRef = useRef(false);
   const workbenchRef = useRef<HTMLDivElement>(null);
   const threadListRef = useRef<HTMLDivElement>(null);
   const resizeHandleRef = useRef<HTMLDivElement>(null);
@@ -428,6 +432,7 @@ export function TencentExmailPage({
   }, []);
 
   const cancelThreadDetailRequest = useCallback(() => {
+    if (detailAbortControllerRef.current && pendingNavigationRequestRef.current) handledOpenRequestRef.current = 0;
     detailAbortControllerRef.current?.abort();
     detailAbortControllerRef.current = null;
     detailRunIdRef.current += 1;
@@ -440,6 +445,7 @@ export function TencentExmailPage({
   }, [active, cancelThreadDetailRequest, detailExpanded, showSettings]);
 
   useEffect(() => () => {
+    handledOpenRequestRef.current = 0;
     detailAbortControllerRef.current?.abort();
     detailAbortControllerRef.current = null;
     detailRunIdRef.current += 1;
@@ -557,9 +563,11 @@ export function TencentExmailPage({
   }, [account.mailAccountId, applyTencentReadResultsLocally]);
 
   const openThread = useCallback(async (thread: GmailThread) => {
+    pendingNavigationRequestRef.current = false;
     const message = getThreadMessage(thread);
     if (!message?.folderRef || !message.providerMessageRef) return;
     const { controller, runId } = beginThreadDetailRequest();
+    setSelection((current) => ({ id: current.id + 1 }));
     setSelectedThread(thread);
     setShowSettings(false);
     setDetailExpanded(true);
@@ -597,8 +605,15 @@ export function TencentExmailPage({
   }, [account.mailAccountId, beginThreadDetailRequest, loadThreadDetail, markTencentThreadReadAfterContentReady]);
 
   useEffect(() => {
-    if (!active || !openMessageRequest || handledOpenRequestRef.current === openMessageRequest.requestId) return;
+    if (!active || !openMessageRequest || openMessageRequest.mailAccountId !== account.mailAccountId
+      || handledOpenRequestRef.current === openMessageRequest.requestId) return;
+    pendingNavigationRequestRef.current = true;
     handledOpenRequestRef.current = openMessageRequest.requestId;
+    setSelection((current) => ({ id: current.id + 1, request: openMessageRequest }));
+    const preview = openMessageRequest.previewThread;
+    setSelectedThread(preview?.provider === 'tencent_exmail' && preview.mailAccountId === account.mailAccountId
+      && preview.messages.some((message) => message.folderRef === openMessageRequest.folderRef
+        && message.providerMessageRef === openMessageRequest.providerMessageRef) ? preview : null);
     const { controller, runId } = beginThreadDetailRequest();
     setShowSettings(false);
     setDetailExpanded(true);
@@ -746,6 +761,7 @@ export function TencentExmailPage({
   };
 
   const openComposerRequest = useMemo(() => {
+    const openMessageRequest = selection.request;
     if (!openMessageRequest || !selectedThread) return undefined;
     const targetMessage = selectedThread.messages.find((message) => (
       message.folderRef === openMessageRequest.folderRef
@@ -761,7 +777,7 @@ export function TencentExmailPage({
       messageId: targetMessage.id,
       autoShowTranslation: openMessageRequest.autoShowTranslation,
     };
-  }, [openMessageRequest, selectedThread]);
+  }, [selection.request, selectedThread]);
 
   const unreadCount = threads.filter((thread) => thread.hasUnread).length;
 
@@ -866,7 +882,7 @@ export function TencentExmailPage({
       {!showSettings && selectedThread && detailExpanded && <div ref={resizeHandleRef} role="separator" aria-label="调整邮件线程列表宽度，双击收缩，再次双击恢复默认宽度" aria-orientation="vertical" aria-valuemin={GMAIL_THREAD_LIST_MIN_WIDTH} aria-valuemax={threadListMaxWidth} aria-valuenow={threadListWidth} tabIndex={0} title="拖动调整邮件列表宽度；双击收缩，再次双击恢复默认宽度" data-testid="tencent-thread-list-resize-handle" className={`group relative z-20 -mx-1 hidden w-2 shrink-0 cursor-col-resize items-stretch justify-center outline-none lg:flex ${resizingThreadList ? 'bg-primary/10' : ''}`} onPointerDown={handleResizePointerDown} onPointerMove={handleResizePointerMove} onPointerUp={handleResizePointerEnd} onPointerCancel={handleResizePointerEnd} onDoubleClick={toggleThreadListWidth} onKeyDown={handleResizeKeyDown}><span className="w-px bg-border/70 transition-colors group-hover:bg-primary/70" /></div>}
 
       <div className={`material-reading min-h-0 min-w-0 flex-col overflow-hidden ${showSettings ? 'flex flex-[1_1_0%]' : selectedThread ? 'flex flex-[1_1_0%]' : 'hidden'}`}>
-        {showSettings ? <GmailSignatureSettings onBack={() => setShowSettings(false)} mailAccount={account} /> : selectedThread ? <EmailDetail key={`${account.mailAccountId}:${selectedThread.id}`} thread={selectedThread} loading={detailLoading} loadError={detailError} onBack={() => { setDetailExpanded(false); setSelectedThread(null); setDetailError(undefined); }} onThreadUpdated={(updatedThread) => { const updatedMessageIds = new Set(updatedThread.messages.map((message) => message.id)); setSelectedThread(updatedThread); setThreads((current) => current.map((thread) => thread.mailAccountId === updatedThread.mailAccountId && (thread.id === updatedThread.id || threadContainsAnyMessage(thread, updatedMessageIds)) ? copyMailThreadReadState(thread, updatedThread) : thread)); }} openComposerRequest={openComposerRequest} mailAccount={account} /> : null}
+        {showSettings ? <GmailSignatureSettings onBack={() => setShowSettings(false)} mailAccount={account} /> : selectedThread ? <EmailDetail key={`${account.mailAccountId}:${selection.id}`} thread={selectedThread} loading={detailLoading} loadError={detailError} onBack={() => { setDetailExpanded(false); setSelectedThread(null); setDetailError(undefined); }} onThreadUpdated={(updatedThread) => { const updatedMessageIds = new Set(updatedThread.messages.map((message) => message.id)); setSelectedThread(updatedThread); setThreads((current) => current.map((thread) => thread.mailAccountId === updatedThread.mailAccountId && (thread.id === updatedThread.id || threadContainsAnyMessage(thread, updatedMessageIds)) ? copyMailThreadReadState(thread, updatedThread) : thread)); }} openComposerRequest={openComposerRequest} mailAccount={account} /> : null}
       </div>
 
       <NewEmailComposer

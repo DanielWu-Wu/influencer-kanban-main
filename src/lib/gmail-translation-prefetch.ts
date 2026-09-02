@@ -1,8 +1,9 @@
 import type { AppSettings } from '@/lib/data';
-import { getAccountCacheScope } from '@/lib/account-cache-scope';
+import { ACCOUNT_SCOPE_CHANGED_EVENT, getAccountCacheScope } from '@/lib/account-cache-scope';
 import { detectEmailLanguage } from '@/lib/email-language';
 import type { MailProvider } from '@/lib/mail-accounts';
-import { repairTextEncoding, splitEmailForTranslation } from '@/lib/email-text';
+import { splitEmailForTranslation } from '@/lib/email-text';
+import { isUsableMailTranslation, normalizeMailTranslationText } from '@/lib/mail-translation-body';
 
 export const GMAIL_PRIMARY_INBOX_REFRESHED_EVENT = 'gmail-primary-inbox-refreshed';
 
@@ -35,6 +36,8 @@ type GmailTranslationRequestOptions = {
   scopeKey: string;
   messageId: string;
   text: string;
+  sourceText?: string;
+  priority?: 'background' | 'foreground';
   settings: Pick<
     AppSettings,
     'translatePrompt' | 'modelProvider' | 'customApiUrl' | 'customModelName'
@@ -43,6 +46,15 @@ type GmailTranslationRequestOptions = {
 };
 
 const inFlightTranslations = new Map<string, Promise<GmailTranslationRequestResult>>();
+type TranslationJob = {
+  options: GmailTranslationRequestOptions;
+  resolve: (result: GmailTranslationRequestResult) => void;
+  reject: (error: unknown) => void;
+};
+const waitingTranslations = new Map<string, TranslationJob>();
+let activeBackground = 0;
+let activeForeground = 0;
+let requestGeneration = 0;
 const recentTranslations = new Map<string, { result: GmailTranslationRequestResult; expiresAt: number }>();
 const registeredQueues = new Map<string, GmailTranslationPrefetchQueue>();
 const translationStatusListeners = new Set<(update: MailTranslationPrefetchStatusUpdate) => void>();
@@ -63,8 +75,30 @@ export type MailTranslationPrefetchStatusUpdate = MailTranslationPrefetchStatusI
 export const MAIL_TRANSLATION_BACKGROUND_CONCURRENCY = 2;
 export const MAIL_TRANSLATION_RETRY_DELAYS_MS = [5_000, 30_000, 120_000] as const;
 
-function createTranslationRequestKey(scopeKey: string, messageId: string, text: string) {
-  return `${scopeKey}::${messageId}::${text}`;
+function createTranslationRequestKey(options: GmailTranslationRequestOptions) {
+  return JSON.stringify([options.scopeKey, options.messageId,
+    normalizeMailTranslationText(options.sourceText ?? options.text),
+    normalizeMailTranslationText(options.text)]);
+}
+
+function drainTranslationRequests() {
+  for (const [key, job] of waitingTranslations) {
+    const background = job.options.priority === 'background';
+    if (background ? activeBackground >= MAIL_TRANSLATION_BACKGROUND_CONCURRENCY : activeForeground >= 1) continue;
+    waitingTranslations.delete(key);
+    if (background) activeBackground += 1;
+    else activeForeground += 1;
+    void executeTranslationRequest(job.options).then((result) => {
+      if (!isUsableMailTranslation(job.options.text, result.translatedText)) {
+        throw new Error('翻译服务没有返回有效中文，请重试。');
+      }
+      job.resolve(result);
+    }).catch(job.reject).finally(() => {
+      if (background) activeBackground -= 1;
+      else activeForeground -= 1;
+      drainTranslationRequests();
+    });
+  }
 }
 
 function parseTranslationStreamBlock(
@@ -180,7 +214,7 @@ export function subscribeMailTranslationPrefetchStatus(
 }
 
 export function requestGmailTranslation(options: GmailTranslationRequestOptions) {
-  const key = createTranslationRequestKey(options.scopeKey, options.messageId, options.text);
+  const key = createTranslationRequestKey(options);
   const recent = recentTranslations.get(key);
   if (recent && recent.expiresAt > Date.now()) {
     options.onProgress?.(recent.result.translatedText);
@@ -189,19 +223,28 @@ export function requestGmailTranslation(options: GmailTranslationRequestOptions)
   if (recent) recentTranslations.delete(key);
   const existing = inFlightTranslations.get(key);
   if (existing) {
+    const waiting = waitingTranslations.get(key);
+    if (waiting && options.priority !== 'background') {
+      waiting.options.priority = 'foreground';
+      drainTranslationRequests();
+    }
     existing.then((result) => options.onProgress?.(result.translatedText)).catch(() => undefined);
     return existing;
   }
 
-  const request = executeTranslationRequest(options)
+  const generation = requestGeneration;
+  const request = new Promise<GmailTranslationRequestResult>((resolve, reject) => {
+    waitingTranslations.set(key, { options: { ...options }, resolve, reject });
+  })
     .then((result) => {
-      recentTranslations.set(key, { result, expiresAt: Date.now() + 60_000 });
+      if (generation === requestGeneration) recentTranslations.set(key, { result, expiresAt: Date.now() + 60_000 });
       return result;
     })
     .finally(() => {
       if (inFlightTranslations.get(key) === request) inFlightTranslations.delete(key);
     });
   inFlightTranslations.set(key, request);
+  drainTranslationRequests();
   return request;
 }
 
@@ -237,7 +280,7 @@ export function selectDailyMailTranslationPrefetchCandidates<
       const incomingAt = Date.parse(candidate.date);
       const answeredAt = Date.parse(candidate.answeredAt || '');
       if (Number.isFinite(incomingAt) && Number.isFinite(answeredAt) && answeredAt > incomingAt) return false;
-      const originalText = repairTextEncoding(candidate.body);
+      const originalText = normalizeMailTranslationText(candidate.body);
       const currentText = splitEmailForTranslation(originalText).currentText || originalText;
       if (!currentText.trim()) return false;
       seen.add(identity);
@@ -270,7 +313,7 @@ export class GmailTranslationPrefetchQueue {
   ) {}
 
   private candidateKey(candidate: Pick<MailTranslationPrefetchCandidate, 'provider' | 'mailAccountId' | 'messageId' | 'body'>) {
-    return `${candidate.provider}::${candidate.mailAccountId}::${candidate.messageId}::${candidate.body}`;
+    return JSON.stringify([candidate.provider, candidate.mailAccountId, candidate.messageId, normalizeMailTranslationText(candidate.body)]);
   }
 
   private emitStatus(
@@ -281,7 +324,7 @@ export class GmailTranslationPrefetchQueue {
     publishMailTranslationPrefetchStatus({
       scopeKey: getMailTranslationScopeKey(candidate.mailAccountId, this.options.accountScope),
       messageId: candidate.messageId,
-      originalText: repairTextEncoding(candidate.body),
+      originalText: normalizeMailTranslationText(candidate.body),
       status,
       error,
     });
@@ -406,6 +449,7 @@ export class GmailTranslationPrefetchQueue {
           const retryDelay = retryDelays[failureCount - 1];
           const errorMessage = error instanceof Error ? error.message : '翻译失败，请稍后重试';
           if (retryDelay === undefined) {
+            this.processed.add(candidateKey);
             this.emitStatus(candidate, 'failed', errorMessage);
             return;
           }
@@ -444,8 +488,15 @@ export function retryMailTranslationPrefetch(messageId: string, scopeKey: string
 }
 
 export function clearGmailTranslationRequests() {
+  requestGeneration += 1;
+  waitingTranslations.forEach((job) => job.reject(new Error('账号已切换，请重新打开邮件。')));
+  waitingTranslations.clear();
   inFlightTranslations.clear();
   recentTranslations.clear();
   registeredQueues.forEach((queue) => queue.stop());
   registeredQueues.clear();
+}
+
+if (typeof window !== 'undefined') {
+  window.addEventListener(ACCOUNT_SCOPE_CHANGED_EVENT, clearGmailTranslationRequests);
 }

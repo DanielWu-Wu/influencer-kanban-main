@@ -46,6 +46,7 @@ import { GmailPage, type GmailThreadOpenRequest } from '@/components/gmail-page'
 import { MailAccountSwitcher } from '@/components/mail-account-switcher';
 import { useMailAccounts } from '@/components/mail-account-provider';
 import { TencentExmailPage, type TencentExmailOpenRequest } from '@/components/tencent-exmail-page';
+import { buildDailyMailPreview } from '@/lib/daily-mail-preview';
 import type { DailyGmailTodo } from '@/lib/use-daily-gmail-todos';
 import {
   CreatorProspectingPage,
@@ -244,7 +245,7 @@ export default function DashboardPage() {
   }, [changeView]);
   const handleOpenGmailThread = useCallback((
     threadId: string,
-    options: { messageId?: string; autoShowTranslation?: boolean } = {},
+    options: Pick<GmailThreadOpenRequest, 'messageId' | 'autoShowTranslation' | 'previewThread'> = {},
   ) => {
     setGmailThreadOpenRequest((current) => ({
       threadId,
@@ -259,6 +260,7 @@ export default function DashboardPage() {
       toast.error(`来源邮箱（${item.mailAddress || '地址未记录'}）已断开，请先重新连接。`);
       return;
     }
+    const previewThread = buildDailyMailPreview(item, dailyGmail.messageSnapshots);
     if (item.provider === 'tencent_exmail') {
       if (!item.folderRef || !item.providerMessageRef) {
         toast.error('这条腾讯邮箱待办缺少邮件定位信息，无法安全打开相似邮件。');
@@ -266,11 +268,13 @@ export default function DashboardPage() {
       }
       selectAccount(targetAccount.mailAccountId);
       setTencentMessageOpenRequest((current) => ({
+        mailAccountId: targetAccount.mailAccountId,
         requestId: (current?.requestId || 0) + 1,
         folderRef: item.folderRef || '',
         providerMessageRef: item.providerMessageRef || '',
         rfcMessageId: item.rfcMessageId,
         autoShowTranslation: true,
+        previewThread,
       }));
       changeView('gmail');
       return;
@@ -279,8 +283,9 @@ export default function DashboardPage() {
     handleOpenGmailThread(item.threadId, {
       messageId: item.messageId,
       autoShowTranslation: true,
+      previewThread,
     });
-  }, [changeView, handleOpenGmailThread, mailAccounts, selectAccount]);
+  }, [changeView, dailyGmail.messageSnapshots, handleOpenGmailThread, mailAccounts, selectAccount]);
 
   useEffect(() => {
     const handleOpenGenerationTask = (event: Event) => {
@@ -319,6 +324,7 @@ export default function DashboardPage() {
         const { mailAccountId, folderRef, providerMessageRef, composerMode } = detail.navigation;
         selectAccount(mailAccountId);
         setTencentMessageOpenRequest((current) => ({
+          mailAccountId,
           requestId: (current?.requestId || 0) + 1,
           folderRef,
           providerMessageRef,

@@ -39,6 +39,7 @@ import './gmail-inbox-cache.test';
 import './gmail-read-state.test';
 import './mail-read-state.test';
 import './gmail-translation-prefetch.test';
+import './mail-translation-body.test';
 import './gmail-translation-candidates.test';
 import './email-generation-tasks.test';
 import './email-translation-tasks.test';

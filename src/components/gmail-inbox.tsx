@@ -23,6 +23,7 @@ import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { ScrollArea } from '@/components/ui/scroll-area';
 import { useGmailAuth, useSettings } from '@/lib/data';
+import { normalizeMailTranslationText, readGmailMessageBody } from '@/lib/mail-translation-body';
 import { repairTextEncoding } from '@/lib/email-text';
 import { extractMappedFeishuChannelUrl } from '@/lib/feishu-field-value';
 import type { FeishuFieldMapping } from '@/lib/feishu-mapping';
@@ -103,7 +104,7 @@ type GmailThreadLoadState = {
 
 interface GmailInboxProps {
   active?: boolean;
-  onSelectThread: (thread: GmailThread, options?: { detailLoaded?: boolean }) => void;
+  onSelectThread: (thread: GmailThread, options?: { detailLoaded?: boolean; selectionRequestId?: number | null }) => void;
   onThreadLoadStateChange?: (threadId: string, state: GmailThreadLoadState) => void;
   onThreadUpdated?: (thread: GmailThread) => void;
   onCategoryChange: (category: GmailCategory) => void;
@@ -115,7 +116,7 @@ interface GmailInboxProps {
   refreshKey?: number;
   compact?: boolean;
   avatarOnly?: boolean;
-  openThreadRequest?: { threadId: string; requestId: number };
+  openThreadRequest?: { threadId: string; requestId: number; previewThread?: GmailThread };
 }
 
 type GmailThreadDetailCacheEntry = {
@@ -486,7 +487,7 @@ async function parseGmailThread(
         )
       : parsed.attachments;
     const htmlBody = repairTextEncoding(replaceInlineContentIds(parsed.htmlParts.join('\n'), attachments));
-    const body = repairTextEncoding(parsed.textParts.join('\n\n') || htmlBody.replace(/<[^>]+>/g, ' '));
+    const { body } = readGmailMessageBody(payload);
     const date = mailTimestampToIso(getApiMessageTimestamp(message));
 
     return {
@@ -549,8 +550,12 @@ function readCachedThreadDetail(thread: GmailThread) {
   const cached = gmailThreadDetailCache.get(cacheKey);
   if (
     !cached
+    || cached.thread.isPartial
     || Date.now() - cached.fetchedAt >= GMAIL_THREAD_DETAIL_CACHE_MS
     || cached.thread.lastMessageDate !== thread.lastMessageDate
+    || (thread.isPartial && thread.messages.some((message) => !cached.thread.messages.some((item) => (
+      item.id === message.id && normalizeMailTranslationText(item.body) === normalizeMailTranslationText(message.body)
+    ))))
   ) {
     if (cached) gmailThreadDetailCache.delete(cacheKey);
     return null;
@@ -565,6 +570,7 @@ function readCachedThreadDetail(thread: GmailThread) {
 }
 
 function cacheThreadDetail(thread: GmailThread, cacheKey = gmailThreadCacheKey(thread.id)) {
+  if (thread.isPartial) return;
   if (!gmailThreadDetailCache.has(cacheKey) && gmailThreadDetailCache.size >= 100) {
     const oldestThreadId = gmailThreadDetailCache.keys().next().value;
     if (oldestThreadId) gmailThreadDetailCache.delete(oldestThreadId);
@@ -687,7 +693,7 @@ export function GmailInbox({
   const openingThreadRef = useRef<string | null>(null);
   const openingThreadRunRef = useRef(0);
   const handledOpenThreadRequestRef = useRef(0);
-  const handleOpenThreadRef = useRef<(thread: GmailThread) => Promise<void>>(async () => undefined);
+  const handleOpenThreadRef = useRef<(thread: GmailThread, requestId?: number) => Promise<void>>(async () => undefined);
   const accountCacheScopeRef = useRef(getAccountCacheScope());
   const currentInboxCacheKeyRef = useRef<string | null>(null);
   const threadPrefetchTimerRef = useRef<number | null>(null);
@@ -837,7 +843,7 @@ export function GmailInbox({
   ]);
 
   useEffect(() => {
-    if (!updatedThread) return;
+    if (!updatedThread || updatedThread.isPartial) return;
     const internallyApplied = internallyAppliedThreadRef.current === updatedThread;
     if (internallyApplied) internallyAppliedThreadRef.current = null;
     if (!updatedThread.hasUnread) {
@@ -1536,7 +1542,7 @@ export function GmailInbox({
     threadPrefetchTimerRef.current = null;
   };
 
-  const handleOpenThread = async (thread: GmailThread) => {
+  const handleOpenThread = async (thread: GmailThread, requestId?: number) => {
     const runId = openingThreadRunRef.current + 1;
     const cachedThread = readCachedThreadDetail(thread);
     openingThreadRunRef.current = runId;
@@ -1544,7 +1550,7 @@ export function GmailInbox({
     selectedThreadIdRef.current = thread.id;
     threadDetailVisibleRef.current = true;
     setOpeningThreadId(thread.id);
-    onSelectThread(cachedThread || thread, { detailLoaded: Boolean(cachedThread) });
+    onSelectThread(cachedThread || thread, { detailLoaded: Boolean(cachedThread), selectionRequestId: requestId ?? null });
     onThreadLoadStateChange?.(thread.id, { loading: !cachedThread });
     let nextThread = cachedThread || thread;
     let accessToken: string | null = null;
@@ -1626,9 +1632,12 @@ export function GmailInbox({
 
     const { threadId, requestId } = openThreadRequest;
     handledOpenThreadRequestRef.current = requestId;
-    const listedThread = threadsRef.current.find((thread) => thread.id === threadId);
+    const preview = openThreadRequest.previewThread;
+    const listedThread = preview?.provider === 'gmail' && preview.id === threadId
+      && preview.mailAccountId === `gmail:${auth.email?.trim().toLowerCase()}`
+      ? preview : threadsRef.current.find((thread) => thread.id === threadId);
     if (listedThread) {
-      void handleOpenThreadRef.current(listedThread);
+      void handleOpenThreadRef.current(listedThread, requestId);
       return;
     }
 
@@ -1636,13 +1645,13 @@ export function GmailInbox({
       .then((accessToken) => fetchThreadDetailById(threadId, accessToken))
       .then((thread) => {
         if (handledOpenThreadRequestRef.current !== requestId) return;
-        return handleOpenThreadRef.current(thread);
+        return handleOpenThreadRef.current(thread, requestId);
       })
       .catch((caughtError) => {
         if (handledOpenThreadRequestRef.current !== requestId) return;
         setError(caughtError instanceof Error ? caughtError.message : '打开邮件线程失败');
       });
-  }, [active, auth?.isConnected, getAccessToken, openThreadRequest]);
+  }, [active, auth?.email, auth?.isConnected, getAccessToken, openThreadRequest]);
 
   const translateThreadSubjects = useCallback(async (targetThreads: GmailThread[]) => {
     const missingThreads = targetThreads.filter((thread) => {

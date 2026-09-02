@@ -3,7 +3,9 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useEmailTranslations, useSettings } from '@/lib/data';
 import { getAccountCacheScope } from '@/lib/account-cache-scope';
-import { repairTextEncoding, splitEmailForTranslation } from '@/lib/email-text';
+import { splitEmailForTranslation } from '@/lib/email-text';
+import { normalizeMailTranslationText } from '@/lib/mail-translation-body';
+import { findUsableEmailTranslation } from '@/lib/email-translations';
 import {
   GmailTranslationPrefetchQueue,
   getLegacyGmailTranslationScopeKey,
@@ -34,9 +36,25 @@ export function useMailTranslationPrefetch(
   const addTranslationRef = useRef(addTranslation);
   const settingsRef = useRef(settings);
   const queueRef = useRef<GmailTranslationPrefetchQueue | null>(null);
-  const [translationStatuses, setTranslationStatuses] = useState<Record<string, MailTranslationPrefetchStatusInfo>>({});
-  const translationStatusesRef = useRef(translationStatuses);
+  const [queueStatuses, setTranslationStatuses] = useState<Record<string, MailTranslationPrefetchStatusInfo>>({});
+  // “已备好”只取决于可使用的缓存，不能由队列任务结束推断。
   const accountScope = getAccountCacheScope();
+  const translationStatuses = useMemo(() => Object.fromEntries(candidates.map((candidate) => {
+    const scopeKey = getMailTranslationScopeKey(candidate.mailAccountId, accountScope);
+    const key = getMailTranslationStatusKey(scopeKey, candidate.messageId);
+    const originalText = normalizeMailTranslationText(candidate.body);
+    const cached = findUsableEmailTranslation(translations, [
+      getMailTranslationStorageMessageId(scopeKey, candidate.messageId),
+      ...(candidate.provider === 'gmail' ? [getMailTranslationStorageMessageId(
+        getLegacyGmailTranslationScopeKey(candidate.mailAddress, accountScope), candidate.messageId,
+      )] : []),
+    ], originalText);
+    const event = queueStatuses[key];
+    return [key, cached ? { status: 'ready' as const, originalText }
+      : event && event.status !== 'ready' && event.originalText === originalText
+        ? event : { status: 'queued' as const, originalText }];
+  })), [accountScope, candidates, queueStatuses, translations]);
+  const translationStatusesRef = useRef(translationStatuses);
   const sortedCandidates = useMemo(() => sortCandidates(candidates), [candidates]);
   const sortedCandidatesRef = useRef(sortedCandidates);
 
@@ -84,22 +102,16 @@ export function useMailTranslationPrefetch(
     let disposed = false;
     const queue = new GmailTranslationPrefetchQueue(async (candidate) => {
       if (disposed || getAccountCacheScope() !== accountScope) return;
-      const originalText = repairTextEncoding(candidate.body);
+      const originalText = normalizeMailTranslationText(candidate.body);
       const scopeKey = getMailTranslationScopeKey(candidate.mailAccountId, accountScope);
       const storageMessageId = getMailTranslationStorageMessageId(scopeKey, candidate.messageId);
-      const cached = translationsRef.current.find((translation) => (
-        translation.messageId === storageMessageId
-        && translation.originalText === originalText
-      ));
+      const cached = findUsableEmailTranslation(translationsRef.current, [storageMessageId], originalText);
       if (cached) return;
 
       if (candidate.provider === 'gmail') {
         const legacyScopeKey = getLegacyGmailTranslationScopeKey(candidate.mailAddress, accountScope);
         const legacyStorageMessageId = getMailTranslationStorageMessageId(legacyScopeKey, candidate.messageId);
-        const legacy = translationsRef.current.find((translation) => (
-          translation.messageId === legacyStorageMessageId
-          && translation.originalText === originalText
-        ));
+        const legacy = findUsableEmailTranslation(translationsRef.current, [legacyStorageMessageId], originalText);
         if (legacy) {
           if (disposed || getAccountCacheScope() !== accountScope) return;
           addTranslationRef.current({
@@ -119,6 +131,8 @@ export function useMailTranslationPrefetch(
         scopeKey,
         messageId: candidate.messageId,
         text: currentText,
+        sourceText: originalText,
+        priority: 'background',
         settings: settingsRef.current,
       });
       if (disposed || getAccountCacheScope() !== accountScope) return;
@@ -126,7 +140,7 @@ export function useMailTranslationPrefetch(
         current.provider === candidate.provider
         && current.mailAccountId === candidate.mailAccountId
         && current.messageId === candidate.messageId
-        && repairTextEncoding(current.body) === originalText
+        && normalizeMailTranslationText(current.body) === originalText
       ));
       if (!candidateIsCurrent) return;
       addTranslationRef.current({
@@ -151,13 +165,10 @@ export function useMailTranslationPrefetch(
     if (!active || !queue) return;
     const readyStatuses: Record<string, MailTranslationPrefetchStatusInfo> = {};
     const pending = sortedCandidates.filter((candidate) => {
-      const originalText = repairTextEncoding(candidate.body);
+      const originalText = normalizeMailTranslationText(candidate.body);
       const scopeKey = getMailTranslationScopeKey(candidate.mailAccountId, accountScope);
       const storageMessageId = getMailTranslationStorageMessageId(scopeKey, candidate.messageId);
-      if (translations.some((translation) => (
-        translation.messageId === storageMessageId
-        && translation.originalText === originalText
-      ))) {
+      if (findUsableEmailTranslation(translations, [storageMessageId], originalText)) {
         readyStatuses[getMailTranslationStatusKey(scopeKey, candidate.messageId)] = {
           status: 'ready',
           originalText,
@@ -198,7 +209,7 @@ export function useMailTranslationPrefetch(
         const status = translationStatusesRef.current[
           getMailTranslationStatusKey(scopeKey, candidate.messageId)
         ];
-        if (status?.status === 'failed') queue.retry(candidate.messageId, scopeKey);
+        if (status?.status === 'failed' || status?.status === 'retrying') queue.retry(candidate.messageId, scopeKey);
       });
     };
     const retryWhenVisible = () => {

@@ -5,7 +5,6 @@ import { simpleParser, type AddressObject } from 'mailparser';
 import type {
   FetchMessageObject,
   ListResponse,
-  MessageStructureObject,
   SearchObject,
 } from 'imapflow';
 import type { GmailAttachment, GmailMessage, GmailThread } from './types';
@@ -28,13 +27,12 @@ import {
   mailTimestampToIso,
   resolveImapMessageTimestamp,
 } from './mail-message-time';
-import { resolveMailMessageReadableText } from './email-text';
+import { resolveMailTranslationBody } from './mail-translation-body';
+import { selectTencentTranslationBodyPart } from './tencent-translation-body';
 
 const MAX_LIST_RESULTS = 50;
 const MAX_MESSAGE_BYTES = 32 * 1024 * 1024;
 const MAX_INLINE_ATTACHMENT_PREVIEW_BYTES = 256 * 1024;
-const MAX_DAILY_BODY_BYTES = 512 * 1024;
-const MAX_DAILY_BODY_CHARS = 12_000;
 const TENCENT_THREAD_CACHE_TTL_MS = 60_000;
 
 export type TencentOutgoingAttachment = {
@@ -349,13 +347,10 @@ async function loadTencentThread(options: {
       if (!item.source) return null;
       const uid = item.uid;
       try {
-        const parsed = await simpleParser(item.source);
+        const parsed = await simpleParser(item.source, { skipHtmlToText: true });
         const messageId = parsed.messageId || `${options.account.mailAccountId}:${folder}:${uid}`;
         const htmlBody = typeof parsed.html === 'string' ? parsed.html : parsed.textAsHtml;
-        const body = resolveMailMessageReadableText({
-          body: parsed.text || '',
-          htmlBody,
-        });
+        const body = resolveMailTranslationBody(parsed.text || '', htmlBody || '');
         const attachments: GmailAttachment[] = parsed.attachments.map((attachment, index) => ({
           id: `${uid}:${index}`,
           filename: attachment.filename || `附件-${index + 1}`,
@@ -661,21 +656,6 @@ type TencentSentEnvelope = {
   references?: string;
 };
 
-function preferredTextBodyPart(structure?: MessageStructureObject) {
-  if (!structure) return null;
-  const candidates: MessageStructureObject[] = [];
-  const visit = (node: MessageStructureObject) => {
-    if (node.disposition?.toLowerCase() !== 'attachment' && /^text\/(plain|html)$/i.test(node.type)) {
-      candidates.push(node);
-    }
-    node.childNodes?.forEach(visit);
-  };
-  visit(structure);
-  return candidates.find((item) => item.type.toLowerCase() === 'text/plain')
-    || candidates.find((item) => item.type.toLowerCase() === 'text/html')
-    || null;
-}
-
 async function readTextStream(content: AsyncIterable<Buffer | string>) {
   const chunks: Buffer[] = [];
   for await (const chunk of content) {
@@ -793,20 +773,26 @@ export async function listTencentDailyTodoMessages(options: {
         messageId: parsed.messageId,
       });
       let body = '';
-      const bodyPart = preferredTextBodyPart(item.bodyStructure);
-      if (bodyPart?.part) {
-        try {
+      const bodyPart = selectTencentTranslationBodyPart(item.bodyStructure);
+      try {
+        if (bodyPart?.part) {
           const downloaded = await client.download(uid, bodyPart.part, {
             uid: true,
-            maxBytes: MAX_DAILY_BODY_BYTES,
           });
           body = await readTextStream(downloaded.content);
-          if (bodyPart.type.toLowerCase() === 'text/html') body = body.replace(/<[^>]+>/g, ' ');
-        } catch {
-          body = '';
+          body = bodyPart.type.toLowerCase() === 'text/html'
+            ? resolveMailTranslationBody('', body)
+            : resolveMailTranslationBody(body);
+        } else {
+          const full = await client.fetchOne(uid, { source: { maxLength: MAX_MESSAGE_BYTES } }, { uid: true });
+          if (full && full.source) {
+            const content = await simpleParser(full.source, { skipHtmlToText: true });
+            body = resolveMailTranslationBody(content.text || '', typeof content.html === 'string' ? content.html : '');
+          }
         }
+      } catch {
+        body = '';
       }
-      body = body.replace(/\s+/g, ' ').trim().slice(0, MAX_DAILY_BODY_CHARS);
       messages.push({
         messageId: message.id,
         threadId: message.threadId,

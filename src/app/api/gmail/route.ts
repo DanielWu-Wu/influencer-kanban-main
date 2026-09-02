@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { repairTextEncoding } from '@/lib/email-text';
+import { readGmailMessageBody } from '@/lib/mail-translation-body';
 import { classifyFollowUpConversation } from '@/lib/outreach-follow-up';
 import { containsIgnoredGmailContactEmail } from '@/lib/gmail-thread-contact';
 import { refreshStoredGmailAuth } from '@/lib/gmail-cloud-auth';
@@ -117,44 +118,10 @@ function isDeliveryFailure(subject: string, from: string) {
   return /(mailer-daemon|postmaster|delivery status notification|undeliverable|delivery failed|delivery failure|地址不存在|投递失败)/i.test(normalized);
 }
 
-function decodeBase64Url(data: string, charset = 'utf-8') {
-  const normalized = data.replace(/-/g, '+').replace(/_/g, '/');
-  const buffer = Buffer.from(normalized, 'base64');
-  try {
-    return repairTextEncoding(new TextDecoder(charset).decode(buffer));
-  } catch {
-    return repairTextEncoding(buffer.toString('utf8'));
-  }
-}
-
-function collectMessageBodies(payload: Record<string, unknown>, text: string[], html: string[]) {
-  const headers = (payload.headers as GmailHeader[]) || [];
-  const body = (payload.body as Record<string, unknown>) || {};
-  const data = typeof body.data === 'string' ? body.data : '';
-  const mimeType = String(payload.mimeType || '');
-  const charset = getHeader(headers, 'Content-Type').match(/charset=["']?([^;"'\s]+)/i)?.[1] || 'utf-8';
-
-  if (data && mimeType === 'text/plain') text.push(decodeBase64Url(data, charset));
-  if (data && mimeType === 'text/html') html.push(decodeBase64Url(data, charset));
-
-  const parts = payload.parts as Record<string, unknown>[] | undefined;
-  parts?.forEach((part) => collectMessageBodies(part, text, html));
-}
-
 function parseHistoryMessage(message: Record<string, unknown>) {
   const payload = (message.payload || {}) as Record<string, unknown>;
   const headers = (payload.headers as GmailHeader[]) || [];
-  const text: string[] = [];
-  const html: string[] = [];
-  collectMessageBodies(payload, text, html);
-  const htmlFallback = repairTextEncoding(html.join('\n'))
-    .replace(/<style[\s\S]*?<\/style>/gi, ' ')
-    .replace(/<script[\s\S]*?<\/script>/gi, ' ')
-    .replace(/<[^>]+>/g, ' ')
-    .replace(/&nbsp;/gi, ' ')
-    .replace(/&amp;/gi, '&')
-    .replace(/\s+/g, ' ')
-    .trim();
+  const { body } = readGmailMessageBody(payload);
   const labelIds = Array.isArray(message.labelIds)
     ? message.labelIds.map((label) => String(label || ''))
     : [];
@@ -179,7 +146,7 @@ function parseHistoryMessage(message: Record<string, unknown>) {
       labelIds,
     })),
     snippet: repairTextEncoding(String(message.snippet || '')),
-    body: repairTextEncoding(text.join('\n\n').trim() || htmlFallback || String(message.snippet || '')),
+    body,
     automated: isAutomatedReply(headers, getHeader(headers, 'Subject'), getHeader(headers, 'From')),
     deliveryFailure: isDeliveryFailure(getHeader(headers, 'Subject'), getHeader(headers, 'From')),
   };

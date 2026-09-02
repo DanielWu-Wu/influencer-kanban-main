@@ -182,6 +182,12 @@ test('后台失败任务自动重试三次后停止并发布失败状态', async
 
     assert.equal(attempts, 4);
     assert.equal(statuses.at(-1), 'failed');
+    queue.synchronize([failed]);
+    await nextTurn();
+    assert.equal(attempts, 4, '其他译文保存导致重新同步时，不能无限重试失败任务');
+    queue.retry(failed.messageId);
+    await nextTurn();
+    assert.ok(attempts > 4, '用户明确重试可以重新开始');
   } finally {
     unsubscribe();
     queue.stop();
@@ -280,6 +286,7 @@ test('不同邮件的翻译请求可以并发，前台请求不再等待后台�
       scopeKey: 'account-a::one@gmail.com',
       messageId: 'message-1',
       text: 'Hola',
+      priority: 'background',
       settings: {},
     });
     const second = requestGmailTranslation({

@@ -162,6 +162,7 @@ export function useDailyGmailTodos(settings: AppSettings, active = true) {
   const [error, setError] = useState('');
   const [sourceStatus, setSourceStatus] = useState<DailyMailboxStatus[]>([]);
   const [translationCandidates, setTranslationCandidates] = useState<MailTranslationPrefetchCandidate[]>([]);
+  const [messageSnapshots, setMessageSnapshots] = useState<MailTranslationPrefetchCandidate[]>([]);
   const runIdRef = useRef(0);
   const loadInFlightRef = useRef<{ scope: string; request: Promise<void> } | null>(null);
   const lastSuccessfulRefreshAtRef = useRef(0);
@@ -207,6 +208,7 @@ export function useDailyGmailTodos(settings: AppSettings, active = true) {
   );
 
   useEffect(() => {
+    setMessageSnapshots((current) => current.filter((message) => connectedMailAccountIds.has(message.mailAccountId)));
     setTranslationCandidates((current) => current.filter((candidate) => (
       connectedMailAccountIds.has(candidate.mailAccountId)
     )));
@@ -518,6 +520,7 @@ export function useDailyGmailTodos(settings: AppSettings, active = true) {
         candidateSnapshots,
         { includeCompleted: true },
       );
+      setMessageSnapshots(candidateSnapshots);
       setTranslationCandidates(freshTranslationCandidates);
       saveAccountData(USER_DATA_KEYS.DAILY_MAIL_TASKS_V3, nextTaskCache);
       setItems(taskCacheToItems(nextTaskCache).map((item) => ({
@@ -638,6 +641,7 @@ export function useDailyGmailTodos(settings: AppSettings, active = true) {
 
   useEffect(() => {
     if (!active) {
+      setMessageSnapshots([]);
       setTranslationCandidates([]);
       const cachedItems = taskCacheToItems(taskCacheRef.current);
       setItems(cachedItems);
@@ -659,9 +663,12 @@ export function useDailyGmailTodos(settings: AppSettings, active = true) {
     };
     refreshInBackgroundIfNeeded();
     const timer = window.setInterval(refreshInBackgroundIfNeeded, DAILY_MAIL_AUTO_REFRESH_MS);
+    const refreshWhenOnline = () => { void load(true, true); };
+    window.addEventListener('online', refreshWhenOnline);
     document.addEventListener('visibilitychange', refreshInBackgroundIfNeeded);
     return () => {
       window.clearInterval(timer);
+      window.removeEventListener('online', refreshWhenOnline);
       document.removeEventListener('visibilitychange', refreshInBackgroundIfNeeded);
     };
   }, [active, load]);
@@ -693,6 +700,7 @@ export function useDailyGmailTodos(settings: AppSettings, active = true) {
     error,
     sourceStatus,
     translationCandidates,
+    messageSnapshots,
     refresh: () => load(true),
     toggleCompleted,
   };

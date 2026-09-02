@@ -56,6 +56,7 @@ export type GmailThreadOpenRequest = {
   messageId?: string;
   composerMode?: 'ai' | 'template';
   autoShowTranslation?: boolean;
+  previewThread?: GmailThread;
 };
 
 export function GmailPage({
@@ -68,6 +69,7 @@ export function GmailPage({
   onManageMailAccounts?: () => void;
 }) {
   const [selectedThread, setSelectedThread] = useState<GmailThread | null>(null);
+  const [selection, setSelection] = useState<{ id: number; request?: GmailThreadOpenRequest }>({ id: 0 });
   const [mailbox, setMailbox] = useState<GmailMailbox>('inbox');
   const [category, setCategory] = useState<GmailCategory>('primary');
   const [showSettings, setShowSettings] = useState(false);
@@ -244,7 +246,10 @@ export function GmailPage({
     return () => window.cancelAnimationFrame(frame);
   }, [detailExpanded, selectedThread, showSettings]);
 
-  const handleSelectThread = (thread: GmailThread, options?: { detailLoaded?: boolean }) => {
+  const handleSelectThread = (thread: GmailThread, options?: { detailLoaded?: boolean; selectionRequestId?: number | null }) => {
+    if (options?.selectionRequestId !== undefined) {
+      setSelection((current) => ({ id: current.id + 1, request: options.selectionRequestId === openThreadRequest?.requestId ? openThreadRequest : undefined }));
+    }
     if (closeDetailTimerRef.current !== null) {
       window.clearTimeout(closeDetailTimerRef.current);
       closeDetailTimerRef.current = null;
@@ -456,7 +461,7 @@ export function GmailPage({
           <GmailSignatureSettings onBack={() => setShowSettings(false)} />
         ) : selectedThread ? (
           <EmailDetail
-            key={selectedThread.id}
+            key={`${selectedThread.id}:${selection.id}`}
             thread={selectedThread}
             loading={threadLoadState?.threadId === selectedThread.id && threadLoadState.loading}
             loadError={threadLoadState?.threadId === selectedThread.id
@@ -464,8 +469,8 @@ export function GmailPage({
               : undefined}
             onBack={handleCloseThread}
             onThreadUpdated={setSelectedThread}
-            openComposerRequest={openThreadRequest?.threadId === selectedThread.id
-              ? openThreadRequest
+            openComposerRequest={selection.request?.threadId === selectedThread.id
+              ? selection.request
               : undefined}
           />
         ) : (

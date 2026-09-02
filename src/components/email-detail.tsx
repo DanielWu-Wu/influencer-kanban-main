@@ -25,6 +25,9 @@ import { YouTubeChannelAvatar } from './youtube-channel-avatar';
 import { textToEmailHtml } from '@/lib/email-content';
 import { detectEmailLanguage } from '@/lib/email-language';
 import { repairTextEncoding, splitEmailForTranslation } from '@/lib/email-text';
+import { normalizeMailTranslationText } from '@/lib/mail-translation-body';
+import { findUsableEmailTranslation } from '@/lib/email-translations';
+import { Alert, AlertDescription } from '@/components/ui/alert';
 import {
   sanitizeEmailHtmlForDisplay,
   shouldBlockRemoteEmailContent,
@@ -71,7 +74,6 @@ import {
   getLegacyGmailTranslationScopeKey,
   getMailTranslationStorageMessageId,
   publishMailTranslationPrefetchStatus,
-  prioritizeGmailTranslationPrefetch,
   requestGmailTranslation,
 } from '@/lib/gmail-translation-prefetch';
 import {
@@ -279,8 +281,7 @@ export function EmailDetail({
   );
   const replyAnchorManuallySelectedRef = useRef(false);
   const handledOpenComposerRequestRef = useRef(0);
-  const handledAutoTranslationRequestRef = useRef(0);
-  const autoShowTranslationMessageIdRef = useRef('');
+  const handledAutoTranslationRequestRef = useRef('');
   const ensureTranslationRef = useRef<(message: GmailMessage) => Promise<void>>(async () => undefined);
   const getScopedTranslationRef = useRef<(message: GmailMessage) => EmailTranslation | undefined>(
     () => undefined,
@@ -295,11 +296,24 @@ export function EmailDetail({
     content: string;
     attachments: File[];
   } | null>(null);
-  const { translations, addTranslation, getTranslation } = useEmailTranslations();
+  const { translations, addTranslation } = useEmailTranslations();
   const { auth, connect } = useGmailAuth();
   const isTencent = mailAccount?.provider === 'tencent_exmail' || thread.provider === 'tencent_exmail';
   const ownEmail = mailAccount?.email || auth?.email || '';
   const mailScope = mailAccount?.mailAccountId || `gmail:${ownEmail.toLowerCase()}`;
+  const translationAccountScope = getAccountCacheScope();
+  const translationContextRef = useRef({ thread, scope: translationAccountScope });
+  translationContextRef.current = { thread, scope: translationAccountScope };
+  const translationMountedRef = useRef(true);
+  useEffect(() => {
+    translationMountedRef.current = true;
+    return () => { translationMountedRef.current = false; };
+  }, []);
+  const isTranslationCurrent = (message: GmailMessage) => translationMountedRef.current
+    && getAccountCacheScope() === translationAccountScope
+    && translationContextRef.current.scope === translationAccountScope
+    && translationContextRef.current.thread.messages.some((current) => current.id === message.id
+      && normalizeMailTranslationText(current.body) === normalizeMailTranslationText(message.body));
   const providerLabel = isTencent ? '腾讯企业邮箱' : 'Gmail';
   const remoteContentPermissionScope = `${mailScope}:${thread.id}`;
   const [remoteContentPermission, setRemoteContentPermission] = useState<{
@@ -470,7 +484,10 @@ export function EmailDetail({
 
   const [translatingIds, setTranslatingIds] = useState<Set<string>>(new Set());
   const [translatingQuotedIds, setTranslatingQuotedIds] = useState<Set<string>>(new Set());
-  const [showingTranslationIds, setShowingTranslationIds] = useState<Set<string>>(new Set());
+  // 保存显示意图；只有缓存有效时，界面才显示“中文翻译”。
+  const [showingTranslationIds, setShowingTranslationIds] = useState<Set<string>>(() => new Set(
+    openComposerRequest?.autoShowTranslation && openComposerRequest.messageId ? [openComposerRequest.messageId] : [],
+  ));
   const [translateErrors, setTranslateErrors] = useState<Record<string, string>>({});
   const [translationProgress, setTranslationProgress] = useState<Record<string, string>>({});
   const [streamingTranslations, setStreamingTranslations] = useState<Record<string, string>>({});
@@ -537,7 +554,7 @@ export function EmailDetail({
     selectedRecipient: recipientOverrides[selectedReplyMessageId],
     suggestedCreatorEmail: creatorProfile?.email,
   }), [creatorProfile?.email, ownEmail, recipientOverrides, selectedReplyMessageId, thread]);
-  const replyActionsUnavailable = loading || Boolean(loadError);
+  const replyActionsUnavailable = loading || Boolean(loadError) || Boolean(thread.isPartial);
   const threadParticipants = useMemo(
     () => collectGmailThreadParticipants(thread, ownEmail, creatorProfile?.email),
     [creatorProfile?.email, ownEmail, thread],
@@ -930,6 +947,8 @@ export function EmailDetail({
       scopeKey: getGmailTranslationScopeKey(mailScope),
       messageId,
       text,
+      sourceText: thread.messages.find((message) => message.id === messageId)?.body || text,
+      priority: 'foreground',
       settings,
       onProgress,
     });
@@ -938,18 +957,12 @@ export function EmailDetail({
   const getTranslationStorageMessageId = (messageId: string) =>
     getMailTranslationStorageMessageId(getGmailTranslationScopeKey(mailScope), messageId);
 
-  const getScopedTranslation = (message: GmailMessage) => {
-    const originalText = repairTextEncoding(message.body);
-    const translation = getTranslation(getTranslationStorageMessageId(message.id));
-    if (translation?.originalText === originalText) return translation;
-    if (isTencent || !ownEmail) return undefined;
-    const legacyStorageMessageId = getMailTranslationStorageMessageId(
-      getLegacyGmailTranslationScopeKey(ownEmail),
-      message.id,
-    );
-    const legacyTranslation = getTranslation(legacyStorageMessageId);
-    return legacyTranslation?.originalText === originalText ? legacyTranslation : undefined;
-  };
+  const getScopedTranslation = (message: GmailMessage) => findUsableEmailTranslation(translations, [
+    getTranslationStorageMessageId(message.id),
+    ...(!isTencent && ownEmail ? [getMailTranslationStorageMessageId(
+      getLegacyGmailTranslationScopeKey(ownEmail), message.id,
+    )] : []),
+  ], message.body);
   getScopedTranslationRef.current = getScopedTranslation;
 
   const migrateLegacyTranslation = (message: GmailMessage) => {
@@ -964,70 +977,9 @@ export function EmailDetail({
     });
   };
 
-  const handleTranslateLegacy = async (message: GmailMessage) => {
-    if (showingTranslationIds.has(message.id)) {
-      setShowingTranslationIds((current) => {
-        const next = new Set(current);
-        next.delete(message.id);
-        return next;
-      });
-      return;
-    }
-
-    if (getScopedTranslation(message)) {
-      setShowingTranslationIds((current) => new Set(current).add(message.id));
-      return;
-    }
-
-    setTranslatingIds(prev => new Set(prev).add(message.id));
-    setTranslateErrors(prev => { const next = { ...prev }; delete next[message.id]; return next; });
-    setTranslationProgress(prev => ({ ...prev, [message.id]: '正在优先翻译当前这封邮件...' }));
-    
-    try {
-      const response = await fetch('/api/translate', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          text: message.body,
-          sourceLang: detectEmailLanguage(message.body),
-          customPrompt: settings.translatePrompt || '',
-          modelProvider: settings.modelProvider || 'builtin',
-          customApiUrl: settings.customApiUrl || '',
-          customModelName: settings.customModelName || '',
-        }),
-      });
-
-      const result = await response.json();
-
-      if (!response.ok || !result.success) {
-        throw new Error(result.error || '翻译失败');
-      }
-
-      addTranslation({
-        messageId: getTranslationStorageMessageId(message.id),
-        originalText: repairTextEncoding(message.body),
-        translatedText: result.data.translatedText,
-        sourceLang: result.data.sourceLang,
-        targetLang: 'zh',
-      });
-      setShowingTranslationIds((current) => new Set(current).add(message.id));
-    } catch (error) {
-      const msg = error instanceof Error ? error.message : '翻译失败，请稍后重试';
-      setTranslateErrors(prev => ({ ...prev, [message.id]: msg }));
-    } finally {
-      setTranslatingIds(prev => {
-        const next = new Set(prev);
-        next.delete(message.id);
-        return next;
-      });
-    }
-  };
-
-  void handleTranslateLegacy;
-
   const ensureTranslation = async (message: GmailMessage) => {
     const translationScopeKey = getGmailTranslationScopeKey(mailScope);
-    prioritizeGmailTranslationPrefetch(message.id, translationScopeKey);
+    setShowingTranslationIds((current) => new Set(current).add(message.id));
 
     if (getScopedTranslation(message)) {
       migrateLegacyTranslation(message);
@@ -1041,7 +993,7 @@ export function EmailDetail({
       publishMailTranslationPrefetchStatus({
         scopeKey: translationScopeKey,
         messageId: message.id,
-        originalText: repairTextEncoding(message.body),
+        originalText: normalizeMailTranslationText(message.body),
         status: 'ready',
       });
       return;
@@ -1059,7 +1011,7 @@ export function EmailDetail({
     }));
 
     try {
-      const originalText = repairTextEncoding(message.body);
+      const originalText = normalizeMailTranslationText(message.body);
       const { currentText, quotedText } = splitEmailForTranslation(originalText);
       if (!currentText) throw new Error('这封邮件没有可翻译的正文。');
 
@@ -1082,6 +1034,7 @@ export function EmailDetail({
           [message.id]: `${translationPrefix}${partial}`,
         }));
       });
+      if (!isTranslationCurrent(message)) return;
       const currentTranslation = hasQuotedHistory
         ? `【当前邮件翻译】\n${currentResult.translatedText}`
         : currentResult.translatedText;
@@ -1093,7 +1046,6 @@ export function EmailDetail({
         sourceLang: currentResult.sourceLang,
         targetLang: 'zh',
       });
-      setShowingTranslationIds((current) => new Set(current).add(message.id));
       publishMailTranslationPrefetchStatus({
         scopeKey: translationScopeKey,
         messageId: message.id,
@@ -1101,20 +1053,16 @@ export function EmailDetail({
         status: 'ready',
       });
     } catch (error) {
+      if (!isTranslationCurrent(message)) return;
       const errorMessage = error instanceof Error ? error.message : '翻译失败，请稍后重试';
       setTranslateErrors((current) => ({
         ...current,
         [message.id]: errorMessage,
       }));
-      setShowingTranslationIds((current) => {
-        const next = new Set(current);
-        next.delete(message.id);
-        return next;
-      });
       publishMailTranslationPrefetchStatus({
         scopeKey: translationScopeKey,
         messageId: message.id,
-        originalText: repairTextEncoding(message.body),
+        originalText: normalizeMailTranslationText(message.body),
         status: 'failed',
         error: errorMessage,
       });
@@ -1139,7 +1087,7 @@ export function EmailDetail({
   ensureTranslationRef.current = ensureTranslation;
 
   const handleTranslate = (message: GmailMessage) => {
-    if (showingTranslationIds.has(message.id)) {
+    if (showingTranslationIds.has(message.id) && getScopedTranslation(message)) {
       setShowingTranslationIds((current) => {
         const next = new Set(current);
         next.delete(message.id);
@@ -1153,14 +1101,14 @@ export function EmailDetail({
   useEffect(() => {
     if (
       !openComposerRequest?.autoShowTranslation
-      || handledAutoTranslationRequestRef.current === openComposerRequest.requestId
     ) return;
     const message = openComposerRequest.messageId
       ? thread.messages.find((item) => item.id === openComposerRequest.messageId)
       : undefined;
-    if (!message) return;
-    handledAutoTranslationRequestRef.current = openComposerRequest.requestId;
-    autoShowTranslationMessageIdRef.current = message.id;
+    if (!message?.body.trim()) return;
+    const requestKey = JSON.stringify([openComposerRequest.requestId, message.id, normalizeMailTranslationText(message.body)]);
+    if (handledAutoTranslationRequestRef.current === requestKey) return;
+    handledAutoTranslationRequestRef.current = requestKey;
     setExpandedMessages((current) => new Set(current).add(message.id));
     void ensureTranslationRef.current(message);
   }, [openComposerRequest, thread.messages]);
@@ -1170,20 +1118,15 @@ export function EmailDetail({
       getScopedTranslationRef.current(message) ? [message.id] : []
     ));
     if (!translatedMessageIds.length) return;
-    const translatedSet = new Set(translatedMessageIds);
     setTranslateErrors((current) => {
       const next = { ...current };
       translatedMessageIds.forEach((messageId) => delete next[messageId]);
       return next;
     });
-    const autoShowMessageId = autoShowTranslationMessageIdRef.current;
-    if (autoShowMessageId && translatedSet.has(autoShowMessageId)) {
-      setShowingTranslationIds((current) => new Set(current).add(autoShowMessageId));
-    }
   }, [translations, thread.messages]);
 
   const hasQuotedHistory = (message: GmailMessage) => {
-    const originalText = repairTextEncoding(message.body);
+    const originalText = normalizeMailTranslationText(message.body);
     return Boolean(splitEmailForTranslation(originalText).quotedText.trim());
   };
 
@@ -1196,7 +1139,7 @@ export function EmailDetail({
     const existingTranslation = getScopedTranslation(message);
     if (!existingTranslation || hasCompletedQuotedTranslation(existingTranslation.translatedText)) return;
 
-    const originalText = repairTextEncoding(message.body);
+    const originalText = normalizeMailTranslationText(message.body);
     const { quotedText } = splitEmailForTranslation(originalText);
     if (!quotedText.trim()) return;
 
@@ -1227,6 +1170,7 @@ export function EmailDetail({
         }));
       });
 
+      if (!isTranslationCurrent(message)) return;
       addTranslation({
         messageId: getTranslationStorageMessageId(message.id),
         originalText,
@@ -1234,7 +1178,6 @@ export function EmailDetail({
         sourceLang: existingTranslation.sourceLang || quotedResult.sourceLang,
         targetLang: 'zh',
       });
-      setShowingTranslationIds((current) => new Set(current).add(message.id));
     } catch (error) {
       setTranslateErrors((current) => ({
         ...current,
@@ -1652,7 +1595,13 @@ export function EmailDetail({
       >
         <div className="min-h-0 min-w-0 overflow-hidden">
           <ScrollArea className="h-full min-h-0">
-        {loading ? (
+        {thread.isPartial ? (
+          <div className="mx-4 mt-3"><Alert role="status" variant={loadError ? 'destructive' : 'default'}><AlertDescription>
+            {loadError ? `来信已显示，但完整会话读取失败：${loadError}。请重新打开邮件后再回复。`
+              : '已先显示这封来信；历史邮件和附件仍在读取，完成后可回复。'}
+          </AlertDescription></Alert></div>
+        ) : null}
+        {loading && !thread.isPartial ? (
           <div className="flex min-h-[320px] items-center justify-center p-6">
             <div className="w-full max-w-2xl rounded-xl border border-border/55 bg-white/82 p-6 shadow-sm">
               <div className="mb-5 flex items-center gap-2 text-sm font-medium text-primary">
@@ -1668,7 +1617,7 @@ export function EmailDetail({
               </div>
             </div>
           </div>
-        ) : loadError ? (
+        ) : loadError && !thread.isPartial ? (
           <div className="flex min-h-[320px] items-center justify-center p-6">
             <div className="max-w-lg rounded-xl border border-destructive/20 bg-destructive/5 p-5 text-center">
               <XCircle className="mx-auto mb-2 h-5 w-5 text-destructive" />
@@ -1687,6 +1636,7 @@ export function EmailDetail({
           {displayMessages.map((message, index) => {
             const sender = getDisplayEmail(message.from);
             const translation = getScopedTranslation(message);
+            const isShowingTranslation = showingTranslationIds.has(message.id) && Boolean(translation);
             const visibleTranslationText = streamingTranslations[message.id]
               || translation?.translatedText
               || (translatingIds.has(message.id) || translatingQuotedIds.has(message.id)
@@ -1755,6 +1705,7 @@ export function EmailDetail({
                         size="icon"
                         className="h-9 w-9 rounded-lg hover:bg-white/70"
                         title="转发这封邮件"
+                        disabled={replyActionsUnavailable}
                         onClick={(event) => {
                           event.stopPropagation();
                           handleForward(message);
@@ -1768,7 +1719,7 @@ export function EmailDetail({
                         size="icon"
                         className="h-9 w-9 rounded-lg hover:bg-white/70"
                         title={message.isRead ? '\u6807\u8bb0\u4e3a\u672a\u8bfb' : '\u6807\u8bb0\u4e3a\u5df2\u8bfb'}
-                        disabled={changingReadStateId !== null}
+                        disabled={replyActionsUnavailable || changingReadStateId !== null}
                         onClick={(e) => {
                           e.stopPropagation();
                           toggleMessageReadState(message);
@@ -1797,11 +1748,11 @@ export function EmailDetail({
                           handleTranslate(message);
                         }}
                         disabled={translatingIds.has(message.id)}
-                        title={showingTranslationIds.has(message.id) ? '显示原文' : '翻译成中文'}
+                        title={isShowingTranslation ? '显示原文' : '翻译成中文'}
                       >
                         {translatingIds.has(message.id) ? (
                           <Loader2 className="h-4 w-4 animate-spin" />
-                        ) : showingTranslationIds.has(message.id) ? (
+                        ) : isShowingTranslation ? (
                           <Languages className="h-4 w-4 text-primary" />
                         ) : (
                           <Globe className="h-4 w-4" />
@@ -1817,7 +1768,7 @@ export function EmailDetail({
                       <div className="flex items-center justify-between">
                         <div className="flex items-center gap-1.5">
                           <Badge variant="outline" className="text-xs">
-                            {showingTranslationIds.has(message.id) ? '中文翻译' : '原文'}
+                            {isShowingTranslation ? '中文翻译' : '原文'}
                           </Badge>
                           <Badge variant="secondary" className="bg-white/80 text-xs font-normal text-slate-600">
                             原文：{sourceLanguage}
@@ -1833,14 +1784,14 @@ export function EmailDetail({
                         {message.replyTo ? <p><span className="text-muted-foreground">Reply-To：</span>{message.replyTo}</p> : null}
                       </div>
 
-                      {translatingIds.has(message.id) && !showingTranslationIds.has(message.id) ? (
+                      {translatingIds.has(message.id) && !isShowingTranslation ? (
                         <div className="flex items-center gap-2 rounded-lg border border-blue-100 bg-blue-50/80 px-3 py-2 text-xs text-blue-700">
                           <Loader2 className="h-3.5 w-3.5 animate-spin" />
                           正在准备中文，完成后会自动显示，无需再次点击。
                         </div>
                       ) : null}
 
-                      {translateErrors[message.id] && !showingTranslationIds.has(message.id) ? (
+                      {translateErrors[message.id] && !isShowingTranslation ? (
                         <div className="flex items-center justify-between gap-3 rounded-lg border border-red-200 bg-red-50/80 px-3 py-2 text-xs text-red-700">
                           <span>中文翻译失败：{translateErrors[message.id]}</span>
                           <Button
@@ -1855,7 +1806,7 @@ export function EmailDetail({
                         </div>
                       ) : null}
 
-                      {showingTranslationIds.has(message.id) && visibleTranslationText ? (
+                      {isShowingTranslation && visibleTranslationText ? (
                         <div className="prose prose-sm max-w-none">
                           <pre className="max-w-full whitespace-pre-wrap break-words rounded-lg border border-blue-100 bg-blue-50/80 p-4 font-sans text-sm">
                             {visibleTranslationText}
@@ -1949,7 +1900,7 @@ export function EmailDetail({
                           className={isReplyTarget
                             ? 'h-8 rounded-lg border-primary/20 bg-primary/10 text-primary'
                             : 'h-8 rounded-lg bg-white/75'}
-                          disabled={isReplyTarget}
+                          disabled={replyActionsUnavailable || isReplyTarget}
                           aria-pressed={isReplyTarget}
                           onClick={(event) => {
                             event.stopPropagation();
@@ -1983,7 +1934,7 @@ export function EmailDetail({
                           ) : (
                             <>
                               <Languages className="mr-1 h-3 w-3" />
-                              {showingTranslationIds.has(message.id) ? '恢复原文' : '翻译成中文'}
+                              {isShowingTranslation ? '恢复原文' : '翻译成中文'}
                             </>
                           )}
                         </Button>
