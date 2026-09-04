@@ -86,7 +86,6 @@ import { getMailThreadRowVisualState } from '@/lib/mail-read-state';
 const GMAIL_PAGE_SIZE = 50;
 const GMAIL_DETAIL_BATCH_SIZE = 16;
 const GMAIL_AUTO_REFRESH_MS = 60_000;
-const GMAIL_CACHE_STALE_MS = 60_000;
 const GMAIL_THREAD_DETAIL_CACHE_MS = 5 * 60_000;
 const GMAIL_THREAD_PREFETCH_DELAY_MS = 180;
 const GMAIL_SEARCH_DEBOUNCE_MS = 400;
@@ -918,13 +917,17 @@ export function GmailInbox({
     }
   }, [refreshSession]);
 
-  const fetchThreads = useCallback(async () => {
+  const fetchThreads = useCallback(async (source: 'automatic' | 'manual' = 'manual') => {
     if (!auth?.accessToken) return;
     if (activePaginationKey !== paginationKey) return;
     const requestCacheKey = inboxCacheKey;
     if (!requestCacheKey) return;
     const fetchKey = requestCacheKey;
     if (activeFetchKeyRef.current === fetchKey) return;
+    // 所有自动入口共用当前账号、邮箱、视图和页码的成功缓存。
+    // 手动刷新跳过新鲜度检查，但仍保留上面的同请求防重入保护。
+    const cached = readGmailInboxCache(requestCacheKey);
+    if (source === 'automatic' && cached && isGmailInboxCacheFresh(cached)) return;
     activeFetchKeyRef.current = fetchKey;
     const fetchId = latestFetchIdRef.current + 1;
     latestFetchIdRef.current = fetchId;
@@ -1013,11 +1016,19 @@ export function GmailInbox({
       if (!isCurrentRequest()) return;
       const threadRefs = listResult.threads || [];
       if (threadRefs.length === 0) {
+        const syncedAt = new Date().toISOString();
+        writeGmailInboxCache(requestCacheKey, {
+          threads: [],
+          nextPageToken: listResult.nextPageToken || null,
+          normalUnreadCount: unreadCount ?? cached?.normalUnreadCount ?? null,
+          lastSyncedAt: syncedAt,
+          fetchedAt: Date.parse(syncedAt),
+        });
         setDisplayedInboxCacheKey(requestCacheKey);
         setNextPageToken(listResult.nextPageToken || null);
         setThreads([]);
         if (unreadCount !== null) setNormalUnreadCount(unreadCount);
-        setLastSyncedAt(new Date().toISOString());
+        setLastSyncedAt(syncedAt);
         notifyPrimaryInboxRefreshed(mailbox, category, isGlobalSearch);
         return;
       }
@@ -1052,13 +1063,24 @@ export function GmailInbox({
         if (!isCurrentRequest()) return;
         nextThreads.push(...visibleBatch);
       }
+      const sortedThreads = isGlobalSearch
+        ? [...nextThreads].sort((left, right) => getDateTimestamp(right.lastMessageDate) - getDateTimestamp(left.lastMessageDate))
+        : sortThreadsByLatest(nextThreads, mailbox);
+      const syncedAt = new Date().toISOString();
+      // 在释放请求锁前写入成功缓存，避免相邻的 focus / visibilitychange
+      // 在 React 的缓存同步 effect 执行前又启动一轮读取。
+      writeGmailInboxCache(requestCacheKey, {
+        threads: sortedThreads,
+        nextPageToken: listResult.nextPageToken || null,
+        normalUnreadCount: unreadCount ?? cached?.normalUnreadCount ?? null,
+        lastSyncedAt: syncedAt,
+        fetchedAt: Date.parse(syncedAt),
+      });
       setDisplayedInboxCacheKey(requestCacheKey);
       setNextPageToken(listResult.nextPageToken || null);
-      setThreads(isGlobalSearch
-        ? [...nextThreads].sort((left, right) => getDateTimestamp(right.lastMessageDate) - getDateTimestamp(left.lastMessageDate))
-        : sortThreadsByLatest(nextThreads, mailbox));
+      setThreads(sortedThreads);
       if (unreadCount !== null) setNormalUnreadCount(unreadCount);
-      setLastSyncedAt(new Date().toISOString());
+      setLastSyncedAt(syncedAt);
       notifyPrimaryInboxRefreshed(mailbox, category, isGlobalSearch);
     } catch (caughtError) {
       if (isCurrentRequest()) {
@@ -1088,8 +1110,7 @@ export function GmailInbox({
 
   useEffect(() => {
     if (!auth?.isConnected || !auth.accessToken) return;
-    const cached = inboxCacheKey ? readGmailInboxCache(inboxCacheKey) : null;
-    if (!cached || !isGmailInboxCacheFresh(cached)) void fetchThreads();
+    void fetchThreads('automatic');
   }, [auth?.isConnected, auth?.accessToken, fetchThreads, inboxCacheKey, refreshKey]);
 
   useEffect(() => {
@@ -1104,31 +1125,28 @@ export function GmailInbox({
       || openingThreadId
     ) return;
 
-    const lastSyncTimestamp = Date.parse(lastSyncedAt || '');
-    const cacheIsFresh = Number.isFinite(lastSyncTimestamp)
-      && Date.now() - lastSyncTimestamp < GMAIL_CACHE_STALE_MS;
-    if (!cacheIsFresh) void fetchThreads();
+    void fetchThreads('automatic');
   }, [
     actionThreadId,
     active,
     auth?.accessToken,
     auth?.isConnected,
     fetchThreads,
-    lastSyncedAt,
     loading,
     openingThreadId,
   ]);
 
   useEffect(() => {
     if (!active || !auth?.isConnected || !auth.accessToken) return undefined;
+    // 成功时间变化后重新计时，避免下一次 tick 早于缓存过期而多等一轮。
     const timer = window.setInterval(() => {
       if (document.visibilityState === 'visible' && !loading && !actionThreadId && !openingThreadId) {
-        void fetchThreads();
+        void fetchThreads('automatic');
       }
     }, GMAIL_AUTO_REFRESH_MS);
 
     return () => window.clearInterval(timer);
-  }, [active, actionThreadId, auth?.accessToken, auth?.isConnected, fetchThreads, loading, openingThreadId]);
+  }, [active, actionThreadId, auth?.accessToken, auth?.isConnected, fetchThreads, lastSyncedAt, loading, openingThreadId]);
 
   useEffect(() => {
     const runId = avatarPrefetchRunRef.current + 1;
@@ -1279,7 +1297,7 @@ export function GmailInbox({
 
     const refreshWhenActive = () => {
       if (document.visibilityState === 'visible' && !loading && !actionThreadId && !openingThreadId) {
-        void fetchThreads();
+        void fetchThreads('automatic');
       }
     };
 
@@ -1864,7 +1882,7 @@ export function GmailInbox({
             size="icon"
             className="h-9 w-9 rounded-lg hover:bg-white/70"
             title={'\u5237\u65b0'}
-            onClick={fetchThreads}
+            onClick={() => void fetchThreads()}
             disabled={loading || searchInputPending}
           >
             <RefreshCw className={`h-4 w-4 ${loading ? 'animate-spin' : ''}`} />
@@ -1945,7 +1963,7 @@ export function GmailInbox({
           <div className="p-6 text-center">
             <AlertCircle className="mx-auto mb-2 h-8 w-8 text-destructive" />
             <p className="text-sm text-destructive">{visibleError}</p>
-            <Button variant="outline" size="sm" className="mt-3" onClick={fetchThreads}>
+            <Button variant="outline" size="sm" className="mt-3" onClick={() => void fetchThreads()}>
               {'\u91cd\u8bd5'}
             </Button>
           </div>
