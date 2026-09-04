@@ -9,6 +9,16 @@ export const APP_RELEASE_LAST_SEEN_STORAGE_KEY = 'influencer-board-last-seen-rel
 
 export const APP_RELEASES: readonly AppRelease[] = [
   {
+    version: '1.2.6',
+    releasedAt: '2026-09-04',
+    title: '邮件回复体验优化',
+    highlights: [
+      '输入更稳定：修复邮件 AI 回复区域随输入横向移动的问题，长文字自动换行。',
+      '鼠标指针更准确：修正邮件正文和空白区域误显示手形的问题，阅读、选字和点击更直观。',
+      '回复语言更完整：AI 辅助回复与 AI 模板起草统一支持 39 种语言，新增日语，支持识别日语来信并选择日语回复。',
+    ],
+  },
+  {
     version: '1.2.5',
     releasedAt: '2026-09-02',
     title: '来信中文预翻译优化',

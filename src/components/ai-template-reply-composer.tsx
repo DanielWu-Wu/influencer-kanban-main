@@ -47,6 +47,7 @@ import {
   textToEmailHtml,
 } from '@/lib/email-content';
 import { detectReplyLanguage } from '@/lib/email-language';
+import { EMAIL_REPLY_LANGUAGE_OPTIONS as LANGUAGE_OPTIONS } from '@/lib/email-reply-languages';
 import {
   buildMailAIThreadContextIdentity,
   scopeGmailAIMessagesToReplyTarget,
@@ -97,13 +98,6 @@ type GmailTemplateReplyTaskResult = {
   suggestion: TemplateSuggestion;
   targetLang: string;
 };
-
-const LANGUAGE_OPTIONS = [
-  ['en', '英语'], ['es', '西班牙语'], ['nl', '荷兰语'], ['de', '德语'],
-  ['fr', '法语'], ['pt', '葡萄牙语'], ['pl', '波兰语'], ['it', '意大利语'],
-  ['sv', '瑞典语'], ['da', '丹麦语'], ['no', '挪威语'], ['fi', '芬兰语'],
-  ['cs', '捷克语'], ['ro', '罗马尼亚语'], ['uk', '乌克兰语'], ['ru', '俄语'],
-] as const;
 
 function buildThreadMessages(
   thread: GmailThread,
@@ -510,9 +504,12 @@ export function AITemplateReplyComposer({
     if (!selectedTemplate || !userIdeas.trim() || settingsLoading) return;
     updateCurrentDraftSavedStatus(false);
     localDraftDirtyRef.current = false;
-    const generationDetectedLanguage = targetLangLockedRef.current ? '' : detectedReplyLanguage;
+    const generationDetectedLanguage = !targetLangLockedRef.current
+      && LANGUAGE_OPTIONS.some(([code]) => code === detectedReplyLanguage)
+      ? detectedReplyLanguage
+      : '';
     const generationTargetLang = generationDetectedLanguage || targetLang;
-    if (externalMessage?.body?.trim() && !generationDetectedLanguage && targetLangNeedsConfirmation && !targetLangLockedRef.current) {
+    if (externalMessage?.body?.trim() && !generationDetectedLanguage && !targetLangLockedRef.current) {
       setError('暂时无法确认来信语言，请先在“回复语言”中手动选择后再生成。');
       return;
     }

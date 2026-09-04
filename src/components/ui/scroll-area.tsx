@@ -21,8 +21,14 @@ function ScrollArea({
     >
       <ScrollAreaPrimitive.Viewport
         data-slot="scroll-area-viewport"
-        className="focus-visible:ring-ring/50 size-full min-h-0 rounded-[inherit] transition-[color,box-shadow] outline-none focus-visible:ring-[3px] focus-visible:outline-1"
-        style={disableHorizontalScroll ? { overflowX: "clip" } : undefined}
+        className={cn(
+          "focus-visible:ring-ring/50 size-full min-h-0 rounded-[inherit] transition-[color,box-shadow] outline-none focus-visible:ring-[3px] focus-visible:outline-1",
+          // Radix measures content in a display:table wrapper. For vertical-only
+          // forms, constrain that wrapper itself so long content cannot widen
+          // inputs and make caret movement scroll the whole viewport sideways.
+          disableHorizontalScroll && "[&>div]:!block [&>div]:w-full [&>div]:!min-w-0 [&>div]:max-w-full"
+        )}
+        style={disableHorizontalScroll ? { overflowX: "hidden" } : undefined}
       >
         {children}
       </ScrollAreaPrimitive.Viewport>

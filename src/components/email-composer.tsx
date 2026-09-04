@@ -35,6 +35,7 @@ import {
   toBase64Url,
 } from '@/lib/email-content';
 import { detectReplyLanguage } from '@/lib/email-language';
+import { EMAIL_REPLY_LANGUAGE_OPTIONS as LANGUAGE_OPTIONS } from '@/lib/email-reply-languages';
 import {
   buildGmailAIAnalysisCacheKey,
   buildGmailAIThreadMessages,
@@ -133,47 +134,6 @@ type GmailAIReplyTaskResult = {
   targetLangName: string;
   usedAnalysis: boolean;
 };
-
-const LANGUAGE_OPTIONS = [
-  ['en', '英语'],
-  ['es', '西班牙语'],
-  ['nl', '荷兰语'],
-  ['de', '德语'],
-  ['fr', '法语'],
-  ['pt', '葡萄牙语'],
-  ['pl', '波兰语'],
-  ['it', '意大利语'],
-  ['sv', '瑞典语'],
-  ['da', '丹麦语'],
-  ['no', '挪威语'],
-  ['fi', '芬兰语'],
-  ['is', '冰岛语'],
-  ['cs', '捷克语'],
-  ['sk', '斯洛伐克语'],
-  ['hu', '匈牙利语'],
-  ['ro', '罗马尼亚语'],
-  ['bg', '保加利亚语'],
-  ['el', '希腊语'],
-  ['hr', '克罗地亚语'],
-  ['sl', '斯洛文尼亚语'],
-  ['sr', '塞尔维亚语'],
-  ['bs', '波斯尼亚语'],
-  ['mk', '马其顿语'],
-  ['sq', '阿尔巴尼亚语'],
-  ['et', '爱沙尼亚语'],
-  ['lv', '拉脱维亚语'],
-  ['lt', '立陶宛语'],
-  ['uk', '乌克兰语'],
-  ['ru', '俄语'],
-  ['be', '白俄罗斯语'],
-  ['ga', '爱尔兰语'],
-  ['cy', '威尔士语'],
-  ['mt', '马耳他语'],
-  ['ca', '加泰罗尼亚语'],
-  ['eu', '巴斯克语'],
-  ['gl', '加利西亚语'],
-  ['lb', '卢森堡语'],
-] as const;
 
 const REPLY_TONE_OPTIONS: ReadonlyArray<{
   value: ReplyTone;
@@ -739,6 +699,7 @@ export function EmailComposer({
       return;
     }
     const detectedLanguageAtGeneration = !targetLangLockedRef.current
+      && LANGUAGE_OPTIONS.some(([code]) => code === detectedReplyLanguage)
       ? detectedReplyLanguage
       : '';
     if (!targetLangLockedRef.current && latestExternalMessage?.body?.trim() && !detectedLanguageAtGeneration) {
@@ -1664,7 +1625,7 @@ export function EmailComposer({
   );
 
   const aiBody = (
-    <div className="flex w-full min-w-0 max-w-full flex-col gap-3 overflow-x-clip px-4 py-4 @2xl/email-composer:px-5">
+    <div className="flex w-full min-w-0 max-w-full flex-col gap-3 overflow-x-clip px-4 py-4 [overflow-wrap:anywhere] @2xl/email-composer:px-5">
       {analysisError && (
         <ErrorMessage message={analysisError}>
           <Button variant="outline" size="sm" onClick={() => void analyzeThread(true)}>重新分析</Button>
@@ -1691,6 +1652,7 @@ export function EmailComposer({
           </div>
           <Textarea
             id="ai-reply-strategy"
+            wrap="soft"
             value={userIdeas}
             onChange={(event) => {
               localDraftDirtyRef.current = true;
@@ -1736,10 +1698,10 @@ export function EmailComposer({
           <section className="overflow-hidden rounded-lg border border-gray-200 bg-white">
             <div className="border-b border-gray-100 px-4 py-3">
               <div className="flex items-start justify-between gap-3">
-                <div className="flex flex-wrap items-center gap-2">
+                <div className="flex min-w-0 flex-1 flex-wrap items-center gap-2">
                   <h3 className="text-sm font-semibold text-gray-900">核心分析</h3>
                   {analysis.stage && (
-                    <Badge variant="secondary" className="bg-gray-100 font-normal text-gray-700">
+                    <Badge variant="secondary" className="max-w-full whitespace-normal bg-gray-100 font-normal text-gray-700">
                       {analysis.stage}
                     </Badge>
                   )}
@@ -1993,6 +1955,7 @@ export function EmailComposer({
                     <Badge variant="outline" className="border-amber-200 bg-amber-50 font-normal text-amber-700">最终人工确认</Badge>
                   </div>
                   <Textarea
+                    wrap="soft"
                     value={editedChineseReply}
                     onChange={(event) => {
                       localDraftDirtyRef.current = true;
@@ -2308,7 +2271,7 @@ function AnalysisList({
           {items.map((item, index) => (
             <li key={`${title}-${index}`} className={`flex gap-2 text-sm leading-5 ${warning ? 'text-amber-950' : 'text-gray-700'}`}>
               <span className={`mt-2 size-1.5 shrink-0 rounded-full ${warning ? 'bg-amber-500' : 'bg-primary/70'}`} />
-              <span>{item}</span>
+              <span className="min-w-0 flex-1">{item}</span>
             </li>
           ))}
         </ul>

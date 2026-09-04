@@ -4,11 +4,11 @@
 >
 > 更新时间：2026-09-02。
 >
-> 当前已提交基线：`main` / `c8934e4229679b82af5788b5739bf2bdf102976b`，提交说明为 `1.2.5「来信中文预翻译优化」`。本地 `origin/main` 与 HEAD 一致；本轮通过 GitHub 接口直接核实远端 main 也为该提交。
-> 源码版本为 `1.2.5`；GitHub 上该提交的 Vercel 状态为 success，但正式域名当前发布指向和登录后真实流程仍未独立验收。
-> 本地 `http://localhost:5000/` 返回 200，运行中的旧构建版本提示仍为 1.2.4；不能以源码版本推断运行页面已更新。本轮不重启服务、不重新覆盖构建。
-> 本轮类型检查、274 项逻辑测试通过；ESLint 0 error、7 个既有 warning。上一轮生产构建及 15 项隔离模拟浏览器流程通过，详见第 4 节。
-> 用户已说明此前功能做过真实验收；本轮新增预翻译修复的真实邮箱验收需单独确认，不把模拟验收当作线上验收。
+> 当前已提交基线：`main` / `5151fcb3117b09152b076e22a76577d1b3381717`，提交说明为 `更新优化小bug`，已包含双邮箱邮件正文隔离与编辑区防护。本地 `origin/main` 与 HEAD 一致；本轮通过 GitHub 接口直接核实远端 main 也为该提交。该提交在本轮收尾前已存在，不是本轮代理提交。
+> 源码版本仍为 `1.2.5`；GitHub 上该提交的 Vercel 状态为 success。正式域名公开页返回 200，但其发布指向和登录后真实流程仍未独立验收。
+> 本轮 localhost 与 127.0.0.1 的 5000、5001 端口均连接拒绝；仓库现有 .next 仍是旧构建，不能直接启动它并当作当前修复验收。本轮不启停服务、不覆盖构建。
+> 最近一次实现验证：类型检查、280 项逻辑测试通过；ESLint 0 error、7 个既有 warning；最终隔离生产构建通过，41 个生成项。双邮箱模拟布局及组件浏览器验证详见第 4 节。
+> 用户已说明此前功能做过真实验收；此次正文隔离的真实 Gmail/腾讯邮件、真实中文输入法和跨浏览器验收仍待完成，不把模拟验收当作线上验收。
 > 本次洁癖只同步 README 和本文件，不提交、推送、部署、改业务代码或清理现场。
 >
 > 根目录 `HANDOFF.md`、`PROJECT_HANDOFF.md`、`TODO.md` 与 `docs/AI_HANDOFF.md` 仅为历史入口，不代表当前状态。
@@ -43,6 +43,7 @@
 - 飞书成员应用授权：`src/components/feishu-settings.tsx`、`src/lib/feishu-app-credentials.ts`、`src/lib/server-secret-envelope.ts`
 - 设置：`src/components/settings-panel.tsx`、`gmail-signature-settings.tsx`
 - AI 邮件回复与模板：`src/components/email-detail.tsx`、`email-composer.tsx`、`ai-template-reply-composer.tsx`、`ai-reply-template-manager.tsx`
+- 邮件正文隔离与编辑防护：`src/components/isolated-email-body.tsx`、`rich-email-editor.tsx`、`src/lib/isolated-email-document.ts`、`email-editor-html.ts`、`email-remote-content.ts`
 - 账号与权限：`src/components/auth-provider.tsx`、`admin-accounts-panel.tsx`、`src/app/api/account/**`、`src/app/api/admin/accounts/route.ts`
 
 ### 账号管理与完全隔离
@@ -124,6 +125,16 @@
   发货日期在交给 AI 前统一转换为上海业务时区的 `YYYY-MM-DD`，不允许模型自行换算时间戳、时区或从物流编号推断日期。
   Gmail 选择回复锚点时排除表情回应和已有 `DRAFT`；腾讯使用严格标准关系头。当前页面内重复保存会更新原邮箱草稿；原草稿已被人工删除时，下一次用户确认保存才重新创建。
 
+### 邮件正文隔离与编辑区防护
+
+- Gmail 与腾讯通过同一 `EmailDetail` 接入 `IsolatedEmailBody`；清理后的 HTML 放入独立 `iframe srcDoc`，不再直接插入工作台 DOM。邮件的全局样式、字体、媒体查询只影响自己的正文；中文和纯文本继续安全文本显示，不修改翻译缓存或队列。
+- 沙箱仅开放 `allow-same-origin allow-popups allow-popups-to-escape-sandbox`，禁止增加 `allow-scripts`。独立 CSP 禁止脚本、表单提交、连接、嵌套页面和对象；安全外链在新标签打开并带 `noopener noreferrer`，附件沿用原入口。
+- 阅读区宽度受分栏限制，图片等比缩放，宽表格内部横向滚动。正文高度为 120–6000 CSS 像素，极长内容内部纵向滚动；图片、正文和栏宽变化通过每帧合并测量更新，尺寸未变化不更新。
+- 邮件身份、正文或远程放行状态变化时创建独立正文实例，普通重渲染保持文档和选择；卸载清理监听，初始化失败只回退安全纯文本并提示，不回退到裸 HTML。
+- 已发送邮件默认远程资源阻止继续有效，内嵌图片可用，人工放行仅作用于当前邮件。已设置无来源信息策略并验证普通图片和外链；但本机 Edge 对允许远程资源的 CSS 背景请求仍可能发送父页面来源，不承诺所有 CSS 请求都无 Referer。默认已发送邮件阻止测试通过，此限制不应被写成全面零追踪。
+- 共享编辑器统一清理初始外部 HTML、粘贴和拖入 HTML：移除全局样式、危险标签/事件、越界定位和层级，保留安全文字、链接、图片、表格及行内格式；保留 `data-mail-inline-id` 和签名标记，避免损坏旧草稿内嵌附件。
+- 编辑内容区限制尺寸和绘制范围，工具栏在边界外。清理复杂格式时显示“为保护工作台布局，已简化部分邮件格式”；仅打开已有草稿不触发更新回调或保存，实际输入继续沿用原回调。撤销/重做与模拟输入法事件已测，真实系统中文输入法仍待人工复核。
+
 ### 双邮箱与腾讯企业邮箱
 
 - 已建立 Gmail / 腾讯企业邮箱通用账号模型，邮箱切换入口位于邮件页左侧栏；腾讯凭证只在服务端加密保存，API 每次按当前系统用户校验 `mailAccountId` 归属。
@@ -203,34 +214,45 @@
 
 | 事实面 | 状态 | 证据与限制 |
 | --- | --- | --- |
-| 代码 | verified-current | 2026-09-02：HEAD、本地 origin/main 与 GitHub 直接读取的 main 同为 `c8934e4229679b82af5788b5739bf2bdf102976b`；提交已包含预翻译修复、测试与 1.2.5 文案 |
-| TypeScript | verified-current | 本轮 `tsc -p tsconfig.json --noEmit` 通过 |
-| 逻辑测试 | verified-current | 本轮完整 `tests/run-tests.ts` 274/274 通过；版本提示 5 项包含其中 |
-| ESLint | verified-current | 本轮 src/tests 0 error，7 个既有 warning：email-detail 的 1 个 img 提示，reminder-panel 的 6 个未使用图标；没有降低规则 |
-| 生产构建 | pending | 上一轮修复验证记录：构建通过，41 个页面/路由；该构建早于 1.2.5 版本提示写入。本轮不覆盖正在使用的 .next，未重新构建当前完整 HEAD |
-| 本地运行态 | verified-current | 本轮 localhost:5000 返回 200；现有 .next BUILD_ID 为 `iUYYNCQTJkBCWsMbDLI2A`，构建内版本提示仍为 1.2.4。只确认可达与旧构建版本，不冒充 1.2.5 页面验收 |
-| 隔离浏览器测试 | verified-current | 上一轮本地生产构建的模拟流程 15/15，通过双邮箱待办/普通邮箱入口、待办完成后重开、正文变化、失败重试、中文/原文切换、账号切换、预览阶段禁止回复等；外部请求被模拟，无真实草稿/发信/飞书写回 |
-| 真实业务验收 | pending | 用户已确认此前功能做过真实验收。本轮 1.2.5 的真实 Gmail/腾讯来信、用户自配 AI 延迟和正式域名登录态流程仍需单独确认 |
-| GitHub / Vercel | pending | 直接远端已核实 c8934e4，GitHub Vercel check 为 success，部署链接见下；正式域名发布指向及登录态未核实，不能标为线上验收通过 |
+| 代码 | verified-current | 2026-09-02：HEAD、本地 origin/main 与 GitHub 直接读取的 main 同为 `5151fcb3117b09152b076e22a76577d1b3381717`；含正文隔离、编辑防护及测试，用户界面版本仍为 1.2.5 |
+| TypeScript | verified-current | 最近一次实现验证的 `tsc -p tsconfig.json --noEmit` 通过；本次收尾仅改文档 |
+| 逻辑测试 | verified-current | 最近一次完整 `tests/run-tests.ts` 280/280 通过，含新增隔离文档 6 项测试 |
+| ESLint | verified-current | 最近一次 src/tests 0 error，7 个既有 warning：email-detail 的 1 个 img 提示，reminder-panel 的 6 个未使用图标；没有降低规则 |
+| 生产构建 | verified-current | `mail-isolation-final-build` 隔离快照 webpack 生产构建通过，41 个生成项；6 个核心修改源码的 SHA256 与当前提交文件一致。未覆盖仓库旧 .next，本次文档收尾没有重新构建 |
+| 本地运行态 | verified-current | 本轮 localhost 和 127.0.0.1 的 5000、5001 均连接拒绝；现有 .next BUILD_ID 仍为 `iUYYNCQTJkBCWsMbDLI2A`，旧构建版本提示为 1.2.4。本轮未停止或重启服务 |
+| 隔离浏览器测试 | verified-current | 双邮箱完整应用模拟在第一份隔离构建上通过；最终源码另通过 17 类组件浏览器用例及内嵌附件标记保留断言。最终完整应用构建未重新跑整套浏览器流程；详细尺寸与限制见下，不把组件验证冒充全应用最终快照验收 |
+| 真实业务验收 | pending | 用户已确认此前功能做过真实验收；新增正文隔离的真实邮件、真实系统中文输入法、其他浏览器及移动端仍待人工复核。预翻译在正式域名的真实体验也需用户确认 |
+| GitHub / Vercel | pending | 直接远端已核实 5151fcb，GitHub Vercel check 为 success，更新时间 2026-09-02T10:33:46Z；正式域名公开页返回 200，但发布指向及登录态未核实，不能标为线上验收通过 |
 | 文档 | changed-and-verified | 本轮 README 与本文件同步当前机制、版本及证据边界；修改尚未提交 |
 | 规则 | verified-current | 已完整读取全局和项目 AGENTS；未发现所修改文档路径下的覆盖规则，无需改写规则。历史入口均已明确停用并指向本文件 |
 | 记忆 | out-of-scope | 无独立获准的记忆写入入口；宿主生成记忆只读，没有手改生成文件 |
 | 工作区 / 清场 | pending | 安全路径内业务代码与测试无未提交差异；本轮仅新增两份文档差异。受保护现场未进入核验，复核证据与运行残留全部保留，不宣称整个仓库干净 |
 
 Vercel 检查链接：
-https://vercel.com/daniel-wu-s-projects/influencer-kanban-main/ZCxcFbbWTcRAYHm279deNBE8wDQG
+https://vercel.com/daniel-wu-s-projects/influencer-kanban-main/As2YtEUxLxrsXcsXX4TnzXTsPjKG
 
-正式域名为 `https://kolworkflow.vercel.app/`。本轮 PowerShell 访问发生 SSL 连接错误，另一路网页读取也未成功；这是核验限制，不是网站故障结论。没有因此更改证书、网络或部署配置。
+正式域名为 `https://kolworkflow.vercel.app/`。本轮 PowerShell 访问发生 SSL 连接错误，改用 bundled Node 只读访问返回 200，标题为“红人推广看板 | 跨境电商工作台”；只确认公开页可达。没有更改证书、网络或部署配置。
 
-上一轮本机隔离测试证据保留在：
+本机隔离测试证据保留在：
 `C:/Users/Admin/.codex/visualizations/2026/08/30/01a051d6-8669-7db2-b32a-fe23dcc1d5d8/`
 
-- `mail-translation-verification.md`：上一轮交付时的历史验证记录；其中 b2cf601、未提交等 Git 描述是当时快照，当前状态以本文件为准。
-- `mail-translation-qa.cjs`、`mail-qa-report.json`：隔离浏览器脚本和 15 项断言结果。
-- `mail-qa-todos.png`、`mail-qa-gmail.png`、`mail-qa-tencent.png`：模拟页面截图。
-- 浏览器模拟报告无页面异常；4 条 503 为主动注入的失败测试。开发模式曾有 AI 助手悬浮按钮 hydration 警告，本轮不改无关组件，也未将其宣布修复。
+- `mail-isolation-qa.cjs`：双邮箱完整应用模拟；固定 1880×932 窗口，Gmail/腾讯各 8 行，原文→中文→原文时，修复前行高为 77→81→77px，修复后为 81→81→81px；栏宽 459px 稳定，导航和按钮测量位移 0px，切换新增翻译请求 0。没有通过修改列表行高掩盖问题。
+- `mail-layout-{gmail,tencent}-{original,chinese}.png` 为修复前截图；`mail-isolation-{gmail,tencent}-{original,chinese,stress,editor}.png` 为修复后截图。完整应用模拟还覆盖展开/折叠、拖动分栏后切换、超宽表格、极长正文及转发/危险 HTML 粘贴；页面和控制台异常、真实外部写入均为 0。
+- `mail-isolation-harness-qa.cjs`、`mail-isolation-harness.tsx` 和 `mail-isolation-editor-harness.png`：最终组件源码验证，覆盖旧草稿仅打开不写回、清理幂等、撤销重做、模拟输入法、HTML 拖入、图片样式与尺寸、文档稳定与选择、已发送远程阻止/放行、内嵌图片、图片/链接无 Referer、账号切换、脚本/表单阻止、无 opener 外链和纯文本兜底。8 条安全控制台消息是主动注入脚本/表单的预期拦截；CSS 背景 Referer 限制见第 2 节。
+- `mail-isolation-build/` 是完整应用浏览器测试使用的较早快照；`mail-isolation-final-build/` 是最终生产构建快照。两者不是仓库的当前运行服务；脚本 `mail-isolation-build-run.cjs` 不复制或打印密钥。
+- `mail-translation-verification.md`、`mail-translation-qa.cjs`、`mail-qa-report.json` 和 `mail-qa-{todos,gmail,tencent}.png` 保留此前预翻译 15 项模拟流程证据。其中 b2cf601、未提交等 Git 描述是历史快照，当前状态以本文件为准；4 条 503 为主动注入失败测试。
+- 开发模式曾有 AI 助手悬浮按钮 hydration 警告，本次不改无关组件，也未将其宣布修复。所有自动验收使用模拟数据，没有创建真实草稿、发送邮件或写飞书。
 
 ## 5. 下一轮验收与诊断入口
+
+### 邮件正文隔离优先复核
+
+1. 确认运行的是包含 5151fcb 的构建，再分别在 Gmail/腾讯打开普通邮件、营销邮件、超宽表格和长正文。
+2. 固定窗口和分栏，原文→中文→原文、展开/折叠、切换线程及打开回复助手，检查列表行高、栏宽、导航和工具栏位移不超过 1 CSS 像素；再拖动分栏复测。邮件正文可以滚动，不能影响工作台其他区域。
+3. 在用户授权的转发/旧草稿编辑界面测试危险格式粘贴、真实中文输入法、撤销/重做及工具栏；仅打开不能保存。不要为了验证创建真实测试草稿或发送邮件。
+4. 检查已发送远程资源默认阻止、内嵌图正常、外链新标签以及账号切换；若出问题，先查共享隔离正文、HTML 清理和编辑器，不调整邮件列表尺寸掩盖根因。
+
+### 预翻译与业务回归
 
 1. 先核对实际运行的是哪个构建。源码版本、构建版本、远端提交、Vercel 检查和正式域名各自验证；需要重启本地服务、构建或部署时按用户当次授权执行。
 2. Gmail/腾讯各准备一封近 72 小时、已匹配红人且尚未回复的来信。停留在普通邮箱等其他页面，确认自动发现，无需先打开每日待办；也可人工“刷新来信”立即检查。
@@ -244,7 +266,7 @@ https://vercel.com/daniel-wu-s-projects/influencer-kanban-main/ZCxcFbbWTcRAYHm27
 ## 6. 工作区与只读清场预览
 
 - 收尾前安全路径（src、tests、docs、README、AGENTS、public、assets、package/lock）无未提交差异；本轮只改 README 和 docs/HANDOFF.md。
-- 最近 5 个提交：`c8934e4` 1.2.5、`b2cf601` 小细节优化、`203aa1f` 修复了翻译邮件的Bug、`0200672` 1.2.4、`09224be` 1.2.3。
+- 最近 5 个提交：`5151fcb` 更新优化小bug、`c8934e4` 1.2.5、`b2cf601` 小细节优化、`203aa1f` 修复了翻译邮件的Bug、`0200672` 1.2.4。
 - 禁止触碰、恢复、删除、修改权限或清理：
   - `C:/Users/Admin/Documents/Codex/influencer-kanban-main/.codex-tmp/workflow-share-deck/slides-test-temp`
   - `C:/Users/Admin/.codex/worktrees/347c/influencer-kanban-main`
@@ -252,7 +274,7 @@ https://vercel.com/daniel-wu-s-projects/influencer-kanban-main/ZCxcFbbWTcRAYHm27
 - 宽范围 Git status 即使排除 .codex-tmp，仍曾提示其中两个目录 Permission denied。此后改用明确安全路径；未读取其中内容，无法区分真实删除与权限不可见，不能尝试修复或宣称已清理。
 - 历史提交 `bbb9584` 的 PPT 产物及旧文档删除保持原状，不重写历史。两个外部 worktree 仍视为可能含唯一修改，本轮不进入、不审内容、不清场。
 - 根目录开发服务日志、pnpm 压缩包、package/pnpm-js/pnpm-win 解包目录是历史运行残留候选，未逐个证明可安全删除；node_modules、.next 和环境文件不是本次清理对象。
-- 上一轮隔离浏览器脚本、报告、截图是本次修复证据，应优先保留。
+- 隔离浏览器脚本、报告、截图和两份隔离构建是修复证据，全部保留。隔离构建的 node_modules 为指向仓库依赖的目录联接，不得递归跟随联接清理，以免误删共享依赖。
 - 没有删除任何文件、停止任何服务、修改权限或编辑项目外证据。复核现场仍保留，只有用户看完报告后另行明确授权，才能讨论清场；受保护路径不因一般清场授权而解禁。
 
 ## 7. 常用验证命令
@@ -268,7 +290,7 @@ https://vercel.com/daniel-wu-s-projects/influencer-kanban-main/ZCxcFbbWTcRAYHm27
 
 测试启动中的 `process.geteuid` 替代仅限该 Node 测试进程，用于绕过本机 tsx 的 `uv_os_get_passwd ENOMEM`；不改系统权限、项目代码或依赖。普通环境可直接运行 `node --import tsx tests/run-tests.ts`。
 
-生产构建使用 bundled Node 执行 `node_modules/next/dist/bin/next build`；它会写入 .next，不要在服务使用该目录时未经确认覆盖。本轮文档收尾没有重新构建。
+生产构建使用 bundled Node 执行 `node_modules/next/dist/bin/next build --webpack`；它会写入 .next，不要在服务使用该目录时未经确认覆盖。上一轮使用项目外隔离快照验证，最终目录见第 4 节；本轮文档收尾没有重新构建或启停服务。
 
 ## 8. 后续需求（未作为本轮实现承诺）
 
@@ -287,13 +309,15 @@ C:\Users\Admin\Documents\Codex\influencer-kanban-main
 我是没有编程经验的用户，请全程用简单、清晰的中文沟通。
 先完整阅读根目录 AGENTS.md 和 docs/HANDOFF.md，再只读核对当前分支、HEAD、origin/main、最近 5 个提交、安全路径下未提交改动及新需求相关完整 diff。
 
-交接快照：2026-09-02，main / c8934e4229679b82af5788b5739bf2bdf102976b，源码版本 1.2.5「来信中文预翻译优化」。GitHub main 已直接核实一致，Vercel check success 不代表正式域名已验收。本地 5000 当时可访问，但运行的旧构建版本提示仍为 1.2.4。
+交接快照：2026-09-02，main / 5151fcb3117b09152b076e22a76577d1b3381717，源码版本仍为 1.2.5「来信中文预翻译优化」。GitHub main 已直接核实一致，Vercel check success、正式域名公开页 200，不代表发布指向或登录后功能已验收。本地 5000/5001 均连接拒绝，仓库 .next 仍是旧构建，不能直接启动后当作当前版本验收。
 README 和 docs/HANDOFF.md 有本次收尾产生的未提交文档修改，必须保留。后续实际状态可能变化，请重新核对。
 
-重点理解：来信识别挂在全局主壳，不必进入每日待办；可见网页内按 5 分钟周期检查，不是网页关闭后的即时推送。每日待办打开默认中文，普通邮箱打开默认原文、点击翻译复用缓存；当前来信预览与完整历史/附件加载是两件事。完整会话加载前不能回复或转发。
+最新修复：Gmail/腾讯共用 iframe 邮件正文隔离；共享编辑器在旧草稿、转发、粘贴/拖入 HTML 前清理危险格式。保留正文外观，不能让邮件样式影响工作台；沙箱绝不开放脚本，仅打开草稿不写回。
+验证：TypeScript、280/280 逻辑测试、ESLint 0 error/7 既有 warning、最终隔离生产构建 41 个生成项通过；双邮箱模拟布局及最终组件测试有截图和脚本。完整应用模拟使用较早隔离快照，真实邮件、真实中文输入法和跨浏览器仍待验收；远程 CSS 背景 Referer 限制详见交接文档，不要宣称全面零追踪。
+预翻译机制保持不变：全局主壳可见时按 5 分钟周期识别，不需进入每日待办；待办打开默认中文，普通邮箱打开默认原文、点击翻译命中缓存。来信预览与历史/附件加载分开，完整会话加载前不能回复或转发。
 
 不自动创建真实测试草稿、不发送邮件、不写飞书；保留用户明确确认。保持 Gmail/腾讯、系统账号、邮箱账号、项目会话和任务缓存隔离，服务端核验 mailAccountId 归属。项目邮箱绑定优先于红人绑定，项目会话不能覆盖红人全局绑定。
-不安装依赖，不擅自改数据库、RLS、权限、密钥、环境变量或部署配置。不提交、不推送、不部署、不清理，也不覆盖未提交差异。
+不安装依赖，不擅自改数据库、RLS、权限、密钥、环境变量或部署配置。未经我的明确授权，不提交、不推送、不部署、不清理、不启停服务，也不覆盖未提交差异。测试证据和隔离构建继续保留。
 
 禁止触碰：
 C:\Users\Admin\Documents\Codex\influencer-kanban-main\.codex-tmp\workflow-share-deck\slides-test-temp

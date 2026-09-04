@@ -1661,19 +1661,21 @@ export function EmailDetail({
 
             return (
               <div key={message.id} className="space-y-3">
-                {/* 邮件头 */}
+                {/* 邮件卡片：正文使用浏览器原生光标，只有邮件头负责展开/收起。 */}
                 <div
                   className={`
-                    cursor-pointer rounded-xl border p-4 shadow-[var(--glass-shadow-soft)] transition-[background-color,border-color,box-shadow] duration-200
+                    cursor-auto rounded-xl border p-4 shadow-[var(--glass-shadow-soft)] transition-[background-color,border-color,box-shadow] duration-200
                     ${isReplyTarget
                       ? 'border-primary/60 bg-primary/[0.07] ring-2 ring-primary/10'
                       : isNewest
                         ? 'border-primary/22 bg-primary/[0.045]'
                         : 'border-border/55 bg-white/92'}
                   `}
-                  onClick={() => toggleMessage(message.id)}
                 >
-                  <div className="flex items-start justify-between gap-4">
+                  <div
+                    className="flex cursor-pointer items-start justify-between gap-4"
+                    onClick={() => toggleMessage(message.id)}
+                  >
                     <div className="flex min-w-0 items-start gap-3">
                       {/* 头像 */}
                       <YouTubeChannelAvatar
@@ -1765,7 +1767,7 @@ export function EmailDetail({
 
                   {/* 展开的邮件内容 */}
                   {isExpanded && (
-                    <div className="mt-4 space-y-4" onClick={(e) => e.stopPropagation()}>
+                    <div className="mt-4 space-y-4">
                       <div className="flex items-center justify-between">
                         <div className="flex items-center gap-1.5">
                           <Badge variant="outline" className="text-xs">
