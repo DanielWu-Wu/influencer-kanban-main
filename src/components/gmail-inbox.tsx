@@ -62,6 +62,7 @@ import { YouTubeChannelAvatar } from './youtube-channel-avatar';
 import { GMAIL_AUTH_CACHE_RESET_EVENT } from './gmail-auth-provider';
 import { ACCOUNT_SCOPE_CHANGED_EVENT, getAccountCacheScope } from '@/lib/account-cache-scope';
 import { GMAIL_PRIMARY_INBOX_REFRESHED_EVENT } from '@/lib/gmail-translation-prefetch';
+import { hasAutomaticMailHeaders, publishInboxMailSnapshot } from '@/lib/inbox-new-mail';
 import {
   mailTimestampToIso,
   resolveGmailMessageTimestamp,
@@ -504,6 +505,7 @@ async function parseGmailThread(
       attachments,
       date,
       isRead: !labels.includes('UNREAD'),
+      automated: hasAutomaticMailHeaders(getHeader(headers, 'Auto-Submitted'), getHeader(headers, 'Precedence')),
       labels,
       hasAttachments: attachments.some((attachment) => !attachment.inline),
       rfcMessageId: getHeader(headers, 'Message-ID'),
@@ -921,6 +923,8 @@ export function GmailInbox({
     if (!auth?.accessToken) return;
     if (activePaginationKey !== paginationKey) return;
     const requestCacheKey = inboxCacheKey;
+    const requestAccountScope = getAccountCacheScope();
+    const requestMailAddress = auth.email?.trim().toLowerCase() || '';
     if (!requestCacheKey) return;
     const fetchKey = requestCacheKey;
     if (activeFetchKeyRef.current === fetchKey) return;
@@ -1029,6 +1033,13 @@ export function GmailInbox({
         setThreads([]);
         if (unreadCount !== null) setNormalUnreadCount(unreadCount);
         setLastSyncedAt(syncedAt);
+        if (pageIndex === 0 && !isGlobalSearch && (mailbox === 'inbox' || mailbox === 'unread')) {
+          publishInboxMailSnapshot({
+            accountScope: requestAccountScope, provider: 'gmail',
+            mailAccountId: `gmail:${requestMailAddress}`, mailAddress: requestMailAddress,
+            threads: [], loadThread: (thread) => fetchThreadDetail(thread, accessToken),
+          });
+        }
         notifyPrimaryInboxRefreshed(mailbox, category, isGlobalSearch);
         return;
       }
@@ -1081,6 +1092,14 @@ export function GmailInbox({
       setThreads(sortedThreads);
       if (unreadCount !== null) setNormalUnreadCount(unreadCount);
       setLastSyncedAt(syncedAt);
+      if (pageIndex === 0 && !isGlobalSearch && (mailbox === 'inbox' || mailbox === 'unread')) {
+        publishInboxMailSnapshot({
+          accountScope: requestAccountScope, provider: 'gmail',
+          mailAccountId: `gmail:${requestMailAddress}`, mailAddress: requestMailAddress,
+          threads: sortedThreads,
+          loadThread: (thread) => fetchThreadDetail(thread, accessToken),
+        });
+      }
       notifyPrimaryInboxRefreshed(mailbox, category, isGlobalSearch);
     } catch (caughtError) {
       if (isCurrentRequest()) {
@@ -1097,6 +1116,7 @@ export function GmailInbox({
   }, [
     activePaginationKey,
     auth?.accessToken,
+    auth?.email,
     category,
     gmailSearchQuery,
     getAccessToken,

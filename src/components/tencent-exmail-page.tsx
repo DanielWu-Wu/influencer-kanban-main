@@ -29,6 +29,7 @@ import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import type { MailAccount } from '@/lib/mail-accounts';
 import type { GmailMailbox, GmailMessage, GmailThread } from '@/lib/types';
+import { publishInboxMailSnapshot } from '@/lib/inbox-new-mail';
 import {
   clampGmailThreadListWidth,
   getGmailThreadListDoubleClickWidth,
@@ -355,6 +356,7 @@ export function TencentExmailPage({
   };
 
   const loadThreads = useCallback(async () => {
+    const requestAccountScope = getAccountCacheScope();
     const runId = runIdRef.current + 1;
     runIdRef.current = runId;
     const cacheKey = getCacheKey(account.mailAccountId, mailbox, search, page);
@@ -398,6 +400,21 @@ export function TencentExmailPage({
       };
       tencentThreadListCache.set(cacheKey, { data, cachedAt: Date.now() });
       setThreads(data.threads);
+      if (page === 0 && !search.trim() && (mailbox === 'inbox' || mailbox === 'unread')) {
+        publishInboxMailSnapshot({
+          accountScope: requestAccountScope, provider: 'tencent_exmail',
+          mailAccountId: account.mailAccountId, mailAddress: account.email, threads: data.threads,
+          loadThread: async (_thread, message) => {
+            if (!message?.folderRef || !message.providerMessageRef) throw new Error('缺少邮件定位信息。');
+            const params = new URLSearchParams({ action: 'thread', mailAccountId: account.mailAccountId,
+              folder: message.folderRef, uid: message.providerMessageRef });
+            const response = await fetch(`/api/mail/tencent?${params}`, { cache: 'no-store' });
+            const result = await response.json();
+            if (!response.ok || !result.success || !result.data) throw new Error('预翻译读取正文失败。');
+            return result.data as GmailThread;
+          },
+        });
+      }
       setTotal(data.total);
       setHasNextPage(data.hasNextPage);
       setShowingCachedData(false);
@@ -408,7 +425,7 @@ export function TencentExmailPage({
     } finally {
       if (runId === runIdRef.current) setLoading(false);
     }
-  }, [account.mailAccountId, mailbox, page, search]);
+  }, [account.mailAccountId, account.email, mailbox, page, search]);
 
   useEffect(() => {
     if (!active) return undefined;

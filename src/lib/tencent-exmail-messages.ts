@@ -8,6 +8,7 @@ import type {
   SearchObject,
 } from 'imapflow';
 import type { GmailAttachment, GmailMessage, GmailThread } from './types';
+import { hasAutomaticMailHeaders } from './inbox-new-mail';
 import type { MailAccount, MailFolderMapping } from './mail-accounts';
 import {
   sendTencentExmailRaw,
@@ -378,6 +379,7 @@ async function loadTencentThread(options: {
             body,
             htmlBody,
             attachments,
+            automated: hasAutomaticMailHeaders(headerText(parsed, 'auto-submitted'), headerText(parsed, 'precedence')),
             date: mailTimestampToIso(resolveImapMessageTimestamp({
               internalDate: item.internalDate,
               parsedDate: parsed.date,

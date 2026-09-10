@@ -68,6 +68,7 @@ import {
 } from '@/lib/email-generation-tasks';
 import { AppUpdateNotice } from '@/components/app-update-notice';
 import { useMailTranslationPrefetch } from '@/lib/use-gmail-translation-prefetch';
+import { useInboxNewMail } from '@/lib/use-inbox-new-mail';
 import { toast } from 'sonner';
 
 type View = 'kanban' | 'list' | 'email' | 'reminders' | 'settings' | 'accounts' | 'todo' | 'calendar' | 'prospecting' | 'gmail' | 'prompts' | 'draft-prompts';
@@ -227,9 +228,14 @@ export default function DashboardPage() {
       && !mailAccountsLoading
     ),
   );
+  const translationCandidates = useInboxNewMail(
+    Boolean(user && account?.status === 'active' && !account.mustChangePassword && !settingsLoading && !mailAccountsLoading),
+    settings,
+    dailyGmail.translationCandidates,
+  );
   const mailTranslationPrefetch = useMailTranslationPrefetch(
     Boolean(user && account?.status === 'active' && !account.mustChangePassword),
-    dailyGmail.translationCandidates,
+    translationCandidates,
   );
   const cooperationCalendar = useCooperationCalendarEvents({
     active: currentView === 'calendar',

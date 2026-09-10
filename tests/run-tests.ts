@@ -50,3 +50,4 @@ import './mail-conversation.test';
 import './mail-message-time.test';
 import './expiring-request-cache.test';
 import './mail-language-result.test';
+import './inbox-new-mail.test';
