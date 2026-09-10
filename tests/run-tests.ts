@@ -49,3 +49,4 @@ import './mail-draft-edit.test';
 import './mail-conversation.test';
 import './mail-message-time.test';
 import './expiring-request-cache.test';
+import './mail-language-result.test';

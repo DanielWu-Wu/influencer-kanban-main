@@ -27,6 +27,7 @@ import { sanitizeOutreachEmailBody } from '@/lib/outreach-draft-sanitizer';
 import { requireOwnedMailAccount } from '@/lib/mail-account-server';
 import { getRequestUser } from '@/lib/supabase/server';
 import { getUserSecret } from '@/lib/user-private-storage';
+import { splitEmailForTranslation } from '@/lib/email-text';
 
 type ChatMessage = {
   role: 'system' | 'user' | 'assistant';
@@ -993,7 +994,7 @@ ${String(body.userPreference || '').trim() || '无'}
       const systemPrompt = withCustomInstructions(
         `${DEFAULT_ANALYSIS_PROMPT}
 
-请识别对方最近一封实质邮件的语言。language 必须返回 ISO 639-1 代码，例如 en、nl、es、de、fr、it、pt、ja。
+请只识别用户提供的“语言识别目标正文”的语言，不根据国家、姓名、历史邮件判断。language 必须返回 ISO 639-1 代码，例如 en、sv、nl、es、de、fr、it、pt、ja；无法确认或混合语言返回空字符串。
 只返回以下 JSON，不要添加其他文字：
 {
   "latestSummary": "最新邮件的中文意思梗概",
@@ -1018,7 +1019,11 @@ ${String(body.userPreference || '').trim() || '无'}
       );
 
       const conversation = buildCompactGmailAIConversation(threadMessages);
-      const userPrompt = `当前邮件主题：${threadSubject}
+      const languageTarget = threadMessages.find(message => message.id === String(body.targetMessageId || ''));
+      const userPrompt = `语言识别目标正文（缺失时 language 返回空字符串）：
+${languageTarget ? splitEmailForTranslation(languageTarget.body || '').currentText : ''}
+
+当前邮件主题：${threadSubject}
 
 以下内容只包含当前打开的真实邮件会话，已经按时间顺序排列：
 ${conversation.text}`;

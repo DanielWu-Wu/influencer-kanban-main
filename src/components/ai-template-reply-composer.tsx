@@ -46,7 +46,8 @@ import {
   stripConfiguredEmailSignature,
   textToEmailHtml,
 } from '@/lib/email-content';
-import { detectReplyLanguage } from '@/lib/email-language';
+import { useMailLanguage } from '@/lib/mail-language-result';
+import { getAccountCacheScope } from '@/lib/account-cache-scope';
 import { EMAIL_REPLY_LANGUAGE_OPTIONS as LANGUAGE_OPTIONS } from '@/lib/email-reply-languages';
 import {
   buildMailAIThreadContextIdentity,
@@ -278,9 +279,8 @@ export function AITemplateReplyComposer({
     if (taskId) setTaskDraftSaved(taskId, mailAccountId, saved);
   };
 
-  const detectedReplyLanguage = externalMessage?.body
-    ? detectReplyLanguage(emailHtmlToText(externalMessage.body))
-    : '';
+  const detectedReplyLanguage = useMailLanguage(`${getAccountCacheScope()}::${mailAccountId}`,
+    externalMessage?.id || '', externalMessage?.body || '');
 
   useEffect(() => {
     if (avatarUrl) updateTaskAvatarByKey(generationTaskKey, avatarUrl);

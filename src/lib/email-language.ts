@@ -141,7 +141,7 @@ const LATIN_LANGUAGE_MARKERS: readonly LanguageMarkers[] = [
 ];
 
 const DIACRITIC_SCORES: ReadonlyArray<readonly [string, RegExp, number]> = [
-  ['de', /[äöüß]/gi, 3],
+  ['de', /[üß]/gi, 3],
   ['es', /[¿¡ñ]/gi, 3],
   ['pt', /[ãõ]/gi, 3],
   ['pl', /[ąćęłńśźż]/gi, 3],
@@ -205,7 +205,7 @@ export function detectEmailLanguageWithConfidence(text: string): EmailLanguageDe
   const ranked = [...scores.entries()].sort((left, right) => right[1] - left[1]);
   const [bestCode, bestScore] = ranked[0] || ['', 0];
   const secondScore = ranked[1]?.[1] || 0;
-  if (bestScore >= 2 && (bestScore >= 4 || bestScore > secondScore)) {
+  if (bestScore >= 2 && bestScore - secondScore >= 2) {
     return { languageCode: bestCode, confidence: 'high' };
   }
 

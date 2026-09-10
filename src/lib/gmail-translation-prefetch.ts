@@ -1,6 +1,7 @@
 import type { AppSettings } from '@/lib/data';
 import { ACCOUNT_SCOPE_CHANGED_EVENT, getAccountCacheScope } from '@/lib/account-cache-scope';
 import { detectEmailLanguage } from '@/lib/email-language';
+import { saveMailLanguage } from '@/lib/mail-language-result';
 import type { MailProvider } from '@/lib/mail-accounts';
 import { splitEmailForTranslation } from '@/lib/email-text';
 import { isUsableMailTranslation, normalizeMailTranslationText } from '@/lib/mail-translation-body';
@@ -133,6 +134,14 @@ function parseTranslationStreamBlock(
 async function executeTranslationRequest(
   options: GmailTranslationRequestOptions,
 ): Promise<GmailTranslationRequestResult> {
+  const saveDetectedLanguage = (language: string) => {
+    const source = options.sourceText || options.text;
+    const current = splitEmailForTranslation(source).currentText || source;
+    // Translating quoted history must never relabel the current incoming message.
+    if (normalizeMailTranslationText(current) === normalizeMailTranslationText(options.text)) {
+      saveMailLanguage(options.scopeKey, options.messageId, source, language);
+    }
+  };
   const response = await fetch('/api/translate', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
@@ -153,6 +162,7 @@ async function executeTranslationRequest(
     if (!response.ok || !result.success) throw new Error(result.error || '翻译失败');
     const translatedText = String(result.data.translatedText || '').trim();
     options.onProgress?.(translatedText);
+    saveDetectedLanguage(String(result.data.sourceLang || ''));
     return {
       translatedText,
       sourceLang: String(result.data.sourceLang || 'auto'),
@@ -177,6 +187,7 @@ async function executeTranslationRequest(
   if (buffer.trim()) parseTranslationStreamBlock(buffer, state, options.onProgress);
   if (state.streamError) throw new Error(state.streamError);
   if (!state.translatedText.trim()) throw new Error('翻译服务没有返回可用译文。');
+  saveDetectedLanguage(state.sourceLang);
   return { translatedText: state.translatedText.trim(), sourceLang: state.sourceLang };
 }
 

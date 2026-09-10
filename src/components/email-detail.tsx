@@ -24,7 +24,8 @@ import { AITemplateReplyComposer } from './ai-template-reply-composer';
 import { NewEmailComposer } from './new-email-composer';
 import { YouTubeChannelAvatar } from './youtube-channel-avatar';
 import { textToEmailHtml } from '@/lib/email-content';
-import { detectEmailLanguage } from '@/lib/email-language';
+import { detectReplyLanguage } from '@/lib/email-language';
+import { readMailLanguage, useMailLanguageRevision } from '@/lib/mail-language-result';
 import { repairTextEncoding, splitEmailForTranslation } from '@/lib/email-text';
 import { normalizeMailTranslationText } from '@/lib/mail-translation-body';
 import { findUsableEmailTranslation } from '@/lib/email-translations';
@@ -560,17 +561,19 @@ export function EmailDetail({
     () => collectGmailThreadParticipants(thread, ownEmail, creatorProfile?.email),
     [creatorProfile?.email, ownEmail, thread],
   );
-  const messageLanguageLabels = useMemo(() => new Map(
+  useMailLanguageRevision();
+  const messageLanguageLabels = new Map(
     displayMessages.map((message) => {
       const displayBody = repairTextEncoding(message.body);
       const currentMessageText = splitEmailForTranslation(displayBody).currentText || displayBody;
-      const languageCode = detectEmailLanguage(currentMessageText);
+      const languageCode = readMailLanguage(`${translationAccountScope}::${mailScope}`, message.id, message.body)
+        || detectReplyLanguage(currentMessageText);
       return [
         message.id,
-        languageCode ? outreachLanguageLabel(languageCode) : '语言未知',
+        languageCode ? outreachLanguageLabel(languageCode) : '',
       ];
     }),
-  ), [displayMessages]);
+  );
   const newestDisplayMessageId = displayMessages[0]?.id || '';
   const creatorYouTubeChannelUrl = getDirectYouTubeChannelUrl(creatorProfile);
   const creatorChannelAvatarUrl = channelAvatar.status === 'ready'
@@ -1653,7 +1656,7 @@ export function EmailDetail({
             const displayHtmlBody = message.htmlBody ? repairTextEncoding(message.htmlBody) : '';
             const sanitizedDisplayHtml = sanitizedDisplayHtmlByMessageId.get(message.id)
               || { html: '', blockedRemoteResourceCount: 0 };
-            const sourceLanguage = messageLanguageLabels.get(message.id) || '语言未知';
+            const sourceLanguage = messageLanguageLabels.get(message.id) || '';
             const isCreatorSender = creatorProfile
               ? normalizeEmail(sender.email) === normalizeEmail(creatorProfile.email)
               : false;
@@ -1774,7 +1777,7 @@ export function EmailDetail({
                             {isShowingTranslation ? '中文翻译' : '原文'}
                           </Badge>
                           <Badge variant="secondary" className="bg-white/80 text-xs font-normal text-slate-600">
-                            原文：{sourceLanguage}
+                            {sourceLanguage ? `原文：${sourceLanguage}` : '原文语言：待确认'}
                           </Badge>
                         </div>
                       </div>

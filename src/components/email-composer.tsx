@@ -34,7 +34,8 @@ import {
   stripConfiguredEmailSignature,
   toBase64Url,
 } from '@/lib/email-content';
-import { detectReplyLanguage } from '@/lib/email-language';
+import { useMailLanguage, saveMailLanguage } from '@/lib/mail-language-result';
+import { getAccountCacheScope } from '@/lib/account-cache-scope';
 import { EMAIL_REPLY_LANGUAGE_OPTIONS as LANGUAGE_OPTIONS } from '@/lib/email-reply-languages';
 import {
   buildGmailAIAnalysisCacheKey,
@@ -337,9 +338,9 @@ export function EmailComposer({
       || !String(message.from || '').toLowerCase().includes(normalizedAccountEmail)
     )) || threadMessages.at(-1);
   }, [ownEmail, threadMessages]);
-  const detectedReplyLanguage = latestExternalMessage?.body
-    ? detectReplyLanguage(emailHtmlToText(latestExternalMessage.body))
-    : '';
+  const languageMessage = replyTarget?.message || latestExternalMessage;
+  const languageScope = `${getAccountCacheScope()}::${mailAccountId}`;
+  const detectedReplyLanguage = useMailLanguage(languageScope, languageMessage?.id || '', languageMessage?.body || '');
 
   useEffect(() => {
     if (avatarUrl) updateTaskAvatarByKey(generationTaskKey, avatarUrl);
@@ -411,7 +412,7 @@ export function EmailComposer({
         modelProvider: settings.modelProvider,
         customApiUrl: settings.customApiUrl,
         customModelName: settings.customModelName,
-        analysisPrompt: settings.aiAnalysisPrompt,
+        analysisPrompt: `${settings.aiAnalysisPrompt || ''}:message-language-v1`,
       });
       const analysisStartedAt = performance.now();
       const loaded = await getOrLoadGmailAIAnalysis(
@@ -425,14 +426,14 @@ export function EmailComposer({
         cacheHit: loaded.cacheHit,
         totalMs: Math.round(performance.now() - analysisStartedAt),
       });
-      const language = result.language || 'en';
+      const language = result.language || '';
+      if (languageMessage?.id && languageMessage.body) saveMailLanguage(languageScope, languageMessage.id, languageMessage.body, language);
       const knownLanguage = LANGUAGE_OPTIONS.find(([code]) => code === language);
       setAnalysis(result);
       if (!targetLangLockedRef.current && knownLanguage) {
         setTargetLang(language);
         setTargetLangName(result.languageName || knownLanguage?.[1] || language);
         setTargetLangNeedsConfirmation(false);
-        targetLangLockedRef.current = true;
       }
     } catch (error) {
       if (runId !== analysisRunRef.current) return;
@@ -1543,7 +1544,7 @@ export function EmailComposer({
         )}
         {analysis && (
           <Badge variant="secondary" className="hidden bg-gray-100 font-normal text-gray-700 @2xl/email-composer:inline-flex">
-            来信：{analysis.languageName || targetLangName}
+            来信：{LANGUAGE_OPTIONS.find(([code]) => code === detectedReplyLanguage)?.[1] || '待确认'}
           </Badge>
         )}
       </div>
@@ -1597,7 +1598,7 @@ export function EmailComposer({
         >
           {LANGUAGE_OPTIONS.map(([code, name]) => (
             <option key={code} value={code}>
-              {code === analysis?.language ? `${name}（来信语言）` : name}
+              {code === detectedReplyLanguage ? `${name}（来信语言）` : name}
             </option>
           ))}
         </select>
