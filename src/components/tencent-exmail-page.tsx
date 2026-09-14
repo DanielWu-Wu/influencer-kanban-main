@@ -1,5 +1,7 @@
 'use client';
 
+import { sharedMailFetch as fetch } from '@/lib/shared-mail-read';
+
 import {
   useCallback,
   useEffect,
@@ -408,7 +410,7 @@ export function TencentExmailPage({
             if (!message?.folderRef || !message.providerMessageRef) throw new Error('缺少邮件定位信息。');
             const params = new URLSearchParams({ action: 'thread', mailAccountId: account.mailAccountId,
               folder: message.folderRef, uid: message.providerMessageRef });
-            const response = await fetch(`/api/mail/tencent?${params}`, { cache: 'no-store' });
+            const response = await fetch(`/api/mail/tencent?${params}`, { cache: 'no-store' }, { priority: 2 });
             const result = await response.json();
             if (!response.ok || !result.success || !result.data) throw new Error('预翻译读取正文失败。');
             return result.data as GmailThread;

@@ -11,6 +11,7 @@ import {
   type ReactNode,
 } from 'react';
 import type { GmailAuth } from '@/lib/types';
+import { bindGmailReadAccount } from '@/lib/shared-mail-read';
 import { useAuth } from './auth-provider';
 import { runSafeRequestWithSessionRecovery } from '@/lib/session-recovery';
 
@@ -63,6 +64,7 @@ export function GmailAuthProvider({ children }: { children: ReactNode }) {
       window.dispatchEvent(new Event(GMAIL_AUTH_CACHE_RESET_EVENT));
     }
     authRef.current = nextAuth;
+    if (nextAuth.email && nextAuth.accessToken) bindGmailReadAccount(nextAuth.email, nextAuth.accessToken);
     setAuth(nextAuth);
     setStatus(nextAuth.isConnected ? 'connected' : 'disconnected');
     setError(null);

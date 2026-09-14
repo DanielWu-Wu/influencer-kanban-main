@@ -1,5 +1,7 @@
 'use client';
 
+import { sharedMailFetch as fetch } from '@/lib/shared-mail-read';
+
 import { useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 import {
   AlertCircle,
@@ -85,6 +87,9 @@ import {
   type EmailTranslationRetryInput,
 } from '@/lib/email-translation-tasks';
 import { cn } from '@/lib/utils';
+import { Alert, AlertDescription, AlertTitle } from '@/components/ui/alert';
+import { getMailReplyApproval, type MailReplyDraftIdentity } from '@/lib/mail-reply-draft';
+import { restoreSystemDraftAttachments, useMailReplySystemDraft } from '@/lib/use-mail-reply-system-draft';
 
 interface EmailComposerProps {
   thread: GmailThread;
@@ -212,6 +217,7 @@ export function EmailComposer({
   const [translatingEditedReply, setTranslatingEditedReply] = useState(false);
   const [translationUpdated, setTranslationUpdated] = useState(false);
   const [synchronizedDraft, setSynchronizedDraft] = useState<GmailBilingualDraftSnapshot | null>(null);
+  const [confirmedForeign, setConfirmedForeign] = useState<GmailBilingualDraftSnapshot | null>(null);
   const [generationStage, setGenerationStage] = useState('');
   const [optimizationLoading, setOptimizationLoading] = useState(false);
   const [optimizationError, setOptimizationError] = useState('');
@@ -226,6 +232,7 @@ export function EmailComposer({
   const targetLangLockedRef = useRef(false);
   const handledAutoRetryTaskRef = useRef('');
   const localDraftDirtyRef = useRef(false);
+  const ignoredRestoredTaskIdsRef = useRef(new Set<string>());
   const targetContextKeyRef = useRef('');
   const isTencent = mailAccount?.provider === 'tencent_exmail';
   const providerLabel = isTencent ? '腾讯企业邮箱' : 'Gmail';
@@ -253,6 +260,12 @@ export function EmailComposer({
   );
   const externalMessage = replyTarget?.message;
   const recipientEmail = replyTarget?.recipientEmail || '';
+  const systemDraftIdentity: MailReplyDraftIdentity = {
+    provider: isTencent ? 'tencent_exmail' : 'gmail', mailAccountId, mailAddress: ownEmail,
+    threadId: thread.id, messageId: replyTarget?.messageId || '', recipient: recipientEmail,
+    subject: replyTarget?.subject || thread.subject, anchorBody: externalMessage?.body || '',
+  };
+  const systemDraft = useMailReplySystemDraft(systemDraftIdentity, mode === 'ai');
   const targetContextKey = `${thread.id}:${replyTarget?.messageId || ''}`;
   const generationTaskKey = isTencent
     ? buildMailEmailGenerationTaskKey({
@@ -355,6 +368,85 @@ export function EmailComposer({
     snapshot: synchronizedDraft,
     foreignBody: replyContent,
   });
+  const replyApproval = getMailReplyApproval({
+    snapshot: synchronizedDraft, confirmedForeign, foreignBody: replyContent,
+    chineseBody: editedChineseReply, targetLanguage: targetLang,
+  });
+  const replyBusy = aiLoading || optimizationLoading || translatingEditedReply || sending || savingDraft || systemDraft.saving;
+  const exportBlockReason = !recipientEmail ? '请先确认收件人。'
+    : isEmailContentEmpty(replyContent) ? '请先填写外文正文。'
+      : replyBusy ? '正在处理邮件，请等待完成。'
+        : optimizedSuggestion ? '请先采用或放弃画像优化结果。'
+          : !replyApproval.canExport ? replyApproval.warning : '';
+  const sendBlockReason = exportBlockReason || (smtpChecking ? '正在验证发信能力。'
+    : isTencent && !smtpReady ? '腾讯邮箱发信验证未通过，请检查邮箱连接。' : '');
+  const savedSystemDraft = systemDraft.stored?.draft;
+  const systemDraftHasChanges = Boolean(savedSystemDraft && (
+    savedSystemDraft.foreignBody !== replyContent || savedSystemDraft.chineseBody !== editedChineseReply
+    || savedSystemDraft.userIdeas !== userIdeas || savedSystemDraft.targetLanguage !== targetLang
+    || savedSystemDraft.tone !== replyTone || savedSystemDraft.translationEditing !== translationEditing
+    || savedSystemDraft.strategyEditing !== strategyEditing
+    || JSON.stringify(savedSystemDraft.confirmedForeign) !== JSON.stringify(confirmedForeign)
+    || savedSystemDraft.attachments.length !== attachments.length
+    || savedSystemDraft.attachments.some((file, index) => file.name !== attachments[index]?.name
+      || file.lastModified !== attachments[index]?.lastModified)
+  ));
+
+  const saveSystemDraft = () => {
+    if (replyBusy || systemDraft.loading) return;
+    void systemDraft.save({
+      version: 1, identity: systemDraftIdentity, foreignBody: replyContent, chineseBody: editedChineseReply,
+      userIdeas, targetLanguage: targetLang, targetLanguageName: targetLangName, tone: replyTone,
+      snapshot: synchronizedDraft, confirmedForeign, hasSuggestion: Boolean(suggestion),
+      strategyEditing, translationEditing, attachments: [],
+    }, attachments);
+  };
+  const restoreSystemDraft = () => {
+    const saved = systemDraft.stored?.draft;
+    if (!saved || replyBusy) return;
+    if ((replyContent.trim() || userIdeas.trim() || editedChineseReply.trim())
+      && !window.confirm('恢复系统草稿会替换当前编辑内容，是否继续？不会发送邮件或写入邮箱。')) return;
+    try {
+      const restoredAttachments = restoreSystemDraftAttachments(saved);
+      localDraftDirtyRef.current = true;
+      if (generationTask?.id) ignoredRestoredTaskIdsRef.current.add(generationTask.id);
+      if (translationTask?.id) ignoredRestoredTaskIdsRef.current.add(translationTask.id);
+      targetLangLockedRef.current = true;
+      appliedGenerationTaskRef.current = generationTask?.id || '';
+      setReplyContent(saved.foreignBody);
+      setEditedChineseReply(saved.chineseBody);
+      setUserIdeas(saved.userIdeas);
+      setTargetLang(saved.targetLanguage);
+      setTargetLangName(saved.targetLanguageName);
+      setGeneratedLangName(saved.targetLanguageName);
+      setTargetLangNeedsConfirmation(false);
+      setReplyTone(saved.tone);
+      setSuggestion(saved.hasSuggestion ? {
+        suggestedReply: saved.foreignBody, translatedReply: saved.chineseBody, tone: saved.tone, keyPoints: [],
+      } : null);
+      setSynchronizedDraft(saved.snapshot);
+      setConfirmedForeign(saved.confirmedForeign);
+      setTranslationEditing(saved.translationEditing);
+      setTranslationExpanded(true);
+      setStrategyEditing(saved.strategyEditing);
+      setOptimizedSuggestion(null);
+      setDraftUsedAnalysis(false);
+      setAttachments(restoredAttachments);
+      setCompletion(null);
+      setAiError('');
+      systemDraft.setNotice('已恢复系统草稿；中外文编辑状态已保留。发送前请检查当前会话是否已有回复。');
+    } catch {
+      setAiError('系统草稿附件无法恢复，未替换当前内容。');
+    }
+  };
+  const confirmCurrentForeign = () => {
+    if (replyBusy || !replyApproval.canConfirmForeign || isEmailContentEmpty(replyContent)) return;
+    if (!window.confirm('确定以当前外文作为最终邮件吗？尚未同步的中文修改不会自动写入外文，中文仅供参考。')) return;
+    localDraftDirtyRef.current = true;
+    setConfirmedForeign({ foreignBody: replyContent, chineseBody: editedChineseReply, targetLanguage: targetLang });
+    setTranslationEditing(false);
+    setAiError('');
+  };
 
   useEffect(() => {
     if (targetContextKeyRef.current !== targetContextKey) {
@@ -456,6 +548,7 @@ export function EmailComposer({
 
   useEffect(() => {
     if (!generationTask) return;
+    if (ignoredRestoredTaskIdsRef.current.has(generationTask.id)) return;
     const rollback = generationTask.rollbackResult as {
       suggestion?: AISuggestion | null;
       replyContent?: string;
@@ -561,6 +654,7 @@ export function EmailComposer({
 
   useEffect(() => {
     if (!translationTask) return;
+    if (ignoredRestoredTaskIdsRef.current.has(translationTask.id)) return;
     if (translationTask.status === 'queued' || translationTask.status === 'running') {
       setTranslatingEditedReply(true);
       setAiError('');
@@ -1304,8 +1398,8 @@ export function EmailComposer({
   };
 
   const saveToGmailDrafts = async () => {
-    if (mode === 'ai' && !bilingualDraftTranslationCurrent) {
-      setAiError(`中文或回复语言已发生变化，请先点击“根据中文更新外文”，再保存${providerLabel}草稿。`);
+    if (mode === 'ai' && exportBlockReason) {
+      setAiError(exportBlockReason);
       return;
     }
     setSavingDraft(true);
@@ -1365,8 +1459,8 @@ export function EmailComposer({
       return;
     }
     if (isEmailContentEmpty(replyContent)) return;
-    if (mode === 'ai' && !translationUpdated) {
-      setAiError('直接发送前，请先点击“修改中文”，再点击“根据中文更新外文”完成人工确认。');
+    if (mode === 'ai' && sendBlockReason) {
+      setAiError(sendBlockReason);
       return;
     }
     if (!recipientEmail) {
@@ -1584,7 +1678,7 @@ export function EmailComposer({
         <select
           value={targetLang}
           className="h-9 min-w-36 rounded-md border border-gray-300 bg-white px-3 text-sm font-normal text-gray-900 outline-none transition hover:border-gray-400 focus:border-primary focus:ring-2 focus:ring-primary/15 disabled:cursor-not-allowed disabled:opacity-50"
-          disabled={aiLoading || translatingEditedReply}
+          disabled={replyBusy}
           onChange={(event) => {
             localDraftDirtyRef.current = true;
             updateCurrentDraftSavedStatus(false);
@@ -1611,7 +1705,7 @@ export function EmailComposer({
         <select
           value={replyTone}
           className="h-9 min-w-28 rounded-md border border-gray-300 bg-white px-3 text-sm font-normal text-gray-900 outline-none transition hover:border-gray-400 focus:border-primary focus:ring-2 focus:ring-primary/15 disabled:cursor-not-allowed disabled:opacity-50"
-          disabled={aiLoading || translatingEditedReply}
+          disabled={replyBusy}
           onChange={(event) => {
             localDraftDirtyRef.current = true;
             setReplyTone(event.target.value as ReplyTone);
@@ -1626,7 +1720,7 @@ export function EmailComposer({
   );
 
   const aiBody = (
-    <div className="flex w-full min-w-0 max-w-full flex-col gap-3 overflow-x-clip px-4 py-4 [overflow-wrap:anywhere] @2xl/email-composer:px-5">
+    <div inert={systemDraft.saving || savingDraft || sending} className="flex w-full min-w-0 max-w-full flex-col gap-3 overflow-x-clip px-4 py-4 [overflow-wrap:anywhere] @2xl/email-composer:px-5">
       {analysisError && (
         <ErrorMessage message={analysisError}>
           <Button variant="outline" size="sm" onClick={() => void analyzeThread(true)}>重新分析</Button>
@@ -1801,11 +1895,7 @@ export function EmailComposer({
                   </Badge>
                   <p className={`text-xs ${draftUsedAnalysis && bilingualDraftTranslationCurrent ? 'text-emerald-800' : 'text-amber-800'}`}>
                     {draftUsedAnalysis
-                      ? bilingualDraftTranslationCurrent
-                        ? bilingualDraftForeignEdited
-                          ? '外文已手动调整，可直接保存草稿；系统不会自动发送。'
-                          : '中文依据已同步，可直接保存草稿；系统不会自动发送。'
-                        : '中文或回复语言已修改；根据中文更新外文后可保存草稿。'
+                      ? replyApproval.warning
                       : '可以对比画像优化版；当前草稿不会被自动覆盖。'}
                   </p>
                 </div>
@@ -1881,7 +1971,7 @@ export function EmailComposer({
               </div>
             </section>
           )}
-          <section className="overflow-hidden rounded-lg border border-gray-300 bg-white shadow-sm">
+          <section inert={aiLoading || translatingEditedReply} className="overflow-hidden rounded-lg border border-gray-300 bg-white shadow-sm">
             <div className="flex items-center justify-between gap-3 border-b border-gray-100 px-4 py-3">
               <div className="min-w-0">
                 <div className="flex flex-wrap items-center gap-2">
@@ -1898,7 +1988,7 @@ export function EmailComposer({
                         : 'border-emerald-200 bg-emerald-50 font-normal text-emerald-700'}
                   >
                     {!bilingualDraftTranslationCurrent
-                      ? '待更新外文'
+                      ? replyApproval.canExport ? '已采用当前外文' : '待更新外文'
                       : bilingualDraftForeignEdited
                         ? '外文已手动调整'
                         : '中文依据已同步'}
@@ -1953,7 +2043,7 @@ export function EmailComposer({
                       <p className="text-sm font-medium text-gray-900">编辑中文邮件</p>
                       <p className="mt-0.5 text-xs text-gray-500">修改完成后，AI 将只翻译这份中文，不会重新分析或改写你的商务决定。</p>
                     </div>
-                    <Badge variant="outline" className="border-amber-200 bg-amber-50 font-normal text-amber-700">最终人工确认</Badge>
+                    <Badge variant="outline">修改后需同步或确认采用外文</Badge>
                   </div>
                   <Textarea
                     wrap="soft"
@@ -1976,12 +2066,11 @@ export function EmailComposer({
                         size="sm"
                         disabled={translatingEditedReply}
                         onClick={() => {
-                          setEditedChineseReply(suggestion.translatedReply);
                           setTranslationEditing(false);
                           setAiError('');
                         }}
                       >
-                        取消
+                        结束编辑
                       </Button>
                       <Button
                         type="button"
@@ -2001,13 +2090,7 @@ export function EmailComposer({
                 <div className="border-t border-gray-100 bg-gray-50">
                   <div className="flex items-center justify-between gap-3 border-b border-gray-100 px-4 py-2.5">
                     <p className={`text-xs ${translatingEditedReply || bilingualDraftTranslationCurrent ? 'text-emerald-700' : 'text-amber-700'}`}>
-                      {translatingEditedReply
-                        ? '正在根据中文更新外文邮件'
-                        : bilingualDraftTranslationCurrent
-                          ? bilingualDraftForeignEdited
-                            ? `外文已手动调整，中文依据未变化，可以直接保存${providerLabel}草稿。`
-                            : `中文依据已同步；满意时可以直接保存${providerLabel}草稿。`
-                          : '中文或回复语言已发生变化，请根据中文更新外文后再保存草稿。'}
+                      {translatingEditedReply ? '正在根据中文更新外文邮件' : replyApproval.warning}
                     </p>
                     <Button
                       type="button"
@@ -2016,7 +2099,6 @@ export function EmailComposer({
                       className="h-8 shrink-0 bg-white"
                       disabled={translatingEditedReply}
                       onClick={() => {
-                        setEditedChineseReply(suggestion.translatedReply);
                         setTranslationEditing(true);
                         setAiError('');
                       }}
@@ -2025,7 +2107,7 @@ export function EmailComposer({
                     </Button>
                   </div>
                   <div className="whitespace-pre-wrap px-4 py-3 text-sm leading-6 text-gray-700">
-                    {suggestion.translatedReply || (aiLoading ? '正文已生成，正在补充中文对照…' : '暂无中文对照')}
+                    {editedChineseReply || (aiLoading ? '正文已生成，正在补充中文对照…' : '暂无中文对照')}
                   </div>
                 </div>
               )}
@@ -2041,6 +2123,31 @@ export function EmailComposer({
     return (
       <div className="@container/email-composer flex h-full min-h-0 min-w-0 max-w-full flex-col overflow-x-hidden bg-white text-gray-900">
         {!embedded ? header : null}
+        <div className="flex flex-col gap-2 border-b p-3">
+          <div className="flex flex-wrap items-center justify-between gap-2">
+            <span className="text-xs text-muted-foreground">系统草稿仅保存在项目内，不写入邮箱。</span>
+            <div className="flex flex-wrap gap-2">
+              {systemDraft.stored && (
+                <Button variant="outline" size="sm" disabled={replyBusy || systemDraft.loading} onClick={restoreSystemDraft}>
+                  恢复系统草稿
+                </Button>
+              )}
+              <Button variant="outline" size="sm" onClick={saveSystemDraft}
+                disabled={replyBusy || systemDraft.loading || !replyTarget || (!replyContent.trim() && !editedChineseReply.trim() && !userIdeas.trim())}>
+                {systemDraft.saving ? <Loader2 className="animate-spin" data-icon="inline-start" /> : <Save data-icon="inline-start" />}
+                {systemDraft.saving ? '保存中…' : '保存系统草稿'}
+              </Button>
+            </div>
+          </div>
+          {systemDraft.loading && <p className="text-xs text-muted-foreground">正在检查系统草稿…</p>}
+          {systemDraft.stored && !systemDraft.notice && <p className="text-xs text-muted-foreground">发现本封来信的系统草稿（{new Date(systemDraft.stored.savedAt).toLocaleString('zh-CN')}），可恢复继续编辑。</p>}
+          {systemDraft.notice && <p role="status" className="text-xs text-muted-foreground">{systemDraft.notice}</p>}
+          {systemDraftHasChanges && <p className="text-xs text-muted-foreground">当前内容与已存系统草稿不同；要保留当前修改，请再次点击“保存系统草稿”。</p>}
+          {systemDraft.error && <Alert variant="destructive"><AlertTitle>系统草稿未就绪</AlertTitle><AlertDescription>
+            {systemDraft.error}
+            <Button size="sm" variant="outline" onClick={systemDraft.retry} disabled={systemDraft.saving}>重新读取</Button>
+          </AlertDescription></Alert>}
+        </div>
         <ScrollArea disableHorizontalScroll className="min-h-0 min-w-0 max-w-full flex-1 bg-[#F7F8FA]">{aiBody}</ScrollArea>
         <div className="min-w-0 max-w-full shrink-0 overflow-x-hidden border-t border-gray-200 bg-white px-4 py-3 shadow-[0_-4px_12px_rgba(15,23,42,0.035)]">
           {!suggestion || strategyEditing ? (
@@ -2068,10 +2175,15 @@ export function EmailComposer({
                 <span className={`mr-1 text-xs ${recipientEmail ? 'text-gray-500' : 'text-red-600'}`}>
                   收件人：{recipientEmail || '保存草稿前需确认'}
                 </span>
-                {!bilingualDraftTranslationCurrent && (
+                {sendBlockReason && (
                   <span className="mr-1 text-xs font-medium text-amber-700">
-                    请先根据中文更新外文
+                    {sendBlockReason}
                   </span>
+                )}
+                {replyApproval.canConfirmForeign && !replyApproval.canExport && (
+                  <Button variant="outline" onClick={confirmCurrentForeign} disabled={replyBusy || isEmailContentEmpty(replyContent)}>
+                    以当前外文为最终稿
+                  </Button>
                 )}
                 <Button
                   variant="ghost"
@@ -2101,12 +2213,12 @@ export function EmailComposer({
                 <Button
                   variant="outline"
                   onClick={sendEmail}
-                  disabled={!recipientEmail || !translationUpdated || aiLoading || optimizationLoading || Boolean(optimizedSuggestion) || translatingEditedReply || translationEditing || sending || savingDraft || smtpChecking || (isTencent && !smtpReady) || isEmailContentEmpty(replyContent)}
+                  disabled={Boolean(sendBlockReason)}
                 >
                   {sending || smtpChecking ? <Loader2 className="animate-spin" data-icon="inline-start" /> : <Send data-icon="inline-start" />}
                   {smtpChecking ? '正在验证发信能力' : '直接发送'}
                 </Button>
-                <Button onClick={saveToGmailDrafts} disabled={!recipientEmail || !bilingualDraftTranslationCurrent || aiLoading || optimizationLoading || Boolean(optimizedSuggestion) || translatingEditedReply || translationEditing || savingDraft || sending || isEmailContentEmpty(replyContent)}>
+                <Button onClick={saveToGmailDrafts} disabled={Boolean(exportBlockReason)}>
                   {savingDraft ? <Loader2 className="animate-spin" data-icon="inline-start" /> : <Save data-icon="inline-start" />}
                   保存{providerLabel}草稿
                 </Button>

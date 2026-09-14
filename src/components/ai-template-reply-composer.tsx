@@ -1,5 +1,7 @@
 'use client';
 
+import { sharedMailFetch as fetch } from '@/lib/shared-mail-read';
+
 import { useEffect, useMemo, useRef, useState } from 'react';
 import {
   AlertTriangle,
@@ -13,6 +15,7 @@ import {
   Minimize2,
   RefreshCw,
   Save,
+  Send,
   Settings2,
   Sparkles,
   X,
@@ -45,6 +48,8 @@ import {
   isEmailContentEmpty,
   stripConfiguredEmailSignature,
   textToEmailHtml,
+  buildRichRawEmail,
+  toBase64Url,
 } from '@/lib/email-content';
 import { useMailLanguage } from '@/lib/mail-language-result';
 import { getAccountCacheScope } from '@/lib/account-cache-scope';
@@ -80,7 +85,9 @@ import {
   MAIL_AI_TASK_CONTEXT_VERSION,
 } from '@/lib/email-generation-tasks';
 import type { MailAccount, MailDraftLocator } from '@/lib/mail-accounts';
-import { saveTencentMailDraft } from '@/lib/tencent-mail-transport';
+import { createTencentClientMessageId, saveTencentMailDraft, sendTencentMailNow } from '@/lib/tencent-mail-transport';
+import { useDelayedEmailSender } from './delayed-email-provider';
+import { getMailReplyApproval } from '@/lib/mail-reply-draft';
 import {
   EMAIL_TRANSLATION_RETRY_OPERATION,
   canApplyRestoredEmailTranslationResult,
@@ -155,6 +162,7 @@ export function AITemplateReplyComposer({
   const { addDraft } = useEmailDrafts();
   const { auth, connect } = useGmailAuth();
   const { settings, loading: settingsLoading } = useSettings();
+  const { scheduleEmail } = useDelayedEmailSender();
   const {
     enqueueTask,
     getTaskById,
@@ -185,6 +193,10 @@ export function AITemplateReplyComposer({
   const [error, setError] = useState('');
   const [savingDraft, setSavingDraft] = useState(false);
   const [draftSaved, setDraftSaved] = useState(false);
+  const [sendState, setSendState] = useState<'idle' | 'preparing' | 'scheduled' | 'sent'>('idle');
+  const sendGuardRef = useRef(false);
+  const [sendWarning, setSendWarning] = useState('');
+  const [confirmedForeign, setConfirmedForeign] = useState<GmailBilingualDraftSnapshot | null>(null);
   const [tencentDraft, setTencentDraft] = useState<MailDraftLocator | undefined>();
   const [translationOpen, setTranslationOpen] = useState(true);
   const [managerOpen, setManagerOpen] = useState(false);
@@ -221,6 +233,14 @@ export function AITemplateReplyComposer({
     snapshot: synchronizedDraft,
     foreignBody: replyContent,
   });
+  const approval = getMailReplyApproval({ snapshot: synchronizedDraft, confirmedForeign,
+    foreignBody: replyContent, chineseBody: editedChineseReply, targetLanguage: targetLang });
+  const sendLocked = sendState !== 'idle';
+  const sendBlockReason = !recipientEmail || !replyTarget ? '请先确认收件人和回复依据。'
+    : isEmailContentEmpty(replyContent) ? '请先生成或填写邮件正文。'
+      : loading || translatingChinese || savingDraft ? '正在处理邮件，请稍候。'
+        : sendLocked ? (sendState === 'sent' ? '本次邮件已发送，请勿重复发送。' : '邮件正在准备或等待发送。')
+          : !approval.canExport ? approval.warning : '';
   const generationTaskKey = isTencent
     ? buildMailEmailGenerationTaskKey({
         kind: 'tencent_template_reply',
@@ -845,9 +865,10 @@ export function AITemplateReplyComposer({
   }, [autoRetryRequest, loading, settingsLoading, suggestion]);
 
   const saveGmailDraft = async () => {
+    if (sendLocked || sendGuardRef.current) return;
     if (isEmailContentEmpty(replyContent)) return;
-    if (translationOutOfSync) {
-      setError(`中文内容已修改，请先点击“根据中文更新外文”，再保存${providerLabel}草稿。`);
+    if (!approval.canExport) {
+      setError(approval.warning);
       return;
     }
     if (!recipientEmail || !replyTarget) {
@@ -908,6 +929,58 @@ export function AITemplateReplyComposer({
     }
   };
 
+  const sendEmail = async () => {
+    if (sendGuardRef.current || sendBlockReason || !replyTarget) {
+      if (sendBlockReason) setError(sendBlockReason);
+      return;
+    }
+    const delaySeconds = Math.min(60, Math.max(0, settings.emailSendDelaySeconds ?? 0));
+    const recipient = recipientEmail;
+    const subject = buildGmailReplySubject(replyTarget);
+    if (!window.confirm(`确认通过 ${ownEmail || providerLabel} 发送给 ${recipient}？\n主题：${subject}\n${delaySeconds > 0 ? `${delaySeconds} 秒后发送，倒计时结束前可以取消。` : '邮件将立即发出。'}${draftSaved ? '\n之前保存的邮箱草稿仍会保留，请勿再去草稿箱重复发送。' : ''}`)) return;
+    sendGuardRef.current = true;
+    setSendState('preparing');
+    setError('');
+    setSendWarning('');
+    try {
+      const signature = getEmailSignatureForContext(settings.emailSignature, settings.emailSignatureScope, 'regular');
+      const html = appendEmailSignature(stripConfiguredEmailSignature(replyContent, settings.emailSignature), signature);
+      const references = buildGmailReplyReferences(replyTarget);
+      const inReplyTo = externalMessage?.rfcMessageId;
+      const accessToken = isTencent ? undefined : await getAccessToken();
+      const raw = isTencent ? undefined : toBase64Url(await buildRichRawEmail({ to: recipient, subject, htmlBody: html, inReplyTo, references, attachments: [] }));
+      if (isTencent && !mailAccount) throw new Error('腾讯企业邮箱账号不可用。');
+      const messageId = isTencent ? createTencentClientMessageId(ownEmail) : '';
+      scheduleEmail({
+        accessToken, raw, threadId: isTencent ? undefined : thread.id,
+        recipient, delaySeconds, providerLabel, sourceEmail: ownEmail,
+        execute: isTencent && mailAccount ? async (signal) => {
+          const result = await sendTencentMailNow(mailAccount, {
+            to: recipient, subject, html, text: emailHtmlToText(html), inReplyTo, references,
+          }, { messageId, signal });
+          const sentCopy = result.sentCopy as { synced?: boolean; warning?: string } | undefined;
+          if (sentCopy?.synced === false) setSendWarning(sentCopy.warning || '邮件已发送，但已发送文件夹同步失败，请勿重复发送。');
+        } : undefined,
+        onSent: () => { setSendState('sent'); },
+        onCancel: () => {
+          sendGuardRef.current = false;
+          setSendState('idle');
+          setError('已取消发送，邮件内容仍保留。');
+        },
+        onError: (message) => {
+          sendGuardRef.current = false;
+          setSendState('idle');
+          setError(`${message}；正文仍保留。重试前请先核对已发送文件夹，避免重复发送。`);
+        },
+      });
+      setSendState('scheduled');
+    } catch (caught) {
+      sendGuardRef.current = false;
+      setSendState('idle');
+      setError(caught instanceof Error ? caught.message : '准备发送失败，正文仍保留。');
+    }
+  };
+
   return (
     <div className="@container/email-composer flex h-full min-h-0 min-w-0 max-w-full flex-col overflow-x-hidden bg-white">
       {!embedded ? <div className="flex h-14 shrink-0 items-center gap-3 border-b px-4">
@@ -925,7 +998,7 @@ export function AITemplateReplyComposer({
       </div> : null}
 
       <ScrollArea disableHorizontalScroll className="min-h-0 min-w-0 max-w-full flex-1">
-        <div className="grid w-full min-w-0 max-w-full gap-4 overflow-x-clip p-4 @3xl/email-composer:grid-cols-[minmax(280px,0.85fr)_minmax(380px,1.25fr)]">
+        <div inert={sendLocked} className="grid w-full min-w-0 max-w-full gap-4 overflow-x-clip p-4 @3xl/email-composer:grid-cols-[minmax(280px,0.85fr)_minmax(380px,1.25fr)]">
           <div className="min-w-0 space-y-4">
             <div className="rounded-xl border bg-slate-50/70 p-4">
               <div className="mb-3 flex items-center justify-between gap-3">
@@ -1127,17 +1200,7 @@ export function AITemplateReplyComposer({
                       />
                       <div className="flex flex-wrap items-center justify-between gap-3 border-t bg-slate-50/70 px-3 py-2.5">
                         <p className={`text-xs ${translatingChinese ? 'text-emerald-700' : translationOutOfSync ? 'text-amber-700' : 'text-muted-foreground'}`}>
-                          {translatingChinese
-                            ? '正在根据中文更新外文邮件'
-                            : targetLanguageChanged
-                              ? `目标语言已改为${languageName}；请更新外文后再保存${providerLabel}草稿。`
-                              : chineseDirty
-                                ? `中文已修改；更新外文成功前不能保存${providerLabel}草稿。`
-                                : foreignManuallyEdited
-                                  ? `外文已手动调整，中文对照可能未同步；可以直接保存${providerLabel}草稿。`
-                                  : translationUpdated
-                                    ? `上方外文已按这份中文更新为${languageName}。`
-                                    : '请重点检查中文；无误可直接保存，修改后再由 AI 忠实更新外文。'}
+                          {translatingChinese ? '正在根据中文更新外文邮件' : approval.warning}
                         </p>
                         <Button
                           type="button"
@@ -1157,25 +1220,43 @@ export function AITemplateReplyComposer({
               </Collapsible>
             )}
             {error && <Alert variant="destructive"><AlertTriangle /><AlertTitle>操作未完成</AlertTitle><AlertDescription>{error}</AlertDescription></Alert>}
-            {draftSaved && (
+            {draftSaved && sendState === 'idle' && (
               <Alert className="border-emerald-200 bg-emerald-50/70 text-emerald-950">
                 <CheckCircle2 /><AlertTitle>{providerLabel}草稿已保存</AlertTitle>
-                <AlertDescription>请前往{providerLabel}做最后检查并手动发送。</AlertDescription>
+                <AlertDescription>可前往邮箱检查后发送，也可在这里确认直接发送。请选择一种方式，避免重复发送；这里直接发送不会删除原邮箱草稿。</AlertDescription>
               </Alert>
             )}
           </div>
         </div>
       </ScrollArea>
 
-      <div className="flex shrink-0 items-center justify-between gap-3 border-t bg-white px-4 py-3">
-        <p className="truncate text-xs text-muted-foreground">收件人：{recipientEmail || '保存草稿前需确认'}</p>
-        <div className="flex shrink-0 gap-2">
-          <Button variant="outline" disabled={!userIdeas.trim() || loading || translatingChinese} onClick={generate}>
+      <div className="flex shrink-0 flex-wrap items-center justify-between gap-3 border-t bg-white px-4 py-3">
+        <div className="min-w-0 text-xs text-muted-foreground">
+          <p className="break-all">收件人：{recipientEmail || '保存草稿前需确认'}</p>
+          {sendBlockReason && <p role="status">{sendBlockReason}</p>}
+          {sendState === 'scheduled' && <p>请在右下角查看倒计时，结束前可点击“取消发送”。</p>}
+          {sendState === 'sent' && <p role="status">邮件已发送。{draftSaved ? '原邮箱草稿仍保留，请勿重复发送。' : ''}</p>}
+          {sendWarning && <p role="status">{sendWarning}</p>}
+        </div>
+        <div className="flex flex-wrap justify-end gap-2">
+          {approval.canConfirmForeign && !approval.canExport && (
+            <Button variant="outline" disabled={sendLocked || loading || translatingChinese || savingDraft} onClick={() => {
+              if (!window.confirm('以当前外文作为最终稿？尚未同步的中文修改不会写入外文，中文仅供参考。')) return;
+              localDraftDirtyRef.current = true;
+              setConfirmedForeign({ foreignBody: replyContent, chineseBody: editedChineseReply, targetLanguage: targetLang });
+              setError('');
+            }}>以当前外文为最终稿</Button>
+          )}
+          <Button variant="outline" disabled={sendLocked || !userIdeas.trim() || loading || translatingChinese} onClick={generate}>
             <RefreshCw />重新生成
           </Button>
+          <Button variant="outline" disabled={Boolean(sendBlockReason)} onClick={sendEmail}>
+            {sendState === 'preparing' || sendState === 'scheduled' ? <Loader2 className="animate-spin" data-icon="inline-start" /> : <Send data-icon="inline-start" />}
+            {sendState === 'sent' ? '已发送' : sendState === 'scheduled' ? '等待发送' : sendState === 'preparing' ? '准备发送…' : '直接发送'}
+          </Button>
           <Button
-            disabled={!recipientEmail || isEmailContentEmpty(replyContent) || savingDraft || loading || translatingChinese || translationOutOfSync || draftSaved}
-            title={!recipientEmail ? '请先确认最终回复收件人' : translationOutOfSync ? '请先根据中文更新外文' : undefined}
+            disabled={sendLocked || !recipientEmail || isEmailContentEmpty(replyContent) || savingDraft || loading || translatingChinese || !approval.canExport || draftSaved}
+            title={!recipientEmail ? '请先确认最终回复收件人' : !approval.canExport ? approval.warning : undefined}
             onClick={saveGmailDraft}
           >
             {savingDraft ? <Loader2 className="animate-spin" /> : draftSaved ? <CheckCircle2 /> : <Save />}

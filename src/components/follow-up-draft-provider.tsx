@@ -1,5 +1,8 @@
 'use client';
 
+import { sharedMailFetch as fetch, currentGmailReadAccountId } from '@/lib/shared-mail-read';
+import { readSharedFollowUp } from '@/lib/shared-mail-workflows';
+
 import {
   createContext,
   useCallback,
@@ -25,7 +28,6 @@ import {
   evaluateFollowUpEligibility,
   followUpSaveMode,
   followUpTaskKey,
-  type FollowUpCheck,
   type FollowUpSourceRecord,
   type FollowUpStage,
 } from '@/lib/follow-up-draft-workflow';
@@ -170,19 +172,9 @@ function loadTaskCache(accountId: string) {
 
 async function requestFollowUpCheck(source: FollowUpSourceRecord) {
   const provider = source.provider || 'gmail';
-  const query = new URLSearchParams({
-    action: provider === 'tencent_exmail' ? 'followUp' : 'outreachFollowUp',
-    email: source.email,
-    sentAt: String(source.developmentDate),
-  });
-  if (provider === 'tencent_exmail') {
-    if (!source.mailAccountId) throw new Error('尚未确定该红人的腾讯企业邮箱账号。');
-    query.set('mailAccountId', source.mailAccountId);
-  }
-  const response = await fetch(`${provider === 'tencent_exmail' ? '/api/mail/tencent' : '/api/gmail'}?${query}`);
-  const result = await response.json().catch(() => ({}));
-  if (!response.ok || !result.success) throw new Error(getResultError(result, '检查对应邮箱回复失败。'));
-  return result.data as FollowUpCheck;
+  const mailAccountId = source.mailAccountId || (provider === 'gmail' ? currentGmailReadAccountId() : '');
+  if (!mailAccountId) throw new Error('尚未确定该红人的邮箱账号。');
+  return readSharedFollowUp({ ...source, provider, mailAccountId });
 }
 
 export function FollowUpDraftProvider({ children }: { children: ReactNode }) {

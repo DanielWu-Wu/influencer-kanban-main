@@ -9,6 +9,16 @@ export const APP_RELEASE_LAST_SEEN_STORAGE_KEY = 'influencer-board-last-seen-rel
 
 export const APP_RELEASES: readonly AppRelease[] = [
   {
+    version: '1.2.7',
+    releasedAt: '2026-09-14',
+    title: '邮件读取与回复优化',
+    highlights: [
+      '邮件读取更高效：收件箱、待办、预翻译和开发信跟进共享读取结果，减少重复请求，降低 Gmail 触发限额的风险。',
+      '双邮箱发送更方便：Gmail 和腾讯企业邮箱的 AI 辅助回复、AI 模板起草均可在检查内容后确认直接发送。',
+      '回复内容可暂存：AI 辅助回复支持保存项目系统草稿，之后恢复继续编辑，不写入邮箱草稿箱。',
+    ],
+  },
+  {
     version: '1.2.6',
     releasedAt: '2026-09-04',
     title: '邮件回复体验优化',

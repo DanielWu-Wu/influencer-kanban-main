@@ -1,5 +1,7 @@
 'use client';
 
+import { sharedMailFetch as fetch } from '@/lib/shared-mail-read';
+
 import { useEffect, useRef, useState } from 'react';
 import { FileText, Loader2, Paperclip, Send, X } from 'lucide-react';
 import { Button } from '@/components/ui/button';

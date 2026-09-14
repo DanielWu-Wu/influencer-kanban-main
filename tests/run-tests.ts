@@ -9,6 +9,8 @@ import './email-language.test';
 import './gmail-ai-reply.test';
 import './gmail-reply-target.test';
 import './gmail-bilingual-draft.test';
+import './mail-reply-draft.test';
+import './shared-mail-read.test';
 import './gmail-compose-html.test';
 import './email-remote-content.test';
 import './isolated-email-document.test';

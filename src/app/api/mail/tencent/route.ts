@@ -13,6 +13,7 @@ import {
 } from '@/lib/mail-attachment-storage-server';
 import {
   getTencentThread,
+  getTencentMessageBody,
   invalidateTencentThreadCache,
   findTencentMessageByRfcMessageId,
   getTencentAttachment,
@@ -63,6 +64,15 @@ export async function GET(request: NextRequest) {
     const { appAuth, account, login } = await resolveRequestContext(request, mailAccountId);
     if (action === 'folders') {
       return NextResponse.json({ success: true, data: await listTencentFolders(login) });
+    }
+    if (action === 'messageBody') {
+      const folder = searchParams.get('folder') || '';
+      const uid = positiveInteger(searchParams.get('uid'), 0);
+      if (!folder || !uid) return NextResponse.json({ error: '缺少邮件定位信息。' }, { status: 400 });
+      return NextResponse.json({ success: true, data: await getTencentMessageBody({
+        login, account, folder, uid, rfcMessageId: searchParams.get('rfcMessageId') || undefined,
+        mailboxVersion: searchParams.get('mailboxVersion') || undefined,
+      }) });
     }
     if (action === 'thread') {
       const folder = searchParams.get('folder') || '';
@@ -155,7 +165,7 @@ export async function GET(request: NextRequest) {
       }
       return NextResponse.json({
         success: true,
-        data: await checkTencentFollowUp({ login, account, contactEmail, sentAt }),
+        data: await checkTencentFollowUp({ login, account, contactEmail, sentAt, metadataOnly: searchParams.get('metadataOnly') === '1' }),
       });
     }
     if (action === 'dailyTodos') {
@@ -167,6 +177,7 @@ export async function GET(request: NextRequest) {
           account,
           since: new Date(Date.now() - hours * 60 * 60 * 1000),
           maxResults: positiveInteger(searchParams.get('maxResults'), 50),
+          metadataOnly: searchParams.get('metadataOnly') === '1',
         }),
       });
     }

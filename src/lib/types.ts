@@ -238,6 +238,7 @@ export interface GmailAuth {
 }
 
 export interface GmailMessage {
+  mailboxVersion?: string;
   automated?: boolean;
   id: string;
   threadId: string;

@@ -4,6 +4,7 @@ import type { MailProvider } from '@/lib/mail-accounts';
 export type FollowUpStage = 2 | 3;
 
 export type FollowUpMessage = {
+  mailboxVersion?: string;
   id: string;
   threadId: string;
   labelIds?: string[];

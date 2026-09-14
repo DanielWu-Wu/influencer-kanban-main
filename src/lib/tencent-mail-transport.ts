@@ -1,4 +1,5 @@
 import type { MailAccount, MailDraftLocator } from './mail-accounts';
+import { sharedMailFetch as fetch } from './shared-mail-read';
 import type { EditableInlineImage } from './mail-draft-edit';
 import {
   removeMailAttachmentRefs,

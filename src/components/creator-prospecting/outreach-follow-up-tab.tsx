@@ -1,5 +1,7 @@
 'use client';
 
+import { readSharedFollowUp } from '@/lib/shared-mail-workflows';
+
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   AlertTriangle,
@@ -1071,18 +1073,7 @@ export function OutreachFollowUpTab({ settings, auth, onAuthRefresh }: Props) {
   const requestCheck = useCallback(async (record: FollowUpRecord) => {
     if (!record.email) throw new Error('该红人没有可用于检查的邮箱。');
     if (!record.mailAccountId || !record.provider) throw new Error('尚未确认该红人的邮件账号，请先在首封开发信中选择邮箱。');
-    const query = new URLSearchParams({
-      action: record.provider === 'tencent_exmail' ? 'followUp' : 'outreachFollowUp',
-      email: record.email,
-      sentAt: String(record.developmentDate),
-    });
-    if (record.provider === 'tencent_exmail') query.set('mailAccountId', record.mailAccountId);
-    const response = await fetch(`${record.provider === 'tencent_exmail' ? '/api/mail/tencent' : '/api/gmail'}?${query}`);
-    const result = await response.json();
-    if (!response.ok || !result.success) {
-      throw new Error([result.error, result.details].filter(Boolean).join(' ') || '检查对应邮箱回复失败。');
-    }
-    return result.data as FollowUpCheck;
+    return readSharedFollowUp({ ...record, provider: record.provider, mailAccountId: record.mailAccountId });
   }, []);
 
   const refreshGmailAuth = useCallback(async () => {

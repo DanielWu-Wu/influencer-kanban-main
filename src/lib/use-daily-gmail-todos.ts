@@ -1,5 +1,7 @@
 'use client';
 
+import { sharedMailFetch as fetch } from '@/lib/shared-mail-read';
+
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { loadCreatorResourceProfiles, type CreatorResourceProfile } from '@/lib/creator-resource-profile';
 import {
@@ -25,12 +27,14 @@ import {
 } from '@/lib/youtube-channel-avatar';
 import { useMailAccounts } from '@/components/mail-account-provider';
 import type { MailProvider } from '@/lib/mail-accounts';
+import { readSharedGmailDaily, readSharedTencentBody, SharedMailReadError } from '@/lib/shared-mail-workflows';
 import {
   selectDailyMailTranslationPrefetchCandidates,
   type MailTranslationPrefetchCandidate,
 } from '@/lib/gmail-translation-prefetch';
 
 type DailyGmailMessage = {
+  mailboxVersion?: string;
   messageId: string;
   threadId: string;
   from: string;
@@ -295,15 +299,14 @@ export function useDailyGmailTodos(settings: AppSettings, active = true) {
             throw new Error('当前 Gmail 授权不可用，请重新连接。');
           }
           await getAccessToken(force);
-          const requestDailyMessages = () => fetch('/api/gmail?action=daily-inbox&maxResults=50', { cache: 'no-store' });
-          let response = await requestDailyMessages();
-          if (response.status === 401) {
+          let messages;
+          try { messages = await readSharedGmailDaily(force); }
+          catch (error) {
+            if (!(error instanceof SharedMailReadError) || error.status !== 401) throw error;
             await getAccessToken(true);
-            response = await requestDailyMessages();
+            messages = await readSharedGmailDaily(true);
           }
-          const result = await response.json();
-          if (!response.ok || !result.success) throw new Error(String(result.error || '读取失败'));
-          return (Array.isArray(result.data) ? result.data : []).map((message: Omit<DailyGmailMessage, 'mailAccountId' | 'provider' | 'mailAddress'>) => ({
+          return messages.map((message) => ({
             ...message,
             mailAccountId: mailAccount.mailAccountId,
             provider: 'gmail' as const,
@@ -316,6 +319,7 @@ export function useDailyGmailTodos(settings: AppSettings, active = true) {
           mailAccountId: mailAccount.mailAccountId,
           hours: '72',
           maxResults: '50',
+          metadataOnly: '1',
         });
         const response = await fetch(`/api/mail/tencent?${params.toString()}`, { cache: 'no-store' });
         const result = await response.json();
@@ -334,6 +338,7 @@ export function useDailyGmailTodos(settings: AppSettings, active = true) {
           mailAddress: mailAccount.email,
           folderRef: String(message.folderRef || ''),
           providerMessageRef: String(message.providerMessageRef || ''),
+          mailboxVersion: String(message.mailboxVersion || '') || undefined,
           rfcMessageId: String(message.rfcMessageId || '') || undefined,
           inReplyTo: String(message.inReplyTo || '') || undefined,
           references: String(message.references || '') || undefined,
@@ -397,9 +402,33 @@ export function useDailyGmailTodos(settings: AppSettings, active = true) {
       }
       if (runId !== runIdRef.current) return;
       const profileByEmail = selectProfileByEmail(profiles);
+      // Only matched creators need complete bodies; summary/header text is never a translation body.
+      const bodyResults = await Promise.allSettled(messages.map(async (message) => {
+        if (message.provider === 'tencent_exmail' && profileByEmail.has(normalizeThreadContactEmail(message.from))) {
+          const body = await readSharedTencentBody(message.mailAccountId, message);
+          return { ...message, body, snippet: body.replace(/\s+/g, ' ').trim().slice(0, 240) };
+        }
+        return message;
+      }));
+      if (runId !== runIdRef.current) return;
+      const failedBodyAccounts = new Set<string>();
+      bodyResults.forEach((result, index) => {
+        if (result.status === 'fulfilled') messages[index] = result.value;
+        else {
+          failedBodyAccounts.add(messages[index].mailAccountId);
+          sourceErrors.push(result.reason instanceof Error ? result.reason.message : '部分完整正文读取失败');
+        }
+      });
+      initialStatuses.forEach((status) => {
+        if (failedBodyAccounts.has(status.mailAccountId)) {
+          status.state = 'cached';
+          status.error = '部分完整正文读取失败，本邮箱保留上次待办结果，请重试。';
+        }
+      });
       const summaryCache = summaryCacheRef.current;
       const completionCache = completionCacheRef.current;
       const matched = messages.flatMap((message) => {
+        if (failedBodyAccounts.has(message.mailAccountId)) return [];
         const profile = profileByEmail.get(normalizeThreadContactEmail(message.from));
         if (!profile) return [];
         const allowLegacyGmailCache = message.provider === 'gmail'

@@ -1,5 +1,7 @@
 'use client';
 
+import { sharedMailFetch as fetch } from '@/lib/shared-mail-read';
+
 import { useEffect, useState, type Dispatch, type SetStateAction } from 'react';
 import {
   AlertTriangle,

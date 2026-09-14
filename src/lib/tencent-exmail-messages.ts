@@ -259,6 +259,7 @@ export async function listTencentThreads(options: {
             mailAccountId: options.account.mailAccountId,
             providerMessageRef: String(item.uid),
             folderRef: folder,
+            mailboxVersion: client.mailbox ? String(client.mailbox.uidValidity) : undefined,
           };
           messages.push({
             id: threadId,
@@ -346,6 +347,10 @@ async function loadTencentThread(options: {
     };
     const parseFullMessage = async (folder: string, item: FetchMessageObject) => {
       if (!item.source) return null;
+      if (item.size && item.source.byteLength < item.size) {
+        warnings.add('部分邮件超过完整读取大小，未将截断内容当作完整正文。');
+        return null;
+      }
       const uid = item.uid;
       try {
         const parsed = await simpleParser(item.source, { skipHtmlToText: true });
@@ -394,6 +399,7 @@ async function loadTencentThread(options: {
             mailAccountId: options.account.mailAccountId,
             providerMessageRef: String(uid),
             folderRef: folder,
+            mailboxVersion: client.mailbox ? String(client.mailbox.uidValidity) : undefined,
           } satisfies GmailMessage,
         };
       } catch {
@@ -408,6 +414,7 @@ async function loadTencentThread(options: {
       for await (const item of client.fetch(uids, {
           uid: true,
           flags: true,
+          size: true,
           source: { maxLength: MAX_MESSAGE_BYTES },
           internalDate: true,
         }, { uid: true })) {
@@ -666,11 +673,44 @@ async function readTextStream(content: AsyncIterable<Buffer | string>) {
   return Buffer.concat(chunks).toString('utf8');
 }
 
+/** Complete translation body, without fetching unrelated conversation/attachment previews. */
+export async function getTencentMessageBody(options: {
+  login: TencentExmailLogin; account: MailAccount; folder: string; uid: number; rfcMessageId?: string; mailboxVersion?: string;
+}) {
+  return withTencentExmailClient(options.login, async (client) => {
+    await client.mailboxOpen(options.folder, { readOnly: true });
+    if (options.mailboxVersion && (!client.mailbox || String(client.mailbox.uidValidity) !== options.mailboxVersion)) {
+      throw new Error('邮件文件夹编号已更新，请刷新后重试，未复用旧正文。');
+    }
+    const item = await client.fetchOne(options.uid, { bodyStructure: true, headers: ['message-id'], size: true }, { uid: true });
+    if (!item || !item.headers) throw new Error('邮件不存在或已移动，请重新打开邮件。');
+    const parsed = await simpleParser(item.headers);
+    if (options.rfcMessageId && extractRfcMessageIds(options.rfcMessageId)[0] !== extractRfcMessageIds(parsed.messageId || '')[0]) {
+      throw new Error('邮件编号已变化，请刷新后重新打开，未复用旧正文。');
+    }
+    const part = selectTencentTranslationBodyPart(item.bodyStructure);
+    let body: string;
+    if (part?.part) {
+      const downloaded = await client.download(options.uid, part.part, { uid: true });
+      const text = await readTextStream(downloaded.content);
+      body = part.type.toLowerCase() === 'text/html' ? resolveMailTranslationBody('', text) : resolveMailTranslationBody(text);
+    } else {
+      if ((item.size || 0) > MAX_MESSAGE_BYTES) throw new Error('邮件超过安全读取大小，无法确认完整正文。');
+      const full = await client.fetchOne(options.uid, { source: { maxLength: MAX_MESSAGE_BYTES } }, { uid: true });
+      if (!full || !full.source) throw new Error('完整正文读取失败。');
+      const content = await simpleParser(full.source, { skipHtmlToText: true });
+      body = resolveMailTranslationBody(content.text || '', typeof content.html === 'string' ? content.html : '');
+    }
+    return { body, messageId: `${options.account.mailAccountId}:${options.folder}:${options.uid}` };
+  });
+}
+
 export async function listTencentDailyTodoMessages(options: {
   login: TencentExmailLogin;
   account: MailAccount;
   since: Date;
   maxResults?: number;
+  metadataOnly?: boolean;
 }) {
   return withTencentExmailClient(options.login, async (client) => {
     const folders = await client.list();
@@ -682,14 +722,18 @@ export async function listTencentDailyTodoMessages(options: {
     if (mapping.sent) {
       await client.mailboxOpen(mapping.sent, { readOnly: true });
       const sentUids = await client.search({ since: options.since }, { uid: true });
-      const recentSentUids = (sentUids || []).slice(-MAX_LIST_RESULTS);
+      if (options.metadataOnly && (sentUids || []).length > 500) throw new Error('近三天已发送邮件超过本轮安全上限，未能完整检查，请稍后重试。');
+      const recentSentUids = (sentUids || []).slice(-(options.metadataOnly ? 500 : MAX_LIST_RESULTS));
       if (recentSentUids.length) {
+        let readCount = 0;
         for await (const item of client.fetch(recentSentUids, {
           envelope: true,
           internalDate: true,
           headers: ['message-id', 'in-reply-to', 'references'],
         }, { uid: true })) {
+          readCount++;
           const parsed = item.headers ? await simpleParser(item.headers).catch(() => null) : null;
+          if (options.metadataOnly && !parsed) throw new Error('部分已发送邮件头读取失败，本轮保留旧结果。');
           recentSentItems.push({
             to: item.envelope?.to || [],
             date: new Date(resolveImapMessageTimestamp({
@@ -703,12 +747,14 @@ export async function listTencentDailyTodoMessages(options: {
               : String(parsed?.references || '') || undefined,
           });
         }
+        if (options.metadataOnly && readCount !== recentSentUids.length) throw new Error('已发送邮件未完整读取，本轮保留旧结果。');
       }
     }
 
     await client.mailboxOpen(inbox, { readOnly: true });
     const inboxUids = await client.search({ since: options.since }, { uid: true });
-    const recentInboxUids = (inboxUids || []).slice(-maxResults).reverse();
+    if (options.metadataOnly && (inboxUids || []).length > 500) throw new Error('近三天来信超过本轮安全上限，未能完整检查，请稍后重试。');
+    const recentInboxUids = (inboxUids || []).slice(-(options.metadataOnly ? 500 : maxResults)).reverse();
     const messages: Array<{
       messageId: string;
       threadId: string;
@@ -723,6 +769,7 @@ export async function listTencentDailyTodoMessages(options: {
       references?: string;
       folderRef: string;
       providerMessageRef: string;
+      mailboxVersion?: string;
     }> = [];
 
     const inboxMetadata: FetchMessageObject[] = [];
@@ -749,11 +796,18 @@ export async function listTencentDailyTodoMessages(options: {
       }
     }
 
+    if (options.metadataOnly && inboxMetadata.length !== recentInboxUids.length) throw new Error('来信索引未完整读取，本轮保留旧结果。');
     for (const item of inboxMetadata) {
       const uid = item.uid;
-      if (!item.headers) continue;
+      if (!item.headers) {
+        if (options.metadataOnly) throw new Error('部分来信邮件头读取失败，本轮保留旧结果。');
+        continue;
+      }
       const parsed = await simpleParser(item.headers).catch(() => null);
-      if (!parsed) continue;
+      if (!parsed) {
+        if (options.metadataOnly) throw new Error('部分来信无法解析，本轮保留旧结果。');
+        continue;
+      }
       const message = followUpMessageFromParsed({
         account: options.account,
         folder: inbox,
@@ -777,7 +831,9 @@ export async function listTencentDailyTodoMessages(options: {
       let body = '';
       const bodyPart = selectTencentTranslationBodyPart(item.bodyStructure);
       try {
-        if (bodyPart?.part) {
+        if (options.metadataOnly) {
+          // Body is loaded through the browser's shared complete-body cache only when needed.
+        } else if (bodyPart?.part) {
           const downloaded = await client.download(uid, bodyPart.part, {
             uid: true,
           });
@@ -809,6 +865,7 @@ export async function listTencentDailyTodoMessages(options: {
         references: message.references,
         folderRef: inbox,
         providerMessageRef: String(uid),
+        mailboxVersion: client.mailbox ? String(client.mailbox.uidValidity) : undefined,
       });
     }
     return messages.sort((left, right) => Date.parse(right.date) - Date.parse(left.date));
@@ -1103,6 +1160,7 @@ function followUpMessageFromParsed(options: {
   parsed: Awaited<ReturnType<typeof simpleParser>>;
   internalDate?: Date | string;
   labels: string[];
+  mailboxVersion?: string;
 }) : FollowUpMessage {
   const date = mailTimestampToIso(resolveImapMessageTimestamp({
     internalDate: options.internalDate,
@@ -1127,6 +1185,7 @@ function followUpMessageFromParsed(options: {
     body,
     providerMessageRef: String(options.uid),
     folderRef: options.folder,
+    mailboxVersion: options.mailboxVersion,
   };
 }
 
@@ -1149,6 +1208,7 @@ export async function checkTencentFollowUp(options: {
   account: MailAccount;
   contactEmail: string;
   sentAt: number;
+  metadataOnly?: boolean;
 }) : Promise<FollowUpCheck> {
   const contactEmail = options.contactEmail.trim().toLowerCase();
   return withTencentExmailClient(options.login, async (client) => {
@@ -1163,15 +1223,24 @@ export async function checkTencentFollowUp(options: {
         or: [{ from: contactEmail }, { to: contactEmail }],
         since: new Date(options.sentAt),
       }, { uid: true });
-      const recentUids = (uids || []).slice(-50);
+      if (options.metadataOnly && (uids || []).length > 500) throw new Error('往来邮件超过本轮安全上限，不能确认跟进状态。');
+      const recentUids = (uids || []).slice(-(options.metadataOnly ? 500 : 50));
+      const metadata = new Map<number, FetchMessageObject>();
+      if (options.metadataOnly && recentUids.length) {
+        for await (const item of client.fetch(recentUids, { uid: true, headers: true, internalDate: true }, { uid: true })) metadata.set(item.uid, item);
+        if (metadata.size !== recentUids.length) throw new Error('部分往来邮件未能读取，不能确认跟进状态。');
+      }
       for (const uid of recentUids) {
-        const item = await client.fetchOne(uid, {
+        const item = options.metadataOnly ? metadata.get(uid) : await client.fetchOne(uid, {
           uid: true,
           source: { maxLength: MAX_MESSAGE_BYTES },
           internalDate: true,
         }, { uid: true });
-        if (!item || !item.source) continue;
-        const parsed = await simpleParser(item.source);
+        if (!item || !(options.metadataOnly ? item.headers : item.source)) {
+          if (options.metadataOnly) throw new Error('部分往来邮件未能读取，不能确认跟进状态。');
+          continue;
+        }
+        const parsed = await simpleParser((options.metadataOnly ? item.headers : item.source)!);
         const message = followUpMessageFromParsed({
           account: options.account,
           folder,
@@ -1181,6 +1250,7 @@ export async function checkTencentFollowUp(options: {
           labels: [folder === mapping.sent ? 'SENT' : 'INBOX'],
         });
         if (new Date(message.date).getTime() >= options.sentAt) messages.push({ message, parsed });
+        message.mailboxVersion = client.mailbox ? String(client.mailbox.uidValidity) : undefined;
       }
     }
 

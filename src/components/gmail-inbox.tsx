@@ -1,5 +1,7 @@
 'use client';
 
+import { sharedMailFetch as fetch } from '@/lib/shared-mail-read';
+
 import { useCallback, useEffect, useRef, useState } from 'react';
 import {
   AlertCircle,
@@ -87,7 +89,7 @@ import { getMailThreadRowVisualState } from '@/lib/mail-read-state';
 const GMAIL_PAGE_SIZE = 50;
 const GMAIL_DETAIL_BATCH_SIZE = 16;
 const GMAIL_AUTO_REFRESH_MS = 60_000;
-const GMAIL_THREAD_DETAIL_CACHE_MS = 5 * 60_000;
+const GMAIL_THREAD_DETAIL_CACHE_MS = 60_000;
 const GMAIL_THREAD_PREFETCH_DELAY_MS = 180;
 const GMAIL_SEARCH_DEBOUNCE_MS = 400;
 const SUBJECT_TRANSLATION_BATCH_SIZE = 12;
@@ -139,6 +141,11 @@ if (typeof window !== 'undefined') {
   };
   window.addEventListener(ACCOUNT_SCOPE_CHANGED_EVENT, clearGmailCaches);
   window.addEventListener(GMAIL_AUTH_CACHE_RESET_EVENT, clearGmailCaches);
+  window.addEventListener('mail-read-invalidated', clearGmailCaches);
+  window.addEventListener('mail-thread-version-changed', (event) => {
+    const id = (event as CustomEvent<{ threadId: string }>).detail.threadId;
+    gmailThreadDetailCache.delete(gmailThreadCacheKey(id));
+  });
 }
 
 const MAILBOX_LABELS: Record<GmailMailbox, string> = {
@@ -535,12 +542,13 @@ async function fetchWithTimeout(
   input: RequestInfo | URL,
   init: RequestInit = {},
   timeoutMs = 15_000,
+  priority?: number,
 ) {
   const controller = new AbortController();
   const timeout = window.setTimeout(() => controller.abort(), timeoutMs);
 
   try {
-    return await fetch(input, { cache: 'no-store', ...init, signal: controller.signal });
+    return await fetch(input, { cache: 'no-store', ...init, signal: controller.signal }, { priority });
   } finally {
     window.clearTimeout(timeout);
   }
@@ -583,7 +591,7 @@ function cacheThreadDetail(thread: GmailThread, cacheKey = gmailThreadCacheKey(t
   });
 }
 
-async function fetchThreadDetailById(threadId: string, accessToken: string) {
+async function fetchThreadDetailById(threadId: string, accessToken: string, priority = 0) {
   const cacheKey = gmailThreadCacheKey(threadId);
   const cached = gmailThreadDetailCache.get(cacheKey);
   if (cached && Date.now() - cached.fetchedAt < GMAIL_THREAD_DETAIL_CACHE_MS) return cached.thread;
@@ -597,6 +605,7 @@ async function fetchThreadDetailById(threadId: string, accessToken: string) {
       `https://gmail.googleapis.com/gmail/v1/users/me/threads/${threadId}?format=full`,
       { headers: { Authorization: `Bearer ${accessToken}` } },
       20_000,
+      priority,
     );
     if (!response.ok) {
       const result = await response.json().catch(() => ({}));
@@ -623,10 +632,10 @@ async function fetchThreadDetailById(threadId: string, accessToken: string) {
   }
 }
 
-async function fetchThreadDetail(thread: GmailThread, accessToken: string) {
+async function fetchThreadDetail(thread: GmailThread, accessToken: string, priority = 0) {
   const cached = readCachedThreadDetail(thread);
   if (cached) return cached;
-  return fetchThreadDetailById(thread.id, accessToken);
+  return fetchThreadDetailById(thread.id, accessToken, priority);
 }
 
 async function hydrateInlineAttachments(thread: GmailThread, accessToken: string) {
@@ -1037,7 +1046,7 @@ export function GmailInbox({
           publishInboxMailSnapshot({
             accountScope: requestAccountScope, provider: 'gmail',
             mailAccountId: `gmail:${requestMailAddress}`, mailAddress: requestMailAddress,
-            threads: [], loadThread: (thread) => fetchThreadDetail(thread, accessToken),
+            threads: [], loadThread: (thread) => fetchThreadDetail(thread, accessToken, 2),
           });
         }
         notifyPrimaryInboxRefreshed(mailbox, category, isGlobalSearch);
@@ -1062,6 +1071,10 @@ export function GmailInbox({
           }),
         );
         if (!isCurrentRequest()) return;
+
+        if (batchResults.some((thread) => !thread)) {
+          throw new Error('部分邮件未能读取，本轮未完成更新；已保留上次列表，请稍后重试。');
+        }
 
         const parsedBatch = await Promise.all(
           batchResults
@@ -1097,7 +1110,7 @@ export function GmailInbox({
           accountScope: requestAccountScope, provider: 'gmail',
           mailAccountId: `gmail:${requestMailAddress}`, mailAddress: requestMailAddress,
           threads: sortedThreads,
-          loadThread: (thread) => fetchThreadDetail(thread, accessToken),
+          loadThread: (thread) => fetchThreadDetail(thread, accessToken, 2),
         });
       }
       notifyPrimaryInboxRefreshed(mailbox, category, isGlobalSearch);

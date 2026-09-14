@@ -1,6 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { repairTextEncoding } from '@/lib/email-text';
-import { readGmailMessageBody } from '@/lib/mail-translation-body';
+import { parseSharedGmailMessage as parseHistoryMessage } from '@/lib/gmail-history-message';
 import { classifyFollowUpConversation } from '@/lib/outreach-follow-up';
 import { containsIgnoredGmailContactEmail } from '@/lib/gmail-thread-contact';
 import { refreshStoredGmailAuth } from '@/lib/gmail-cloud-auth';
@@ -8,12 +7,6 @@ import { getRequestUser } from '@/lib/supabase/server';
 import { resolveLatestGmailAnswerAt } from '@/lib/daily-gmail-todos';
 import { selectLatestGmailTranslationCandidate } from '@/lib/gmail-translation-candidates';
 import { wrapGmailDefaultEmailHtml } from '@/lib/gmail-compose-html';
-import {
-  mailTimestampToIso,
-  resolveGmailMessageTimestamp,
-} from '@/lib/mail-message-time';
-
-type GmailHeader = { name: string; value: string };
 type InlineImagePayload = {
   contentId?: string;
   fileName?: string;
@@ -94,62 +87,10 @@ function shouldRetryGmailDraft(status: number, details: string) {
   ].some((keyword) => normalized.includes(keyword));
 }
 
-function getHeader(headers: GmailHeader[] = [], name: string) {
-  return headers.find((header) => header.name.toLowerCase() === name.toLowerCase())?.value || '';
-}
-
 function getEmailAddress(value: string) {
   return value.match(/<([^>]+)>/)?.[1]?.trim().toLowerCase()
     || value.match(/[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}/i)?.[0]?.toLowerCase()
     || '';
-}
-
-function isAutomatedReply(headers: GmailHeader[], subject: string, from: string) {
-  const autoSubmitted = getHeader(headers, 'Auto-Submitted').toLowerCase();
-  const precedence = getHeader(headers, 'Precedence').toLowerCase();
-  const normalized = `${subject} ${from}`.toLowerCase();
-  return autoSubmitted && autoSubmitted !== 'no'
-    || ['bulk', 'junk', 'list', 'auto_reply'].includes(precedence)
-    || /(automatic reply|auto[- ]?reply|out of office|autoreply|vacation reply|自动回复)/i.test(normalized);
-}
-
-function isDeliveryFailure(subject: string, from: string) {
-  const normalized = `${subject} ${from}`.toLowerCase();
-  return /(mailer-daemon|postmaster|delivery status notification|undeliverable|delivery failed|delivery failure|地址不存在|投递失败)/i.test(normalized);
-}
-
-function parseHistoryMessage(message: Record<string, unknown>) {
-  const payload = (message.payload || {}) as Record<string, unknown>;
-  const headers = (payload.headers as GmailHeader[]) || [];
-  const { body } = readGmailMessageBody(payload);
-  const labelIds = Array.isArray(message.labelIds)
-    ? message.labelIds.map((label) => String(label || ''))
-    : [];
-
-  return {
-    id: String(message.id || ''),
-    threadId: String(message.threadId || ''),
-    labelIds,
-    mimeType: String(payload.mimeType || ''),
-    rfcMessageId: getHeader(headers, 'Message-ID'),
-    inReplyTo: getHeader(headers, 'In-Reply-To'),
-    references: getHeader(headers, 'References'),
-    subject: getHeader(headers, 'Subject') || '无主题',
-    from: getHeader(headers, 'From'),
-    to: getHeader(headers, 'To'),
-    cc: getHeader(headers, 'Cc'),
-    bcc: getHeader(headers, 'Bcc'),
-    replyTo: getHeader(headers, 'Reply-To'),
-    date: mailTimestampToIso(resolveGmailMessageTimestamp({
-      headers,
-      internalDate: message.internalDate,
-      labelIds,
-    })),
-    snippet: repairTextEncoding(String(message.snippet || '')),
-    body,
-    automated: isAutomatedReply(headers, getHeader(headers, 'Subject'), getHeader(headers, 'From')),
-    deliveryFailure: isDeliveryFailure(getHeader(headers, 'Subject'), getHeader(headers, 'From')),
-  };
 }
 
 // Gmail API 代理 - 获取邮件列表和详情
@@ -160,12 +101,37 @@ export async function GET(request: NextRequest) {
     const { searchParams } = new URL(request.url);
     const action = searchParams.get('action'); // 'threads' | 'message' | 'profile'
     const messageId = searchParams.get('messageId');
-    const { accessToken } = await refreshStoredGmailAuth(appAuth.supabase);
+    const { accessToken, email: connectedEmail } = await refreshStoredGmailAuth(appAuth.supabase);
+    const requestedAccount = searchParams.get('mailAccountId');
+    if (requestedAccount && requestedAccount !== `gmail:${connectedEmail?.trim().toLowerCase() || ''}`) {
+      return NextResponse.json({ error: '当前 Gmail 账号已变化，请重新打开对应邮箱。' }, { status: 409 });
+    }
 
     const headers = {
       'Authorization': `Bearer ${accessToken}`,
       'Content-Type': 'application/json',
     };
+
+    // Browser coordinator discovers IDs first, then shares complete thread reads across consumers.
+    if (action === 'readReferences') {
+      const kind = searchParams.get('kind');
+      const contact = searchParams.get('email')?.trim().toLowerCase() || '';
+      const sentAt = Number(searchParams.get('sentAt'));
+      if (kind !== 'daily' && kind !== 'followUp') return NextResponse.json({ error: '不支持的查询。' }, { status: 400 });
+      if (kind === 'followUp' && (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(contact) || !Number.isFinite(sentAt) || sentAt <= 0 || !Number.isFinite(new Date(sentAt).getTime()))) {
+        return NextResponse.json({ error: '联系人或首封日期无效。' }, { status: 400 });
+      }
+      const q = kind === 'daily' ? '{in:inbox in:sent} newer_than:3d -category:promotions -category:social'
+        : `{from:${contact} to:${contact}} after:${new Date(sentAt).toISOString().slice(0, 10).replace(/-/g, '/')}`;
+      const params = new URLSearchParams({ maxResults: '50', q });
+      const pageToken = searchParams.get('pageToken');
+      if (pageToken) params.set('pageToken', pageToken);
+      const collection = kind === 'daily' ? 'threads' : 'messages';
+      const response = await fetch(`https://gmail.googleapis.com/gmail/v1/users/me/${collection}?${params}`, { headers });
+      const data = await response.json();
+      if (!response.ok) return NextResponse.json({ error: '读取邮件索引失败', details: JSON.stringify(data) }, { status: response.status });
+      return NextResponse.json({ success: true, data: { references: data[collection] || [], nextPageToken: data.nextPageToken || null } });
+    }
 
     if (action === 'profile') {
       const res = await fetch('https://gmail.googleapis.com/gmail/v1/users/me/profile', { headers });
@@ -348,8 +314,9 @@ export async function GET(request: NextRequest) {
       if (!threadId) {
         return NextResponse.json({ error: '缺少 threadId' }, { status: 400 });
       }
+      const format = searchParams.get('format') === 'metadata' ? 'metadata' : 'full';
       const res = await fetch(
-        `https://gmail.googleapis.com/gmail/v1/users/me/threads/${threadId}?format=full`,
+        `https://gmail.googleapis.com/gmail/v1/users/me/threads/${encodeURIComponent(threadId)}?format=${format}`,
         { headers }
       );
       if (!res.ok) {
