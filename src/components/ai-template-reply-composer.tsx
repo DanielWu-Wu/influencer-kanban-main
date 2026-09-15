@@ -1,6 +1,7 @@
 'use client';
 
 import { sharedMailFetch as fetch } from '@/lib/shared-mail-read';
+import { WorkspaceRequestError } from '@/lib/workspace-request';
 
 import { useEffect, useMemo, useRef, useState } from 'react';
 import {
@@ -607,6 +608,7 @@ export function AITemplateReplyComposer({
       let finalResult: TemplateSuggestion | null = null;
       let streamError = '';
       let streamedBody = '';
+      let streamAccepted = false;
       setStage('正在生成外文邮件');
       report('正在生成外文邮件', undefined, EMAIL_GENERATION_PROGRESS.generatingBody);
       try {
@@ -617,6 +619,7 @@ export function AITemplateReplyComposer({
           body: JSON.stringify(baseAIPayload(history, selectedTemplate, generationTargetLang)),
         });
         if (!response.ok || !response.body) throw new Error(`流式接口暂不可用 (${response.status})`);
+        streamAccepted = true;
         const reader = response.body.getReader();
         const decoder = new TextDecoder();
         let buffer = '';
@@ -665,6 +668,8 @@ export function AITemplateReplyComposer({
         if (!finalResult) throw new Error('流式生成未返回完整草稿');
       } catch (streamFailure) {
         if (controller.signal.aborted) return;
+        if (streamFailure instanceof WorkspaceRequestError) throw streamFailure;
+        if (streamAccepted) throw new WorkspaceRequestError('生成连接中断，已保留生成前的编辑内容，请重试。');
         console.warn('[AI template reply stream fallback]', streamFailure);
         setStage('正在生成外文邮件');
         report(

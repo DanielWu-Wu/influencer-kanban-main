@@ -13,7 +13,7 @@ import {
 } from '@/lib/gmail-ai-reply';
 import { buildGmailTemplateDraftResult } from '@/lib/gmail-bilingual-draft';
 import { requireOwnedMailAccount } from '@/lib/mail-account-server';
-import { getRequestUser } from '@/lib/supabase/server';
+import { getRequestUser, authorizeWorkspaceRequest } from '@/lib/supabase/server';
 import { getUserSecret } from '@/lib/user-private-storage';
 
 type ChatMessage = {
@@ -177,9 +177,10 @@ function sseEvent(event: string, data: unknown) {
 export async function POST(request: NextRequest) {
   const requestStartedAt = performance.now();
   const authStartedAt = performance.now();
-  const appAuth = await getRequestUser(request);
+  const authResult = await authorizeWorkspaceRequest(request);
+  if (!authResult.ok) return NextResponse.json(authResult.body, { status: authResult.status });
+  const appAuth = authResult.account;
   const authMs = Math.round(performance.now() - authStartedAt);
-  if (!appAuth) return NextResponse.json({ error: '未登录或账号无权使用 AI。' }, { status: 401 });
   const body = await request.json().catch(() => ({})) as Record<string, unknown>;
   let validatedContext: ReturnType<typeof validateMailAIThreadContext>;
   try {

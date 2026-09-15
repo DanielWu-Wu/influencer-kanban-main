@@ -46,12 +46,16 @@ export type MailReplySystemDraft = {
   userIdeas: string;
   targetLanguage: string;
   targetLanguageName: string;
+  targetLanguageNeedsConfirmation?: boolean;
   tone: 'friendly' | 'formal' | 'casual';
   snapshot: GmailBilingualDraftSnapshot | null;
   confirmedForeign: GmailBilingualDraftSnapshot | null;
   hasSuggestion: boolean;
   strategyEditing: boolean;
   translationEditing: boolean;
+  editedAt?: string;
+  sentAt?: string;
+  attachmentWarning?: string;
   attachments: Array<{ name: string; type: string; lastModified: number; base64: string }>;
 };
 
@@ -86,6 +90,9 @@ export function isMailReplySystemDraft(value: unknown): value is MailReplySystem
     )
   );
   return item.version === 1 && isMailReplyDraftIdentity(item.identity)
+    && [item.editedAt, item.sentAt].every((value) => value === undefined || (typeof value === 'string' && Number.isFinite(Date.parse(value))))
+    && (item.attachmentWarning === undefined || typeof item.attachmentWarning === 'string')
+    && (item.targetLanguageNeedsConfirmation === undefined || typeof item.targetLanguageNeedsConfirmation === 'boolean')
     && ['foreignBody', 'chineseBody', 'userIdeas', 'targetLanguage', 'targetLanguageName'].every(
       (key) => typeof (item as unknown as Record<string, unknown>)[key] === 'string',
     ) && ['friendly', 'formal', 'casual'].includes(item.tone)

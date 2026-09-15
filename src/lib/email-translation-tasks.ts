@@ -1,3 +1,5 @@
+import { workspaceFetch as fetch } from './workspace-request';
+
 export const EMAIL_TRANSLATION_RETRY_OPERATION = 'translate_chinese_to_foreign';
 
 export type EmailTranslationSource =

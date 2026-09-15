@@ -488,7 +488,7 @@ export default function DashboardPage() {
       {account && accountIssue?.kind === 'unavailable' && (
         <div className="fixed left-1/2 top-17 z-[70] flex max-w-[calc(100vw-2rem)] -translate-x-1/2 items-center gap-3 rounded-lg border border-amber-200 bg-amber-50/95 px-4 py-2 text-sm text-amber-900 shadow-lg backdrop-blur-sm">
           <TriangleAlert className="h-4 w-4 shrink-0" />
-          <span className="truncate">账号服务连接异常，当前工作台已保留，将继续自动重试。</span>
+          <span className="truncate">连接暂时失败，当前内容已保留，请重试。</span>
           <Button
             size="sm"
             variant="outline"

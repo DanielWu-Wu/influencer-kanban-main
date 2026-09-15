@@ -1,8 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 import {
   APP_SESSION_COOKIE,
-  createAuthenticatedServerClient,
-  verifyAccessTokenResult,
+  getRequestAccountResult,
 } from '@/lib/supabase/server';
 
 export async function POST(request: NextRequest) {
@@ -11,7 +10,9 @@ export async function POST(request: NextRequest) {
     return NextResponse.json({ error: '缺少登录凭证。' }, { status: 400 });
   }
 
-  const verification = await verifyAccessTokenResult(accessToken, 'cloud-session');
+  const verification = await getRequestAccountResult(new NextRequest(request.url, {
+    headers: { Authorization: `Bearer ${accessToken}` },
+  }));
   if (verification.status === 'unavailable') {
     return NextResponse.json({
       success: false,
@@ -19,39 +20,21 @@ export async function POST(request: NextRequest) {
       error: '账号服务暂时不可用，请稍后重试。',
     }, { status: 503 });
   }
-  if (verification.status !== 'ok') {
+  if (verification.status === 'unauthenticated') {
     return NextResponse.json({
       success: false,
       code: 'SESSION_INVALID',
       error: '登录凭证无效。',
     }, { status: 401 });
   }
-  const { user } = verification;
-
-  const userClient = createAuthenticatedServerClient(accessToken);
-  const { data: profile, error: profileError } = await userClient
-    .from('account_profiles')
-    .select('status,must_change_password')
-    .eq('user_id', user.id)
-    .maybeSingle();
-  if (profileError) {
-    console.error('[account-auth:cloud-session] Account profile lookup failed', {
-      code: profileError.code,
-      message: profileError.message.slice(0, 240),
-    });
-    return NextResponse.json({
-      success: false,
-      code: 'ACCOUNT_SERVICE_UNAVAILABLE',
-      error: '账号服务暂时不可用，请稍后重试。',
-    }, { status: 503 });
-  }
-  if (!profile) {
+  if (verification.status === 'not_found') {
     return NextResponse.json({
       success: false,
       code: 'ACCOUNT_NOT_PROVISIONED',
       error: '账号尚未由管理员开通。',
     }, { status: 403 });
   }
+  const profile = verification.account.profile;
   if (profile.status !== 'active') {
     return NextResponse.json({
       success: false,
@@ -60,7 +43,7 @@ export async function POST(request: NextRequest) {
     }, { status: 403 });
   }
 
-  const response = NextResponse.json({ success: true });
+  const response = NextResponse.json({ success: true, data: profile });
   response.cookies.set(APP_SESSION_COOKIE, accessToken, {
     httpOnly: true,
     secure: process.env.NODE_ENV === 'production',

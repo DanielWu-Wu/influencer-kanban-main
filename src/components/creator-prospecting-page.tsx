@@ -1,6 +1,7 @@
 'use client';
 
 import { sharedMailFetch as fetch } from '@/lib/shared-mail-read';
+import { WorkspaceRequestError } from '@/lib/workspace-request';
 
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
@@ -3156,6 +3157,7 @@ export function CreatorProspectingPage({
       error: undefined,
         });
         let streamUiTimeout: number | undefined;
+        let streamAccepted = false;
         try {
       const response = await fetch('/api/ai/outreach-stream', {
         method: 'POST',
@@ -3164,6 +3166,7 @@ export function CreatorProspectingPage({
         body: JSON.stringify(requestBody),
       });
       if (!response.ok || !response.body) throw new Error('流式生成暂不可用，正在切换到普通生成。');
+      streamAccepted = true;
 
       const reader = response.body.getReader();
       const decoder = new TextDecoder();
@@ -3278,6 +3281,11 @@ export function CreatorProspectingPage({
         streamUiTimeout = undefined;
       }
       if (signal.aborted) return undefined;
+      if (error instanceof WorkspaceRequestError || streamAccepted) {
+        const failure = error instanceof WorkspaceRequestError ? error : new WorkspaceRequestError('生成连接中断，请检查已接收的内容后重试。');
+        updateProspect(prospect.id, { outreachGenerationStage: undefined, generationError: failure.message });
+        throw failure;
+      }
       try {
         updateProspect(prospect.id, { outreachGenerationStage: 'finalizing' });
         report(

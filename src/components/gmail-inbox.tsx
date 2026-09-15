@@ -1,6 +1,6 @@
 'use client';
 
-import { sharedMailFetch as fetch } from '@/lib/shared-mail-read';
+import { sharedMailFetch as fetch, mailReads, currentGmailReadScope, MAIL_FLAGS_CHANGED_EVENT } from '@/lib/shared-mail-read';
 
 import { useCallback, useEffect, useRef, useState } from 'react';
 import {
@@ -116,6 +116,7 @@ interface GmailInboxProps {
   mailbox: GmailMailbox;
   category: GmailCategory;
   refreshKey?: number;
+  detailRetryKey?: number;
   compact?: boolean;
   avatarOnly?: boolean;
   openThreadRequest?: { threadId: string; requestId: number; previewThread?: GmailThread };
@@ -142,6 +143,11 @@ if (typeof window !== 'undefined') {
   window.addEventListener(ACCOUNT_SCOPE_CHANGED_EVENT, clearGmailCaches);
   window.addEventListener(GMAIL_AUTH_CACHE_RESET_EVENT, clearGmailCaches);
   window.addEventListener('mail-read-invalidated', clearGmailCaches);
+  window.addEventListener(MAIL_FLAGS_CHANGED_EVENT, (event) => {
+    const id = (event as CustomEvent<{ threadId: string }>).detail.threadId;
+    gmailThreadDetailCache.delete(gmailThreadCacheKey(id));
+    clearGmailInboxCache();
+  });
   window.addEventListener('mail-thread-version-changed', (event) => {
     const id = (event as CustomEvent<{ threadId: string }>).detail.threadId;
     gmailThreadDetailCache.delete(gmailThreadCacheKey(id));
@@ -544,14 +550,8 @@ async function fetchWithTimeout(
   timeoutMs = 15_000,
   priority?: number,
 ) {
-  const controller = new AbortController();
-  const timeout = window.setTimeout(() => controller.abort(), timeoutMs);
-
-  try {
-    return await fetch(input, { cache: 'no-store', ...init, signal: controller.signal }, { priority });
-  } finally {
-    window.clearTimeout(timeout);
-  }
+  // The shared layer starts this timeout only when the network request starts.
+  return fetch(input, { cache: 'no-store', ...init }, { priority, timeoutMs });
 }
 
 function readCachedThreadDetail(thread: GmailThread) {
@@ -592,6 +592,7 @@ function cacheThreadDetail(thread: GmailThread, cacheKey = gmailThreadCacheKey(t
 }
 
 async function fetchThreadDetailById(threadId: string, accessToken: string, priority = 0) {
+  mailReads.promote(currentGmailReadScope(), `gmail:threads/${threadId}:full`, priority);
   const cacheKey = gmailThreadCacheKey(threadId);
   const cached = gmailThreadDetailCache.get(cacheKey);
   if (cached && Date.now() - cached.fetchedAt < GMAIL_THREAD_DETAIL_CACHE_MS) return cached.thread;
@@ -604,7 +605,7 @@ async function fetchThreadDetailById(threadId: string, accessToken: string, prio
     const response = await fetchWithTimeout(
       `https://gmail.googleapis.com/gmail/v1/users/me/threads/${threadId}?format=full`,
       { headers: { Authorization: `Bearer ${accessToken}` } },
-      20_000,
+      40_000,
       priority,
     );
     if (!response.ok) {
@@ -681,6 +682,7 @@ export function GmailInbox({
   mailbox,
   category,
   refreshKey = 0,
+  detailRetryKey = 0,
   compact = true,
   avatarOnly = false,
   openThreadRequest,
@@ -704,6 +706,7 @@ export function GmailInbox({
   const openingThreadRunRef = useRef(0);
   const handledOpenThreadRequestRef = useRef(0);
   const handleOpenThreadRef = useRef<(thread: GmailThread, requestId?: number) => Promise<void>>(async () => undefined);
+  const handledRetryKeyRef = useRef(detailRetryKey);
   const accountCacheScopeRef = useRef(getAccountCacheScope());
   const currentInboxCacheKeyRef = useRef<string | null>(null);
   const threadPrefetchTimerRef = useRef<number | null>(null);
@@ -1580,7 +1583,7 @@ export function GmailInbox({
     threadPrefetchTimerRef.current = window.setTimeout(() => {
       threadPrefetchTimerRef.current = null;
       void getAccessToken()
-        .then((accessToken) => fetchThreadDetail(thread, accessToken))
+        .then((accessToken) => fetchThreadDetail(thread, accessToken, 2))
         .catch(() => {
           // Prefetch is opportunistic; a normal click will retry and report failures.
         });
@@ -1672,6 +1675,12 @@ export function GmailInbox({
   useEffect(() => {
     handleOpenThreadRef.current = handleOpenThread;
   });
+
+  useEffect(() => {
+    if (handledRetryKeyRef.current === detailRetryKey) return;
+    handledRetryKeyRef.current = detailRetryKey;
+    if (updatedThread && threadDetailVisible) void handleOpenThreadRef.current(updatedThread);
+  }, [detailRetryKey, updatedThread, threadDetailVisible]);
 
   useEffect(() => {
     if (

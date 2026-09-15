@@ -1,6 +1,7 @@
 'use client';
 
-import { createContext, Fragment, useCallback, useContext, useEffect, useMemo, useRef, useState } from 'react';
+import { createContext, Fragment, useCallback, useContext, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
+import { registerWorkspaceSession, waitForWorkspace } from '@/lib/workspace-request';
 import type { Session, SupabaseClient, User } from '@supabase/supabase-js';
 import { getSupabaseBrowserClient, getSupabaseConfig } from '@/lib/supabase/client';
 import type {
@@ -11,7 +12,6 @@ import type {
 } from '@/lib/account-types';
 import { setAccountCacheScope } from '@/lib/account-cache-scope';
 import {
-  classifyAccountFailure,
   classifyAuthVerificationError,
   shouldPreserveLastAccount,
   shouldRefreshAccountSession,
@@ -44,18 +44,12 @@ type AccountLoadResult =
   | { status: 'success'; account: AccountProfile }
   | { status: 'invalid' | 'unavailable'; issue: AccountIssue };
 
-const ACCOUNT_ERROR_CODES = new Set<AccountErrorCode>([
-  'ACCOUNT_DISABLED',
-  'ACCOUNT_NOT_PROVISIONED',
-  'ACCOUNT_SERVICE_UNAVAILABLE',
-  'SESSION_INVALID',
-]);
-
-async function syncServerSession(session: Session | null) {
+async function syncServerSession(session: Session | null, signal?: AbortSignal) {
   return await fetch('/api/cloud/session', {
     method: session ? 'POST' : 'DELETE',
     headers: session ? { 'Content-Type': 'application/json' } : undefined,
     body: session ? JSON.stringify({ accessToken: session.access_token }) : undefined,
+    signal,
   }).catch(() => undefined);
 }
 
@@ -77,13 +71,11 @@ function createInvalidSessionIssue(message = '登录状态已失效，请重新�
 
 async function readAccountIssue(response: Response): Promise<AccountIssue> {
   const result = await response.json().catch(() => null) as Partial<AccountMeResponse> | null;
-  const kind = classifyAccountFailure(response.status);
   const candidateCode = result && 'code' in result ? result.code : undefined;
-  const code = typeof candidateCode === 'string' && ACCOUNT_ERROR_CODES.has(candidateCode as AccountErrorCode)
-    ? candidateCode as AccountErrorCode
-    : kind === 'unavailable'
-      ? 'ACCOUNT_SERVICE_UNAVAILABLE'
-      : 'SESSION_INVALID';
+  const kind = (response.status === 401 && candidateCode === 'SESSION_INVALID')
+    || (response.status === 403 && (candidateCode === 'ACCOUNT_DISABLED' || candidateCode === 'ACCOUNT_NOT_PROVISIONED'))
+    ? 'invalid' : 'unavailable';
+  const code: AccountErrorCode = kind === 'unavailable' ? 'ACCOUNT_SERVICE_UNAVAILABLE' : candidateCode as AccountErrorCode;
   const candidateMessage = result && 'error' in result ? result.error : undefined;
   return {
     kind,
@@ -96,24 +88,16 @@ async function readAccountIssue(response: Response): Promise<AccountIssue> {
   };
 }
 
-async function loadAccount(session: Session): Promise<AccountLoadResult> {
+async function loadAccount(session: Session, signal: AbortSignal): Promise<AccountLoadResult> {
   try {
-    const sessionResponse = await syncServerSession(session);
+    const sessionResponse = await syncServerSession(session, signal);
     if (!sessionResponse) return { status: 'unavailable', issue: createUnavailableIssue() };
     if (!sessionResponse.ok) {
       const issue = await readAccountIssue(sessionResponse);
       return { status: issue.kind, issue };
     }
 
-    const response = await fetch('/api/account/me', {
-      cache: 'no-store',
-      headers: { Authorization: `Bearer ${session.access_token}` },
-    });
-    if (!response.ok) {
-      const issue = await readAccountIssue(response);
-      return { status: issue.kind, issue };
-    }
-    const result = await response.json().catch(() => null) as AccountMeResponse | null;
+    const result = await sessionResponse.json().catch(() => null) as AccountMeResponse | null;
     if (result?.success) return { status: 'success', account: result.data };
     return { status: 'unavailable', issue: createUnavailableIssue('账号资料返回异常，请稍后重试。') };
   } catch {
@@ -133,8 +117,9 @@ type SessionRefreshResult =
 async function refreshAccountSession(
   supabase: SupabaseClient,
   expectedUserId: string,
+  signal: AbortSignal,
 ): Promise<SessionRefreshResult> {
-  const refreshed = await supabase.auth.refreshSession().catch(() => null);
+  const refreshed = await waitForWorkspace(supabase.auth.refreshSession(), signal).catch(() => null);
   if (!refreshed) return { status: 'unavailable', issue: createUnavailableIssue() };
   if (refreshed.data.session?.user.id === expectedUserId) {
     return { status: 'success', session: refreshed.data.session };
@@ -152,16 +137,17 @@ async function loadAccountWithSessionRecovery(
   supabase: SupabaseClient,
   session: Session,
   options: EnsureWorkspaceSessionOptions = {},
+  signal: AbortSignal,
 ): Promise<AccountSessionLoadResult> {
   let latestSession = session;
-  const currentSession = await supabase.auth.getSession().catch(() => ({ data: { session: null } }));
+  const currentSession = await waitForWorkspace(supabase.auth.getSession(), signal);
   if (currentSession.data.session?.user.id === session.user.id) {
     latestSession = currentSession.data.session;
   }
 
   let refreshedOnce = false;
   if (options.forceRefresh || shouldRefreshWorkspaceSession(latestSession.expires_at)) {
-    const refreshed = await refreshAccountSession(supabase, session.user.id);
+    const refreshed = await refreshAccountSession(supabase, session.user.id, signal);
     if (refreshed.status !== 'success') {
       return { session: latestSession, result: { status: refreshed.status, issue: refreshed.issue } };
     }
@@ -169,7 +155,7 @@ async function loadAccountWithSessionRecovery(
     refreshedOnce = true;
   }
 
-  let result = await loadAccount(latestSession);
+  let result = await loadAccount(latestSession, signal);
   if (
     refreshedOnce
     || result.status !== 'invalid'
@@ -178,12 +164,12 @@ async function loadAccountWithSessionRecovery(
     return { session: latestSession, result };
   }
 
-  const refreshed = await refreshAccountSession(supabase, session.user.id);
+  const refreshed = await refreshAccountSession(supabase, session.user.id, signal);
   if (refreshed.status !== 'success') {
     return { session: latestSession, result: { status: refreshed.status, issue: refreshed.issue } };
   }
   latestSession = refreshed.session;
-  result = await loadAccount(latestSession);
+  result = await loadAccount(latestSession, signal);
   return { session: latestSession, result };
 }
 
@@ -201,6 +187,8 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   const sessionRecoveryRef = useRef<{
     userId: string | null;
     request: Promise<Session | null>;
+    forceRefresh: boolean;
+    controller: AbortController;
   } | null>(null);
   const readySessionRef = useRef({
     readyAt: 0,
@@ -252,6 +240,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       existing
       && (existing.userId === null || existing.userId === knownSession?.user.id)
     ) {
+      if (options.forceRefresh) existing.forceRefresh = true;
       return existing.request;
     }
     if (
@@ -269,25 +258,52 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     }
 
     const recoveryUserId = knownSession?.user.id || null;
+    const requestVersion = ++accountRequestVersion.current;
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), 15_000);
+    const job = { userId: recoveryUserId, forceRefresh: Boolean(options.forceRefresh), controller, request: null as unknown as Promise<Session | null> };
     const request = (async () => {
       let currentSession = knownSession;
       if (!currentSession) {
-        const current = await supabase.auth.getSession().catch(() => null);
+        const current = await waitForWorkspace(supabase.auth.getSession(), controller.signal);
         currentSession = current?.data.session || null;
       }
+      if (requestVersion !== accountRequestVersion.current) return null;
       if (!currentSession) return null;
 
       sessionRef.current = currentSession;
       setSession(currentSession);
-      const requestVersion = ++accountRequestVersion.current;
-      const loaded = await loadAccountWithSessionRecovery(supabase, currentSession, options);
-      if (sessionRef.current?.user.id !== loaded.session.user.id) return sessionRef.current;
-      if (requestVersion !== accountRequestVersion.current) return sessionRef.current;
+      let loaded: AccountSessionLoadResult | undefined;
+      let settled = false;
+      for (let attempt = 0; attempt < 3; attempt += 1) {
+        if (!currentSession) return null;
+        const beforeToken = currentSession.access_token;
+        const forceRefresh = job.forceRefresh;
+        job.forceRefresh = false;
+        loaded = await waitForWorkspace(loadAccountWithSessionRecovery(supabase, currentSession, { ...options, forceRefresh }, controller.signal), controller.signal);
+        if (requestVersion !== accountRequestVersion.current || sessionRef.current?.user.id !== loaded.session.user.id) return null;
+        const latest: Session = sessionRef.current;
+        // A token event or stronger recovery request arrived during validation.
+        if (latest.access_token !== beforeToken && latest.access_token !== loaded.session.access_token) {
+          currentSession = latest;
+          continue;
+        }
+        if (job.forceRefresh && !forceRefresh && loaded.session.access_token === beforeToken) {
+          currentSession = loaded.session;
+          continue;
+        }
+        settled = true;
+        break;
+      }
+      if (!loaded || controller.signal.aborted) throw new Error('连接恢复超时，请重试。');
+      if (!settled || (sessionRef.current?.access_token !== currentSession?.access_token && sessionRef.current?.access_token !== loaded.session.access_token)) {
+        throw new Error('账号连接暂未恢复，请重试。');
+      }
 
       sessionRef.current = loaded.session;
       setSession(loaded.session);
-      applyAccountResult(loaded.result, loaded.session.user.id);
-      if (loaded.result.status === 'success') {
+      const verifiedAccount = applyAccountResult(loaded.result, loaded.session.user.id);
+      if (loaded.result.status === 'success' && verifiedAccount) {
         readySessionRef.current = {
           readyAt: Date.now(),
           accessToken: loaded.session.access_token,
@@ -299,15 +315,25 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
         throw new Error(loaded.result.issue.message);
       }
       return null;
-    })();
+    })().catch((error) => {
+      if (requestVersion !== accountRequestVersion.current) return null;
+      const issue = createUnavailableIssue(controller.signal.aborted ? '连接恢复超时，请重试。' : error instanceof Error ? error.message : undefined);
+      applyAccountResult({ status: 'unavailable', issue }, sessionRef.current?.user.id || recoveryUserId || '');
+      readySessionRef.current = { readyAt: 0, accessToken: '' };
+      throw new Error(issue.message);
+    });
     const trackedRequest = request.finally(() => {
+      clearTimeout(timer);
       if (sessionRecoveryRef.current?.request === trackedRequest) {
         sessionRecoveryRef.current = null;
       }
     });
-    sessionRecoveryRef.current = { userId: recoveryUserId, request: trackedRequest };
+    job.request = trackedRequest;
+    sessionRecoveryRef.current = job;
     return trackedRequest;
   }, [applyAccountResult, supabase]);
+
+  useLayoutEffect(() => registerWorkspaceSession({ ensure: ensureSession, userId: () => sessionRef.current?.user.id || null }), [ensureSession]);
 
   useEffect(() => {
     if (!supabase) {
@@ -317,17 +343,6 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
 
     let active = true;
     void ensureSession({ forceVerify: true })
-      .then((recoveredSession) => {
-        if (!active) return;
-        if (recoveredSession) return;
-        sessionRef.current = null;
-        setSession(null);
-        setAccount(null);
-        accountRef.current = null;
-        setAccountIssue(null);
-        currentAccountId.current = null;
-        setAccountCacheScope(null);
-      })
       .catch(() => {
         // A temporary account-service failure is already represented by accountIssue.
       })
@@ -339,6 +354,8 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     const { data: listener } = supabase.auth.onAuthStateChange((event, nextSession) => {
       if (!nextSession) {
         accountRequestVersion.current += 1;
+        sessionRecoveryRef.current?.controller.abort();
+        sessionRecoveryRef.current = null;
         sessionRef.current = null;
         setSession(null);
         setAccount(null);
@@ -348,27 +365,45 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
         readySessionRef.current = { readyAt: 0, accessToken: '' };
         setAccountCacheScope(null);
         setLoading(false);
-        void syncServerSession(null);
+        if (event === 'SIGNED_OUT') void syncServerSession(null);
         return;
       }
       // A signed-in user is not an invalid account while its profile request is
       // still in flight. Keep the login page in its loading state until the
       // account check has actually completed. Background refreshes for the
       // same user stay non-blocking so the current workspace remains mounted.
+      if (sessionRef.current && sessionRef.current.user.id !== nextSession.user.id) {
+        accountRequestVersion.current += 1;
+        sessionRecoveryRef.current?.controller.abort();
+        sessionRecoveryRef.current = null;
+        accountRef.current = null;
+        currentAccountId.current = null;
+        setAccount(null);
+        setAccountIssue(null);
+        readySessionRef.current = { readyAt: 0, accessToken: '' };
+        setAccountCacheScope(null);
+      }
       if (currentAccountId.current !== nextSession.user.id) setLoading(true);
       sessionRef.current = nextSession;
       setSession(nextSession);
-      void ensureSession({ forceVerify: event === 'SIGNED_IN' })
-        .catch(() => {
-          // Keep the last confirmed workspace mounted during temporary failures.
-        })
-        .finally(() => {
-          if (active && currentAccountId.current === nextSession.user.id) setLoading(false);
-        });
+      // Start outside the Supabase auth callback/lock, including refresh events.
+      setTimeout(() => {
+        if (!active || sessionRef.current?.user.id !== nextSession.user.id) return;
+        void ensureSession({ forceVerify: event === 'SIGNED_IN' })
+          .catch(() => {
+            // Keep the last confirmed workspace mounted during temporary failures.
+          })
+          .finally(() => {
+            if (active && sessionRef.current?.user.id === nextSession.user.id) setLoading(false);
+          });
+      }, 0);
     });
 
     return () => {
       active = false;
+      accountRequestVersion.current += 1;
+      sessionRecoveryRef.current?.controller.abort();
+      sessionRecoveryRef.current = null;
       listener.subscription.unsubscribe();
     };
   }, [ensureSession, supabase]);
@@ -384,9 +419,11 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       if (document.visibilityState === 'visible') verifyAccount();
     };
     window.addEventListener('focus', verifyAccount);
+    window.addEventListener('online', verifyAccount);
     document.addEventListener('visibilitychange', handleVisibilityChange);
     return () => {
       window.removeEventListener('focus', verifyAccount);
+      window.removeEventListener('online', verifyAccount);
       document.removeEventListener('visibilitychange', handleVisibilityChange);
     };
   }, [ensureSession, session]);
@@ -408,6 +445,10 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       }
     },
     signOut: async () => {
+      accountRequestVersion.current += 1;
+      sessionRecoveryRef.current?.controller.abort();
+      sessionRecoveryRef.current = null;
+      readySessionRef.current = { readyAt: 0, accessToken: '' };
       if (supabase) await supabase.auth.signOut();
       await syncServerSession(null);
       sessionRef.current = null;

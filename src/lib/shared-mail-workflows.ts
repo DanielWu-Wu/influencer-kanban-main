@@ -6,6 +6,14 @@ import type { MailProvider } from './mail-accounts';
 import type { FollowUpCheck, FollowUpMessage } from './follow-up-draft-workflow';
 
 type Raw = Record<string, unknown>;
+// Feed the shared queue gradually; a failed batch does not leave hundreds of orphaned reads.
+async function readInBatches<T, R>(items: T[], load: (item: T) => Promise<R>): Promise<R[]> {
+  const results: R[] = [];
+  for (let index = 0; index < items.length; index += 4) {
+    results.push(...await Promise.all(items.slice(index, index + 4).map(load)));
+  }
+  return results;
+}
 export class SharedMailReadError extends Error {
   constructor(message: string, public status: number) { super(message); }
 }
@@ -44,13 +52,13 @@ async function gmailReferences(kind: 'daily' | 'followUp', extra: Record<string,
 export async function readSharedGmailDaily(force = false) {
   const context = mailReadContext();
   const references = await gmailReferences('daily', {}, context);
-  const messages = await Promise.all(references.map(async ({ id }) => {
+  const messages = await readInBatches(references, async ({ id }) => {
     const raw = await gmailThread(id, 2, context, force);
     const all = ((raw.messages || []) as Raw[]).map(parseSharedGmailMessage);
     const latest = all.filter((m) => !m.labelIds.includes('SENT') && !m.automated && !m.deliveryFailure
       && !containsIgnoredGmailContactEmail(m.from)).sort((a, b) => Date.parse(b.date) - Date.parse(a.date))[0];
     return latest ? { ...latest, messageId: latest.id, answeredAt: resolveLatestGmailAnswerAt(all, latest.date) } : null;
-  }));
+  });
   return messages.filter((m): m is NonNullable<typeof m> => m !== null);
 }
 
@@ -73,7 +81,7 @@ export async function readSharedFollowUp(record: {
     const ids = new Set(refs.map((r) => r.id));
     const threads = [...new Set(refs.map((r) => r.threadId).filter((id): id is string => Boolean(id)))];
     if (refs.some((r) => !r.threadId)) throw new Error('往来邮件缺少会话编号，本次不能确认跟进状态。');
-    const raw = await Promise.all(threads.map((id) => gmailThread(id, 2, context, true)));
+    const raw = await readInBatches(threads, (id) => gmailThread(id, 2, context, true));
     const messages = raw.flatMap((t) => (t.messages || []) as Raw[]).filter((m) => ids.has(String(m.id))).map(parseSharedGmailMessage);
     if (new Set(messages.map((m) => m.id)).size !== ids.size) throw new Error('部分往来邮件未完整读取，本次不能确认跟进状态。');
     return classifySharedGmailFollowUp(messages, record.email.trim().toLowerCase(), record.developmentDate);
@@ -85,7 +93,7 @@ export async function readSharedFollowUp(record: {
     if (context !== mailReadContext()) throw new Error('邮箱状态已变化，请重新检查跟进。');
     return m ? { ...m, body: await readSharedTencentBody(record.mailAccountId, m) } : null;
   };
-  const outbound = await Promise.all(check.outbound.map(hydrate));
+  const outbound = await readInBatches(check.outbound, hydrate);
   return { outbound: outbound.filter((m): m is FollowUpMessage => m !== null), reply: await hydrate(check.reply),
     automatedReply: await hydrate(check.automatedReply), deliveryFailure: await hydrate(check.deliveryFailure) };
 }

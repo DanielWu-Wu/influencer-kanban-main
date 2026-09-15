@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { MailReadCoordinator } from '../src/lib/mail-read-coordinator';
-import { sharedMailFetch, bindGmailReadAccount, invalidateMailReads } from '../src/lib/shared-mail-read';
+import { sharedMailFetch, bindGmailReadAccount, invalidateMailReads, mailReads, mailReadScope, currentGmailReadScope, MAIL_FLAGS_CHANGED_EVENT, MAIL_READ_INVALIDATED_EVENT } from '../src/lib/shared-mail-read';
 import { setAccountCacheScope } from '../src/lib/account-cache-scope';
 import { readSharedGmailDaily, readSharedFollowUp, readSharedTencentBody } from '../src/lib/shared-mail-workflows';
 
@@ -61,6 +61,61 @@ test('共享读取：缓存大小有上限', () => {
   assert.equal(c.peek('a', '3'), 3);
 });
 
+test('点击后台已排队的同一封邮件会提级，而且不重复读取', async () => {
+  const c = new MailReadCoordinator(Date.now, 1);
+  let release!: () => void;
+  const order: string[] = [];
+  const busy = c.load('a', 'busy', () => new Promise<void>((r) => { release = r; }));
+  await tick();
+  const earlier = c.load('a', 'earlier', async () => { order.push('earlier'); }, { priority: 2 });
+  const background = c.load('a', 'target', async () => { order.push('target'); }, { priority: 2 });
+  const clicked = c.load('a', 'target', async () => { throw new Error('不得重复读取'); }, { priority: 0 });
+  release();
+  await Promise.all([busy, earlier, background, clicked]);
+  assert.deepEqual(order, ['target', 'earlier']);
+});
+
+test('后台和列表不能占满前台位置，双邮箱仍独立', async () => {
+  const c = new MailReadCoordinator();
+  let finishBackground!: () => void, finishList!: () => void;
+  const background = c.load('a', 'background', () => new Promise<void>((r) => { finishBackground = r; }), { priority: 2 });
+  const list = c.load('a', 'list', () => new Promise<void>((r) => { finishList = r; }), { priority: 1 });
+  const queued = c.load('a', 'queued', async () => 'later', { priority: 2 });
+  await tick();
+  assert.equal(await c.load('a', 'clicked', async () => 'visible', { priority: 0 }), 'visible');
+  assert.equal(await c.load('b', 'clicked', async () => 'other mailbox', { priority: 0 }), 'other mailbox');
+  finishBackground(); finishList();
+  await Promise.all([background, list, queued]);
+});
+
+test('前台持续读取时，后台仍能推进；等待过久的后台早于新列表任务', async () => {
+  let now = 0;
+  const c = new MailReadCoordinator(() => now);
+  const releases: Array<() => void> = [];
+  const foreground = [1, 2].map((id) => c.load('a', String(id), () => new Promise<void>((r) => releases.push(r)), { priority: 0 }));
+  const background = c.load('a', 'background', async () => 'progress', { priority: 2 });
+  assert.equal(await background, 'progress');
+  releases.forEach((release) => release()); await Promise.all(foreground);
+  const serial = new MailReadCoordinator(() => now, 1);
+  let release!: () => void;
+  const busy = serial.load('a', 'busy', () => new Promise<void>((r) => { release = r; })); await tick();
+  const order: string[] = [];
+  const old = serial.load('a', 'old', async () => { order.push('old'); }, { priority: 2 });
+  now = 6000;
+  const fresh = serial.load('a', 'fresh', async () => { order.push('fresh'); }, { priority: 1 });
+  release(); await Promise.all([busy, old, fresh]);
+  assert.deepEqual(order, ['old', 'fresh']);
+});
+
+test('排队超过期限明确报错，过期任务不再偷偷启动', async () => {
+  const c = new MailReadCoordinator(Date.now, 1);
+  let release!: () => void, calls = 0;
+  const busy = c.load('a', 'busy', () => new Promise<void>((r) => { release = r; })); await tick();
+  await assert.rejects(c.load('a', 'queued', async () => { calls++; }, { queueTimeoutMs: 5 }), /排队超时/);
+  release(); await busy; await tick();
+  assert.equal(calls, 0);
+});
+
 const incoming = (id: string, history = '1') => ({
   id, threadId: 'thread', historyId: history, internalDate: String(Date.parse('2026-09-13T10:00:00Z')),
   labelIds: ['INBOX', 'UNREAD'], payload: { mimeType: 'text/plain', headers: [
@@ -74,6 +129,45 @@ function setup() {
   bindGmailReadAccount('owner@example.com', 'test-token');
 }
 const json = (data: unknown, status = 200) => new Response(JSON.stringify(data), { status, headers: { 'Content-Type': 'application/json' } });
+
+test('双邮箱联网超时从出队开始计时，排队不消耗联网时间', async () => {
+  const original = globalThis.fetch;
+  try {
+    for (const provider of ['gmail', 'tencent_exmail']) {
+      setup();
+      const scope = provider === 'gmail' ? currentGmailReadScope() : mailReadScope(provider, 'timing');
+      const releases: Array<() => void> = [];
+      const busy = [1, 2, 3].map((id) => mailReads.load(scope, `busy${id}`, () => new Promise<void>((r) => releases.push(r)), { priority: 0 }));
+      await tick();
+      let calls = 0;
+      globalThis.fetch = async () => { calls++; return json(provider === 'gmail' ? { id: 'timing', messages: [] } : { success: true, data: { messages: [] } }); };
+      const url = provider === 'gmail' ? 'https://gmail.googleapis.com/gmail/v1/users/me/threads/timing?format=full'
+        : '/api/mail/tencent?action=thread&mailAccountId=timing&folder=INBOX&uid=1';
+      const request = sharedMailFetch(url, { headers: { Authorization: 'Bearer test-token' } }, { timeoutMs: 5 });
+      await new Promise((r) => setTimeout(r, 20));
+      assert.equal(calls, 0);
+      releases.forEach((release) => release()); await Promise.all(busy);
+      assert.equal((await request).status, 200);
+      assert.equal(calls, 1);
+    }
+  } finally { globalThis.fetch = original; invalidateMailReads(); }
+});
+
+test('双邮箱真实联网超时提示超时而非取消，点击重试可恢复', async () => {
+  const original = globalThis.fetch;
+  try {
+    for (const url of ['https://gmail.googleapis.com/gmail/v1/users/me/threads/timeout?format=full',
+      '/api/mail/tencent?action=thread&mailAccountId=timeout&folder=INBOX&uid=1']) {
+      setup();
+      globalThis.fetch = async (_input, init) => new Promise((_resolve, reject) => {
+        init?.signal?.addEventListener('abort', () => reject(new DOMException('aborted', 'AbortError')), { once: true });
+      });
+      await assert.rejects(sharedMailFetch(url, { headers: { Authorization: 'Bearer test-token' } }, { timeoutMs: 5 }), /邮件读取超时/);
+      globalThis.fetch = async () => json(url.startsWith('https:') ? { id: 'timeout', messages: [] } : { success: true, data: { messages: [] } });
+      assert.equal((await sharedMailFetch(url, { headers: { Authorization: 'Bearer test-token' } })).status, 200);
+    }
+  } finally { globalThis.fetch = original; invalidateMailReads(); }
+});
 test('Gmail 真正共用：收件箱完整会话 → 待办 → Follow Up，只读一次相同正文', async () => {
   setup();
   const original = globalThis.fetch;
@@ -283,4 +377,49 @@ test('五分钟后的待办先核对版本，未变化复用正文；有变化�
     now += 300001; revision = '2';
     await readSharedGmailDaily(); assert.equal(full, 2);
   } finally { Date.now = originalNow; globalThis.fetch = original; invalidateMailReads(); }
+});
+
+test('Gmail 直接打开过期详情先核对版本，相同正文复用，新回信重新读取', async () => {
+  setup();
+  const original = globalThis.fetch, originalNow = Date.now;
+  let now = originalNow(), full = 0, metadata = 0, revision = '1';
+  Date.now = () => now;
+  globalThis.fetch = async (input) => {
+    const url = new URL(String(input));
+    if (url.searchParams.get('format') === 'metadata') metadata++; else full++;
+    return json({ id: 'direct', historyId: revision, messages: [incoming('m', revision)] });
+  };
+  const read = () => sharedMailFetch('https://gmail.googleapis.com/gmail/v1/users/me/threads/direct?format=full', { headers: { Authorization: 'Bearer test-token' } });
+  try {
+    await read(); now += 300001;
+    await read(); assert.equal(full, 1); assert.equal(metadata, 1);
+    now += 300001; revision = '2';
+    await read(); assert.equal(full, 2); assert.equal(metadata, 2);
+  } finally { Date.now = originalNow; globalThis.fetch = original; invalidateMailReads(); }
+});
+
+test('Gmail 标记已读只通知目标线程，其他正文缓存不清空', async () => {
+  setup();
+  const original = globalThis.fetch;
+  const originalWindow = globalThis.window;
+  const events = new EventTarget();
+  globalThis.window = events as unknown as Window & typeof globalThis;
+  let broad = 0, gets = 0;
+  const targets: string[] = [];
+  events.addEventListener(MAIL_READ_INVALIDATED_EVENT, () => broad++);
+  events.addEventListener(MAIL_FLAGS_CHANGED_EVENT, (e) => targets.push((e as CustomEvent).detail.threadId));
+  globalThis.fetch = async (input, init) => {
+    if (init?.method === 'POST') return json({});
+    gets++;
+    const id = new URL(String(input)).pathname.split('/').pop();
+    return json({ id, historyId: '1', messages: [incoming(String(id))] });
+  };
+  const headers = { Authorization: 'Bearer test-token' };
+  try {
+    await sharedMailFetch('https://gmail.googleapis.com/gmail/v1/users/me/threads/a?format=full', { headers });
+    await sharedMailFetch('https://gmail.googleapis.com/gmail/v1/users/me/threads/b?format=full', { headers });
+    await sharedMailFetch('https://gmail.googleapis.com/gmail/v1/users/me/threads/a/modify', { headers, method: 'POST', body: JSON.stringify({ removeLabelIds: ['UNREAD'] }) });
+    await sharedMailFetch('https://gmail.googleapis.com/gmail/v1/users/me/threads/b?format=full', { headers });
+    assert.equal(gets, 2); assert.equal(broad, 0); assert.deepEqual(targets, ['a']);
+  } finally { globalThis.window = originalWindow; globalThis.fetch = original; invalidateMailReads(); }
 });

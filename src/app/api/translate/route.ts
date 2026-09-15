@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { getUserSecret } from '@/lib/user-private-storage';
-import { getRequestUser } from '@/lib/supabase/server';
+import { authorizeWorkspaceRequest } from '@/lib/supabase/server';
 import { parseTranslationLanguage } from '@/lib/translation-language-protocol';
 
 type ChatMessage = {
@@ -200,11 +200,10 @@ function sseEvent(event: string, data: unknown) {
 export async function POST(request: NextRequest) {
   const requestStartedAt = performance.now();
   const authStartedAt = performance.now();
-  const appAuth = await getRequestUser(request);
+  const authResult = await authorizeWorkspaceRequest(request);
+  if (!authResult.ok) return NextResponse.json(authResult.body, { status: authResult.status });
+  const appAuth = authResult.account;
   const authMs = Math.round(performance.now() - authStartedAt);
-  if (!appAuth) {
-    return NextResponse.json({ error: '未登录或账号无权使用翻译。' }, { status: 401 });
-  }
 
   try {
     const body = await request.json();

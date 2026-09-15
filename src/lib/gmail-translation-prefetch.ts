@@ -1,4 +1,5 @@
 import type { AppSettings } from '@/lib/data';
+import { workspaceFetch as fetch } from './workspace-request';
 import { ACCOUNT_SCOPE_CHANGED_EVENT, getAccountCacheScope } from '@/lib/account-cache-scope';
 import { detectEmailLanguage } from '@/lib/email-language';
 import { saveMailLanguage } from '@/lib/mail-language-result';

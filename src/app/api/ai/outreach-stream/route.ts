@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { DEFAULT_OUTREACH_PROMPT } from '@/lib/ai-prompts';
 import { sanitizeOutreachEmailBody } from '@/lib/outreach-draft-sanitizer';
-import { getRequestUser } from '@/lib/supabase/server';
+import { authorizeWorkspaceRequest, type RequestAccount } from '@/lib/supabase/server';
 import { getUserSecret } from '@/lib/user-private-storage';
 
 type ChatMessage = {
@@ -52,9 +52,8 @@ function getModelOptions(body: Record<string, unknown>, temperature: number): Ch
   };
 }
 
-async function hydrateSecrets(request: NextRequest, body: Record<string, unknown>) {
+async function hydrateSecrets(appAuth: RequestAccount, body: Record<string, unknown>) {
   if (body.modelProvider === 'custom' && !body.customApiKey) {
-    const appAuth = await getRequestUser(request);
     if (appAuth) {
       body.customApiKey = await getUserSecret<string>(appAuth.supabase, 'ai_api_key') || '';
     }
@@ -177,9 +176,10 @@ function buildContextSummary(body: Record<string, unknown>) {
 }
 
 export async function POST(request: NextRequest) {
-  if (!(await getRequestUser(request))) return NextResponse.json({ error: '未登录或账号无权使用 AI。' }, { status: 401 });
+  const authResult = await authorizeWorkspaceRequest(request);
+  if (!authResult.ok) return NextResponse.json(authResult.body, { status: authResult.status });
   const body = await request.json().catch(() => ({})) as Record<string, unknown>;
-  await hydrateSecrets(request, body);
+  await hydrateSecrets(authResult.account, body);
 
   const encoder = new TextEncoder();
 

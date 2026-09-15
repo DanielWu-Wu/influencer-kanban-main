@@ -1,5 +1,10 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
+import { registerWorkspaceSession } from '../src/lib/workspace-request';
+
+function connectTestAccount() {
+  return registerWorkspaceSession({ userId: () => 'account-a', ensure: async () => ({ user: { id: 'account-a' }, access_token: 'test-token' }) });
+}
 import {
   GmailTranslationPrefetchQueue,
   clearGmailTranslationRequests,
@@ -235,6 +240,7 @@ test('长期翻译缓存键同时隔离邮箱作用域和邮件编号', () => {
 });
 
 test('相同邮件的手动翻译与后台翻译复用同一个请求', async () => {
+  const disconnect = connectTestAccount();
   clearGmailTranslationRequests();
   const originalFetch = globalThis.fetch;
   let requestCount = 0;
@@ -259,12 +265,14 @@ test('相同邮件的手动翻译与后台翻译复用同一个请求', async ()
     assert.equal((await manualRequest).translatedText, '译文');
     assert.equal(requestCount, 1);
   } finally {
+    disconnect();
     globalThis.fetch = originalFetch;
     clearGmailTranslationRequests();
   }
 });
 
 test('不同邮件的翻译请求可以并发，前台请求不再等待后台队列尾部', async () => {
+  const disconnect = connectTestAccount();
   clearGmailTranslationRequests();
   const originalFetch = globalThis.fetch;
   const releases: Array<() => void> = [];
@@ -305,6 +313,7 @@ test('不同邮件的翻译请求可以并发，前台请求不再等待后台�
     await second;
     assert.equal(maxActiveRequests, 2);
   } finally {
+    disconnect();
     globalThis.fetch = originalFetch;
     clearGmailTranslationRequests();
   }

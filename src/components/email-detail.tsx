@@ -93,6 +93,7 @@ interface EmailDetailProps {
   thread: GmailThread;
   loading?: boolean;
   loadError?: string;
+  onRetryLoad?: () => void;
   onBack: () => void;
   onThreadUpdated?: (thread: GmailThread) => void;
   openComposerRequest?: {
@@ -268,6 +269,7 @@ export function EmailDetail({
   thread,
   loading = false,
   loadError,
+  onRetryLoad,
   onBack,
   onThreadUpdated,
   openComposerRequest,
@@ -1603,8 +1605,9 @@ export function EmailDetail({
           <ScrollArea className="h-full min-h-0">
         {thread.isPartial ? (
           <div className="mx-4 mt-3"><Alert role="status" variant={loadError ? 'destructive' : 'default'}><AlertDescription>
-            {loadError ? `来信已显示，但完整会话读取失败：${loadError}。请重新打开邮件后再回复。`
+            {loadError ? `来信已显示，但完整会话读取失败：${loadError}。完整读取后可回复。`
               : '已先显示这封来信；历史邮件和附件仍在读取，完成后可回复。'}
+            {loadError && onRetryLoad && <Button variant="outline" size="sm" className="ml-3" disabled={loading} onClick={onRetryLoad}>重新读取</Button>}
           </AlertDescription></Alert></div>
         ) : null}
         {loading && !thread.isPartial ? (
@@ -1629,7 +1632,8 @@ export function EmailDetail({
               <XCircle className="mx-auto mb-2 h-5 w-5 text-destructive" />
               <p className="font-medium text-destructive">邮件正文暂时读取失败</p>
               <p className="mt-1 text-sm text-muted-foreground">{loadError}</p>
-              <p className="mt-3 text-xs text-muted-foreground">返回列表后重新点击这封邮件即可重试。</p>
+              {onRetryLoad ? <Button variant="outline" size="sm" className="mt-3" disabled={loading} onClick={onRetryLoad}>重新读取</Button>
+                : <p className="mt-3 text-xs text-muted-foreground">返回列表后重新点击这封邮件即可重试。</p>}
             </div>
           </div>
         ) : (
@@ -2084,7 +2088,7 @@ export function EmailDetail({
               {visitedReplyModes.has('ai') ? (
                 <div className={replyMode === 'ai' ? 'absolute inset-0 flex min-h-0 min-w-0 max-w-full flex-col overflow-x-clip' : 'hidden'}>
                   <EmailComposer
-                    key={`${mailScope}-${thread.id}-ai-${replyTarget?.messageId || 'default'}`}
+                    key={JSON.stringify([mailScope, thread.id, 'ai', replyTarget?.messageId, replyTarget?.recipientEmail, replyTarget?.subject, replyTarget?.message?.body])}
                     thread={thread}
                     replyTarget={replyTarget}
                     mode="ai"

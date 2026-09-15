@@ -2,9 +2,11 @@ import { ACCOUNT_SCOPE_CHANGED_EVENT, getAccountCacheScope } from './account-cac
 import { MailReadCoordinator } from './mail-read-coordinator';
 import type { GmailThread } from './types';
 import { extractRfcMessageIds } from './mail-conversation';
+import { workspaceFetch } from './workspace-request';
 
 export const MAIL_READ_INVALIDATED_EVENT = 'mail-read-invalidated';
 export const MAIL_THREAD_CHANGED_EVENT = 'mail-thread-version-changed';
+export const MAIL_FLAGS_CHANGED_EVENT = 'mail-thread-flags-changed';
 export const mailReads = new MailReadCoordinator();
 let gmailAddress = '';
 let readEpoch = 0;
@@ -106,13 +108,16 @@ function invalidateFlags(url: URL, init: RequestInit) {
   }
   if (!threads.size) mailReads.invalidate(scope);
   // Local parsed view caches must follow flags; unrelated shared mail bodies stay reusable.
-  if (typeof window !== 'undefined') window.dispatchEvent(new Event(MAIL_READ_INVALIDATED_EVENT));
+  if (typeof window !== 'undefined') {
+    for (const threadId of threads) window.dispatchEvent(new CustomEvent(MAIL_FLAGS_CHANGED_EVENT, { detail: { threadId } }));
+    if (!threads.size) window.dispatchEvent(new Event(MAIL_READ_INVALIDATED_EVENT));
+  }
   return true;
 }
 
 /** Explicitly imported by mail consumers; never replaces window.fetch. Writes are never cached/retried. */
 export async function sharedMailFetch(input: RequestInfo | URL, init: RequestInit = {}, options: {
-  force?: boolean; priority?: number; reuseMetadata?: boolean;
+  force?: boolean; priority?: number; reuseMetadata?: boolean; timeoutMs?: number;
 } = {}): Promise<Response> {
   if (input instanceof Request) return fetch(input, init);
   const url = new URL(String(input), 'https://mail.local');
@@ -120,7 +125,7 @@ export async function sharedMailFetch(input: RequestInfo | URL, init: RequestIni
   const gmailProxy = url.pathname === '/api/gmail';
   const tencent = url.pathname === '/api/mail/tencent';
   const mailAccountChange = url.pathname.startsWith('/api/mail/accounts');
-  if (!direct && !gmailProxy && !tencent && !mailAccountChange) return fetch(input, init);
+  if (!direct && !gmailProxy && !tencent && !mailAccountChange) return workspaceFetch(input, init);
   if ((init.method || 'GET').toUpperCase() !== 'GET') {
     if (gmailProxy && typeof init.body === 'string') {
       try { if (JSON.parse(init.body).action === 'contactHistory') return fetch(input, init); } catch { /* malformed writes are handled by the existing endpoint */ }
@@ -168,6 +173,15 @@ export async function sharedMailFetch(input: RequestInfo | URL, init: RequestIni
   if (tencent && action === 'thread') resource = `thread:${JSON.stringify([url.searchParams.get('folder'), url.searchParams.get('uid')])}`;
   const forced = options.force || url.searchParams.get('forceRefresh') === '1';
   const detail = (isGmailThread && format === 'full') || (tencent && ['thread', 'messageBody'].includes(action));
+  // Revalidate retained bodies before reuse, without occupying a queue slot while waiting for another read.
+  if (!forced && isGmailThread && format === 'full' && !mailReads.peek(scope, resource)
+    && mailReads.peek(scope, resource, 15 * 60_000)) {
+    const metadataUrl = new URL(url);
+    metadataUrl.searchParams.set('format', 'metadata');
+    const check = await sharedMailFetch(direct ? metadataUrl : `${metadataUrl.pathname}${metadataUrl.search}`, init,
+      { priority: options.priority ?? 0, reuseMetadata: true, timeoutMs: options.timeoutMs });
+    if (!check.ok) return check;
+  }
   const previousBody = isGmailThread && format === 'full' ? mailReads.peek<Packet>(scope, resource, 15 * 60_000) : undefined;
   const threadId = isGmailThread ? resource.split('/').at(-1)?.replace(/:full$/, '') : '';
   const validatedBody = previousBody && mailReads.peek<string>(scope, `validated:${threadId}`) === version(previousBody.body as Json);
@@ -178,7 +192,7 @@ export async function sharedMailFetch(input: RequestInfo | URL, init: RequestIni
   if (signal?.aborted) throw new DOMException('读取已取消', 'AbortError');
   const promise = mailReads.load<Packet>(scope, resource, async () => {
     const controller = new AbortController();
-    const timeout = setTimeout(() => controller.abort(), 40_000);
+    const timeout = setTimeout(() => controller.abort(), options.timeoutMs ?? 40_000);
     try {
       // The browser owns freshness. Do not let a second server cache serve an older Tencent conversation.
       const target = tencent && action === 'thread' ? (() => {
@@ -195,6 +209,9 @@ export async function sharedMailFetch(input: RequestInfo | URL, init: RequestIni
         mailReads.cooldown(scope, Math.max(60_000, Number.isFinite(seconds) ? seconds * 1000 : until || 0));
       }
       return packet;
+    } catch (error) {
+      if (controller.signal.aborted) throw new Error('邮件读取超时，请重试。');
+      throw error;
     } finally { clearTimeout(timeout); }
   }, { force: forced || (!detail && !options.reuseMetadata), ttl, priority: options.priority ?? (detail ? 0 : 1), cache: (p) => p.status === 200
     && !(p.body as Json)?.loadWarning && !((p.body as Json)?.data as Json)?.loadWarning

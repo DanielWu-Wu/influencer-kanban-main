@@ -220,6 +220,24 @@ export async function getRequestUser(request: NextRequest) {
   return account;
 }
 
+/** Preserve transient service failures instead of presenting every failure as an expired login. */
+export async function authorizeWorkspaceRequest(request: NextRequest) {
+  const result = await getRequestAccountResult(request);
+  if (result.status === 'ok' && result.account.profile.status === 'active' && !result.account.profile.mustChangePassword) {
+    return { ok: true as const, account: result.account };
+  }
+  const [status, code, error] = result.status === 'unavailable'
+    ? [503, 'ACCOUNT_SERVICE_UNAVAILABLE', '账号服务暂时连接失败，请稍后重试。'] as const
+    : result.status === 'unauthenticated'
+      ? [401, 'SESSION_INVALID', '登录状态已失效，请重新登录。'] as const
+      : result.status === 'not_found'
+        ? [403, 'ACCOUNT_NOT_PROVISIONED', '账号尚未由管理员开通。'] as const
+        : result.account.profile.status !== 'active'
+          ? [403, 'ACCOUNT_DISABLED', '账号已停用，请联系管理员。'] as const
+          : [403, 'PASSWORD_CHANGE_REQUIRED', '请先修改临时密码。'] as const;
+  return { ok: false as const, status, body: { success: false, code, error, executionStarted: false } };
+}
+
 export async function getRequestAdmin(request: NextRequest) {
   const account = await getRequestUser(request);
   if (!account || !account.profile.isAdmin) return null;

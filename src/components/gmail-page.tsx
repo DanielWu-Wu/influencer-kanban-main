@@ -76,6 +76,7 @@ export function GmailPage({
   const [showNewEmail, setShowNewEmail] = useState(false);
   const [editDraft, setEditDraft] = useState<EditableMailDraft | null>(null);
   const [mailboxRefreshKey, setMailboxRefreshKey] = useState(0);
+  const [detailRetryKey, setDetailRetryKey] = useState(0);
   const [detailExpanded, setDetailExpanded] = useState(false);
   const [threadLoadState, setThreadLoadState] = useState<{
     threadId: string;
@@ -406,6 +407,7 @@ export function GmailPage({
           mailbox={mailbox}
           category={category}
           refreshKey={mailboxRefreshKey}
+          detailRetryKey={detailRetryKey}
           compact={detailExpanded}
           avatarOnly={detailExpanded && threadListAvatarOnly}
           onCategoryChange={setCategory}
@@ -468,6 +470,7 @@ export function GmailPage({
               ? threadLoadState.error
               : undefined}
             onBack={handleCloseThread}
+            onRetryLoad={() => setDetailRetryKey((current) => current + 1)}
             onThreadUpdated={setSelectedThread}
             openComposerRequest={selection.request?.threadId === selectedThread.id
               ? selection.request

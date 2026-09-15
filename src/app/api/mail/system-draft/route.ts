@@ -29,10 +29,26 @@ export async function POST(request: NextRequest) {
     || mailReplyDraftIdentityKey(body.identity) !== mailReplyDraftIdentityKey(body.draft.identity)) {
     return NextResponse.json({ error: '系统草稿内容或邮件身份不正确。' }, { status: 400 });
   }
-  const savedAt = new Date().toISOString();
-  const { error } = await account.supabase.from('user_data').upsert({
+  if ('baseSavedAt' in body && body.baseSavedAt !== null
+    && (typeof body.baseSavedAt !== 'string' || !Number.isFinite(Date.parse(body.baseSavedAt)))) {
+    return NextResponse.json({ error: '草稿版本无效。' }, { status: 400 });
+  }
+  const savedAt = new Date(Math.max(Date.now(), (Date.parse(body.baseSavedAt || '') || 0) + 1)).toISOString();
+  const values = {
     user_id: account.user.id, data_key: key, data: body.draft, updated_at: savedAt,
-  });
+  };
+  // Optimistic concurrency uses the existing updated_at column; no schema or permission changes.
+  if ('baseSavedAt' in body) {
+    const query = body.baseSavedAt === null
+      ? account.supabase.from('user_data').insert(values)
+      : account.supabase.from('user_data').update({ data: body.draft, updated_at: savedAt })
+        .eq('user_id', account.user.id).eq('data_key', key).eq('updated_at', body.baseSavedAt);
+    const { data, error } = await query.select('updated_at').maybeSingle();
+    if (error?.code === '23505' || (!error && !data)) return NextResponse.json({ error: '另一页面已保存不同版本，未覆盖云端内容。' }, { status: 409 });
+    if (error || !data) return NextResponse.json({ error: '自动保存失败，编辑内容仍保留，请重试。' }, { status: 500 });
+    return NextResponse.json({ success: true, savedAt: data.updated_at });
+  }
+  const { error } = await account.supabase.from('user_data').upsert(values);
   if (error) return NextResponse.json({ error: '系统草稿保存失败，编辑内容仍保留，请重试。' }, { status: 500 });
   return NextResponse.json({ success: true, savedAt });
 }

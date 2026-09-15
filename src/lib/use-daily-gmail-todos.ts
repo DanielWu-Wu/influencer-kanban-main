@@ -403,12 +403,29 @@ export function useDailyGmailTodos(settings: AppSettings, active = true) {
       if (runId !== runIdRef.current) return;
       const profileByEmail = selectProfileByEmail(profiles);
       // Only matched creators need complete bodies; summary/header text is never a translation body.
-      const bodyResults = await Promise.allSettled(messages.map(async (message) => {
-        if (message.provider === 'tencent_exmail' && profileByEmail.has(normalizeThreadContactEmail(message.from))) {
-          const body = await readSharedTencentBody(message.mailAccountId, message);
-          return { ...message, body, snippet: body.replace(/\s+/g, ' ').trim().slice(0, 240) };
+      const bodyResults: PromiseSettledResult<DailyGmailMessage>[] = new Array(messages.length);
+      const indicesByAccount = new Map<string, number[]>();
+      messages.forEach((message, index) => {
+        const key = JSON.stringify([message.provider, message.mailAccountId]);
+        const indices = indicesByAccount.get(key) || [];
+        indices.push(index);
+        indicesByAccount.set(key, indices);
+      });
+      await Promise.all([...indicesByAccount.values()].map(async (indices) => {
+        // Different mailboxes keep progressing independently.
+        for (let offset = 0; offset < indices.length; offset += 4) {
+          if (runId !== runIdRef.current) return;
+          const batch = indices.slice(offset, offset + 4);
+          const results = await Promise.allSettled(batch.map(async (index) => {
+            const message = messages[index];
+            if (message.provider === 'tencent_exmail' && profileByEmail.has(normalizeThreadContactEmail(message.from))) {
+              const body = await readSharedTencentBody(message.mailAccountId, message);
+              return { ...message, body, snippet: body.replace(/\s+/g, ' ').trim().slice(0, 240) };
+            }
+            return message;
+          }));
+          results.forEach((result, index) => { bodyResults[batch[index]] = result; });
         }
-        return message;
       }));
       if (runId !== runIdRef.current) return;
       const failedBodyAccounts = new Set<string>();

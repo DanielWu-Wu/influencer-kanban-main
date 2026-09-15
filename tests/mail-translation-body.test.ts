@@ -1,5 +1,10 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
+import { registerWorkspaceSession } from '../src/lib/workspace-request';
+
+function connectTestAccount() {
+  return registerWorkspaceSession({ userId: () => 'a', ensure: async () => ({ user: { id: 'a' }, access_token: 'test-token' }) });
+}
 import { simpleParser } from 'mailparser';
 import { readGmailMessageBody, resolveMailTranslationBody, isUsableMailTranslation } from '../src/lib/mail-translation-body';
 import { findUsableEmailTranslation } from '../src/lib/email-translations';
@@ -73,6 +78,7 @@ test('待办预览仅接受同账号、同 provider、同线程和同邮件的�
 });
 
 test('后台 2 个槽与前台 1 个槽总并发不超过 3，前台复用已排队的同一封', async () => {
+  const disconnect = connectTestAccount();
   clearGmailTranslationRequests();
   const originalFetch = globalThis.fetch;
   const release: Array<() => void> = [];
@@ -89,10 +95,12 @@ test('后台 2 个槽与前台 1 个槽总并发不超过 3，前台复用已排
   try {
     const options = { scopeKey: 'isolated::gmail:a', text: 'Contrato firmado', sourceText: original, settings: {} };
     const tasks = ['1', '2', '3'].map((messageId) => requestGmailTranslation({ ...options, messageId, priority: 'background' }));
+    await new Promise(resolve => setTimeout(resolve, 0));
     assert.equal(requests, 2);
     const foreground = requestGmailTranslation({ ...options, messageId: '3', priority: 'foreground' });
     assert.equal(foreground, tasks[2]);
     const extra = requestGmailTranslation({ ...options, messageId: '4', priority: 'foreground' });
+    await new Promise(resolve => setTimeout(resolve, 0));
     assert.equal(requests, 3);
     for (let i = 0; i < 5; i += 1) {
       release.splice(0).forEach((resolve) => resolve());
@@ -104,6 +112,7 @@ test('后台 2 个槽与前台 1 个槽总并发不超过 3，前台复用已排
     await requestGmailTranslation({ ...options, messageId: '3' });
     assert.equal(requests, 4, '刚结束的同一任务不能再次请求');
   } finally {
+    disconnect();
     release.splice(0).forEach((resolve) => resolve());
     globalThis.fetch = originalFetch;
     clearGmailTranslationRequests();
@@ -111,6 +120,7 @@ test('后台 2 个槽与前台 1 个槽总并发不超过 3，前台复用已排
 });
 
 test('空中文结果拒绝缓存，正文变化不能复用同一请求', async () => {
+  const disconnect = connectTestAccount();
   clearGmailTranslationRequests();
   const originalFetch = globalThis.fetch;
   let count = 0;
@@ -124,5 +134,5 @@ test('空中文结果拒绝缓存，正文变化不能复用同一请求', async
     await requestGmailTranslation(input);
     await requestGmailTranslation({ ...input, sourceText: 'Hola\nOn Tue: changed quote' });
     assert.equal(count, 3);
-  } finally { globalThis.fetch = originalFetch; clearGmailTranslationRequests(); }
+  } finally { disconnect(); globalThis.fetch = originalFetch; clearGmailTranslationRequests(); }
 });
