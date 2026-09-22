@@ -3,6 +3,7 @@
 import { sharedMailFetch as fetch, mailReads, currentGmailReadScope, MAIL_FLAGS_CHANGED_EVENT } from '@/lib/shared-mail-read';
 
 import { useCallback, useEffect, useRef, useState } from 'react';
+import { toast } from 'sonner';
 import {
   AlertCircle,
   ChevronLeft,
@@ -435,7 +436,9 @@ function parseMimeParts(payload: Record<string, unknown>, result: ParsedMimeCont
       mimeType: mimeType || 'application/octet-stream',
       size,
       contentId,
-      inline: Boolean(contentId) || disposition.includes('inline'),
+      // Explicit attachments win over Content-ID. Inline files remain accessible
+      // in the detail gallery, including in text-only translations.
+      inline: !disposition.startsWith('attachment') && (Boolean(contentId) || disposition.startsWith('inline')),
       dataUrl: data ? `data:${mimeType};base64,${normalizeBase64(data)}` : undefined,
     });
   }
@@ -721,6 +724,7 @@ export function GmailInbox({
   const [actionThreadId, setActionThreadId] = useState<string | null>(null);
   const [openingThreadId, setOpeningThreadId] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [syncFailures, setSyncFailures] = useState({ key: '', count: 0 });
   const [subjectTranslationError, setSubjectTranslationError] = useState<string | null>(null);
   const [searchQuery, setSearchQuery] = useState('');
   const [debouncedSearchQuery, setDebouncedSearchQuery] = useState('');
@@ -953,6 +957,7 @@ export function GmailInbox({
     );
     setLoading(true);
     setError(null);
+    let requiresAttention = false;
 
     try {
       let accessToken = await getAccessToken();
@@ -1025,6 +1030,7 @@ export function GmailInbox({
 
       if (!listResponse.ok) {
         const result = await listResponse.json().catch(() => ({}));
+        requiresAttention = isGmailAuthError(listResponse.status, result);
         throw new Error(result.error?.message || '\u83b7\u53d6\u90ae\u4ef6\u5217\u8868\u5931\u8d25');
       }
 
@@ -1045,6 +1051,7 @@ export function GmailInbox({
         setThreads([]);
         if (unreadCount !== null) setNormalUnreadCount(unreadCount);
         setLastSyncedAt(syncedAt);
+        setSyncFailures({ key: requestCacheKey, count: 0 });
         if (pageIndex === 0 && !isGlobalSearch && (mailbox === 'inbox' || mailbox === 'unread')) {
           publishInboxMailSnapshot({
             accountScope: requestAccountScope, provider: 'gmail',
@@ -1067,6 +1074,7 @@ export function GmailInbox({
                 { headers },
                 12_000,
               );
+              if (response.status === 401 || response.status === 403) requiresAttention = true;
               return response.ok ? response.json() : null;
             } catch {
               return null;
@@ -1108,6 +1116,7 @@ export function GmailInbox({
       setThreads(sortedThreads);
       if (unreadCount !== null) setNormalUnreadCount(unreadCount);
       setLastSyncedAt(syncedAt);
+      setSyncFailures({ key: requestCacheKey, count: 0 });
       if (pageIndex === 0 && !isGlobalSearch && (mailbox === 'inbox' || mailbox === 'unread')) {
         publishInboxMailSnapshot({
           accountScope: requestAccountScope, provider: 'gmail',
@@ -1119,7 +1128,16 @@ export function GmailInbox({
       notifyPrimaryInboxRefreshed(mailbox, category, isGlobalSearch);
     } catch (caughtError) {
       if (isCurrentRequest()) {
-        setError((caughtError as Error).message);
+        setSyncFailures((current) => ({
+          key: requestCacheKey,
+          count: current.key === requestCacheKey ? current.count + 1 : 1,
+        }));
+        // 后台短暂失败保留上次列表；授权和首次加载错误仍需明确反馈。
+        if (requiresAttention || !cached?.threads.length) {
+          setError((caughtError as Error).message);
+        } else if (source === 'manual') {
+          toast.error('刷新未成功，已保留原邮件，系统会自动重试。');
+        }
       }
     } finally {
       if (activeFetchKeyRef.current === fetchKey) {
@@ -1896,6 +1914,11 @@ export function GmailInbox({
           {lastSyncedAt && (
             <span className="mt-0.5 text-[11px] text-muted-foreground">
               {'\u4e0a\u6b21\u540c\u6b65'} {formatSyncTime(lastSyncedAt)}
+              {syncFailures.key === inboxCacheKey && syncFailures.count >= 3 ? (
+                <span className="ml-2 text-amber-700" role="status" title="连续刷新失败，当前显示上次同步的邮件；系统会继续自动尝试，也可点击右侧刷新。">
+                  更新暂缓
+                </span>
+              ) : null}
             </span>
           )}
           {subjectTranslationError && (
@@ -1984,7 +2007,7 @@ export function GmailInbox({
 
       {visibleError && threads.length > 0 && (
         <div className="flex shrink-0 items-center justify-between gap-3 border-b border-amber-200/80 bg-amber-50/90 px-3 py-2 text-xs text-amber-800">
-          <span className="truncate">同步暂时失败，继续显示上次邮件：{visibleError}</span>
+          <span className="truncate">{visibleError}</span>
           <Button
             variant="ghost"
             size="sm"

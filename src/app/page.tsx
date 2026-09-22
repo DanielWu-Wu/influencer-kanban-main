@@ -1,6 +1,6 @@
 'use client';
 
-import { useCallback, useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useRouter } from 'next/navigation';
 import { Button } from '@/components/ui/button';
 import { Sheet, SheetContent } from '@/components/ui/sheet';
@@ -33,7 +33,6 @@ import {
   useReminders,
   useTodos,
   useCalendarEvents,
-  useGmailThreads,
 } from '@/lib/data';
 import PromptManager from '@/components/prompt-manager';
 import { CooperationProjectsPage } from '@/components/cooperation-projects-page';
@@ -70,6 +69,11 @@ import { AppUpdateNotice } from '@/components/app-update-notice';
 import { useMailTranslationPrefetch } from '@/lib/use-gmail-translation-prefetch';
 import { useInboxNewMail } from '@/lib/use-inbox-new-mail';
 import { toast } from 'sonner';
+import { useUserDataStore } from '@/components/user-data-provider';
+import { USER_DATA_KEYS } from '@/lib/account-data-keys';
+import { parseMailAccountBindings } from '@/lib/mail-account-bindings';
+import { isUsableReminderConversation } from '@/lib/project-reminders';
+import type { TodoItem } from '@/lib/types';
 
 type View = 'kanban' | 'list' | 'email' | 'reminders' | 'settings' | 'accounts' | 'todo' | 'calendar' | 'prospecting' | 'gmail' | 'prompts' | 'draft-prompts';
 
@@ -209,6 +213,8 @@ export default function DashboardPage() {
   const { templates } = useEmailTemplates();
   const { reminders, pendingReminders, addReminder, completeReminder, skipReminder } = useReminders();
   const { todos, addTodo, updateTodo, toggleTodo, deleteTodo } = useTodos();
+  const { data: userData } = useUserDataStore();
+  const mailBindings = useMemo(() => parseMailAccountBindings(userData[USER_DATA_KEYS.MAIL_ACCOUNT_BINDINGS]), [userData]);
   const { events, addEvent, deleteEvent } = useCalendarEvents();
   const { settings, loading: settingsLoading } = useSettings();
   const {
@@ -217,7 +223,6 @@ export default function DashboardPage() {
     loading: mailAccountsLoading,
     selectAccount,
   } = useMailAccounts();
-  const { unreadCount } = useGmailThreads();
   const dailyGmail = useDailyGmailTodos(
     settings,
     Boolean(
@@ -293,6 +298,38 @@ export default function DashboardPage() {
     });
   }, [changeView, dailyGmail.messageSnapshots, handleOpenGmailThread, mailAccounts, selectAccount]);
 
+  const handleOpenProjectReminder = useCallback((todo: TodoItem) => {
+    const reminder = todo.projectReminder;
+    if (!reminder) return;
+    if (reminder.target === 'project') {
+      if (reminder.sourceUrl !== settings.feishuCooperationUrl?.trim()) {
+        toast.error('当前合作表与提醒来源不同，请先在设置中切换回原合作表。');
+        return;
+      }
+      handleOpenCooperationProject(reminder.projectId);
+      return;
+    }
+    const locator = reminder.conversation;
+    if (!isUsableReminderConversation(locator)) {
+      toast.error('这条提醒缺少完整的邮件定位信息，请从合作项目确认邮件。');
+      return;
+    }
+    const account = mailAccounts.find(item => item.mailAccountId === locator.mailAccountId && item.provider === locator.provider);
+    if (!account || account.connectionStatus !== 'connected') {
+      toast.error('提醒关联的邮箱已断开，请先重新连接原邮箱。');
+      return;
+    }
+    selectAccount(account.mailAccountId);
+    if (locator.provider === 'gmail') {
+      handleOpenGmailThread(locator.threadRef!, { messageId: locator.messageRef });
+    } else {
+      setTencentMessageOpenRequest(current => ({ mailAccountId: locator.mailAccountId,
+        requestId: (current?.requestId || 0) + 1, folderRef: locator.folderRef!,
+        providerMessageRef: locator.messageRef, rfcMessageId: locator.rfcMessageId }));
+      changeView('gmail');
+    }
+  }, [settings.feishuCooperationUrl, handleOpenCooperationProject, mailAccounts, selectAccount, handleOpenGmailThread, changeView]);
+
   useEffect(() => {
     const handleOpenGenerationTask = (event: Event) => {
       const detail = (event as CustomEvent<{
@@ -362,10 +399,11 @@ export default function DashboardPage() {
     setOpenCooperationProjectId(undefined);
   }, []);
 
+  const pendingMailCount = dailyGmail.items.filter((item) => !item.completed).length;
   const stats = {
     upcoming: pendingReminders.length,
     todayTodos: todos.filter((todo) => todo.status !== 'completed').length
-      + dailyGmail.items.filter((item) => !item.completed).length,
+      + pendingMailCount,
   };
 
   if (
@@ -444,7 +482,7 @@ export default function DashboardPage() {
                 : item.id === 'reminders'
                   ? stats.upcoming
                   : item.id === 'gmail'
-                    ? unreadCount
+                    ? pendingMailCount
                     : 0;
 
             return (
@@ -617,8 +655,8 @@ export default function DashboardPage() {
                     <p className="text-base font-semibold">{stats.todayTodos}</p>
                   </div>
                   <div className="rounded-md bg-white/68 px-2 py-1.5">
-                    <p className="text-muted-foreground">Gmail</p>
-                    <p className="text-base font-semibold">{unreadCount}</p>
+                    <p className="text-muted-foreground">邮件</p>
+                    <p className="text-base font-semibold">{pendingMailCount}</p>
                   </div>
                 </div>
               </div>
@@ -653,6 +691,7 @@ export default function DashboardPage() {
                 onOpenSettings={() => changeView('settings')}
                 openProjectId={openCooperationProjectId}
                 onOpenProjectHandled={handleOpenCooperationProjectHandled}
+                reminders={{ sourceUrl: settings.feishuCooperationUrl || '', todos, bindings: mailBindings, onAdd: addTodo }}
               />
             </div>
           )}
@@ -755,6 +794,7 @@ export default function DashboardPage() {
                 onUpdate={updateTodo}
                 onToggle={toggleTodo}
                 onDelete={deleteTodo}
+                onOpenProjectReminder={handleOpenProjectReminder}
                 gmailItems={dailyGmail.items}
                 gmailLoading={dailyGmail.loading}
                 gmailRefreshing={dailyGmail.refreshing}
@@ -785,6 +825,8 @@ export default function DashboardPage() {
                 onDeleteEvent={deleteEvent}
                 onRefreshCooperation={() => { void cooperationCalendar.refresh(); }}
                 onOpenCooperationProject={handleOpenCooperationProject}
+                onOpenProjectReminder={handleOpenProjectReminder}
+                onToggleTodo={toggleTodo}
               />
             </div>
           )}

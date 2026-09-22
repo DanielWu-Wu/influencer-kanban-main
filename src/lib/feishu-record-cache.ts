@@ -64,7 +64,9 @@ async function loadFeishuRecords(url: string, fieldNames: string[]) {
     }
 
     records.push(...(result.data?.items || []));
-    if (!result.data?.has_more || !result.data.page_token) break;
+    if (!result.data?.has_more) break;
+    if (!result.data.page_token) throw new Error('飞书分页信息不完整，无法确认查重结果。');
+    if (page === 9) throw new Error('飞书记录超出本轮读取范围，无法完整查重，已停止写入准备。');
     pageToken = result.data.page_token;
   }
 

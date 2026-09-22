@@ -14,6 +14,8 @@ export type FeishuBatchResult = {
   status: 'success' | 'failed';
   recordId?: string;
   error?: string;
+  /** False/absent on uncertain write outcomes; never blindly retry a create. */
+  outcomeCertain?: boolean;
 };
 
 export function chunkFeishuItems<T>(items: T[], size = FEISHU_BATCH_SIZE) {

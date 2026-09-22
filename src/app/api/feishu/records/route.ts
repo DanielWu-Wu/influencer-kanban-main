@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { createHash } from 'node:crypto';
-import { requestFeishuApi, resolveFeishuBaseUrl } from '@/lib/feishu-base';
+import { FeishuApiError, requestFeishuApi, resolveFeishuBaseUrl } from '@/lib/feishu-base';
 import {
   chunkFeishuItems,
   normalizeBatchOperationId,
@@ -127,6 +127,7 @@ function validateBatchItems(
 }
 
 export async function POST(request: NextRequest) {
+  let writeStarted = false;
   const appAuth = await getRequestUser(request);
   if (!appAuth) return NextResponse.json({ error: '未登录。' }, { status: 401 });
 
@@ -222,6 +223,7 @@ export async function POST(request: NextRequest) {
         );
         try {
           const endpoint = body.action === 'batchCreate' ? 'batch_create' : 'batch_update';
+          writeStarted = true;
           const data = await requestFeishuApi<{
             records?: Array<{ record_id?: string; id?: string }>;
           }>(
@@ -247,16 +249,16 @@ export async function POST(request: NextRequest) {
           batch.forEach((item, itemIndex) => {
             const returned = records[itemIndex];
             const recordId = returned?.record_id
-              || returned?.id
-              || (body.action === 'batchUpdate' ? (item as FeishuBatchUpdateItem).recordId : '');
+              || returned?.id;
             results.push(recordId
-              ? { clientId: item.clientId, status: 'success', recordId }
-              : { clientId: item.clientId, status: 'failed', error: '飞书未返回记录 ID。' });
+              ? { clientId: item.clientId, status: 'success', recordId, outcomeCertain: true }
+              : { clientId: item.clientId, status: 'failed', outcomeCertain: false, error: '飞书未返回记录 ID。' });
           });
         } catch (error) {
           const message = error instanceof Error ? error.message : '飞书批量写入失败。';
           batch.forEach((item) => {
-            results.push({ clientId: item.clientId, status: 'failed', error: message });
+            results.push({ clientId: item.clientId, status: 'failed', error: message,
+              outcomeCertain: error instanceof FeishuApiError && error.outcomeCertain });
           });
         }
       }
@@ -286,6 +288,7 @@ export async function POST(request: NextRequest) {
     );
 
     if (body.action === 'create') {
+      writeStarted = true;
       const data = await requestFeishuApi<{ record: unknown }>(
         basePath,
         auth.accessToken,
@@ -302,6 +305,7 @@ export async function POST(request: NextRequest) {
     }
 
     if (body.action === 'update') {
+      writeStarted = true;
       if (!body.recordId) {
         return NextResponse.json({ error: '缺少需要更新的记录 ID。' }, { status: 400 });
       }
@@ -323,7 +327,7 @@ export async function POST(request: NextRequest) {
     return NextResponse.json({ error: '不支持的操作。' }, { status: 400 });
   } catch (error) {
     return NextResponse.json(
-      { error: error instanceof Error ? error.message : '飞书记录操作失败。' },
+      { error: error instanceof Error ? error.message : '飞书记录操作失败。', outcomeCertain: !writeStarted },
       { status: 400 },
     );
   }

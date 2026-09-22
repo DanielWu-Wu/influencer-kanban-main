@@ -69,7 +69,11 @@ import {
   prospectEmailSourceLabel,
 } from '@/lib/prospect-email-selection';
 
+import { ProspectWriteStatusLine } from './prospect-write-status';
+
 type Props = {
+  onRetryWrite: (prospect: Prospect) => void;
+  onContentTypesChange: (id: string, value: string) => void;
   prospects: Prospect[];
   selectedIds: string[];
   input: string;
@@ -301,10 +305,12 @@ export function InfluencerImportTab({
   onRemove,
   onRemoveMany,
   onClearInput,
+  onRetryWrite,
+  onContentTypesChange,
 }: Props) {
   const [query, setQuery] = useState('');
   const selected = useMemo(
-    () => prospects.filter((item) => selectedIds.includes(item.id)),
+    () => prospects.filter((item) => selectedIds.includes(item.id) && !['checking', 'writing'].includes(item.feishuWriteTask?.status || '')),
     [prospects, selectedIds],
   );
   const visibleProspects = useMemo(() => {
@@ -383,7 +389,7 @@ export function InfluencerImportTab({
           disabled={!canAddResource || preparingResourcePreview || writingFeishu}
         >
           {preparingResourcePreview ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <UserPlus className="mr-2 h-4 w-4" />}
-          {preparingResourcePreview ? '准备预览中…' : '加入资源库'}
+          {preparingResourcePreview ? '准备预览中…' : `加入资源库（${selected.length}）`}
         </Button>
         <Button
           variant="outline"
@@ -391,7 +397,7 @@ export function InfluencerImportTab({
           disabled={!canCreate || preparingDevelopmentPreview || writingFeishu}
         >
           {preparingDevelopmentPreview ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <UserPlus className="mr-2 h-4 w-4" />}
-          {preparingDevelopmentPreview ? '准备预览中…' : '新建开发记录'}
+          {preparingDevelopmentPreview ? '准备预览中…' : `新建开发记录（${selected.length}）`}
         </Button>
         <Button
           variant="outline"
@@ -402,11 +408,11 @@ export function InfluencerImportTab({
           {preparingQuickPreview
             ? <Loader2 className="mr-2 h-4 w-4 animate-spin" />
             : <Zap className="mr-2 h-4 w-4" />}
-          {preparingQuickPreview ? '准备快速建档…' : '快速建档'}
+          {preparingQuickPreview ? '准备快速建档…' : `快速建档（${selected.length}）`}
         </Button>
         <Button variant="outline" onClick={() => onConfirmInvitation(selected)} disabled={!canConfirm}>
           <UserCheck className="mr-2 h-4 w-4" />
-          确认待开发
+          确认待开发（{selected.filter(canConfirmInvitation).length}）
         </Button>
         <Button variant="ghost" onClick={onClearInput} disabled={!input}>
           清空输入
@@ -629,6 +635,14 @@ export function InfluencerImportTab({
                   </TableCell>
                   <TableCell>
                     <Badge variant="outline" className={workflow.className}>{workflow.label}</Badge>
+                    <ProspectWriteStatusLine prospect={prospect} onRetry={onRetryWrite} />
+                    {prospect.resourceStatus === 'missing' ? <Input
+                      aria-label={`${prospect.title || prospect.inputUrl} 内容类型`}
+                      placeholder="内容类型（可选，逗号分隔）"
+                      className="mt-2 min-w-40"
+                      defaultValue={(prospect.resourceContentTypes || []).join('，')}
+                      onBlur={(event) => onContentTypesChange(prospect.id, event.target.value)}
+                    /> : null}
                   </TableCell>
                   <TableCell className="text-right">
                     <div className="flex justify-end gap-1">

@@ -85,6 +85,10 @@ export async function fetchFeishuApi<T>(path: string, accessToken: string) {
   return requestFeishuApi<T>(path, accessToken);
 }
 
+export class FeishuApiError extends Error {
+  constructor(message: string, public readonly outcomeCertain: boolean) { super(message); }
+}
+
 export async function requestFeishuApi<T>(
   path: string,
   accessToken: string,
@@ -100,7 +104,8 @@ export async function requestFeishuApi<T>(
   });
   const payload = await response.json() as FeishuApiPayload<T>;
   if (!response.ok || (payload.code && payload.code !== 0)) {
-    throw new Error(payload.msg || `飞书 API 请求失败 (${response.status})`);
+    throw new FeishuApiError(payload.msg || `飞书 API 请求失败 (${response.status})`,
+      response.status >= 400 && response.status < 500 && response.status !== 408);
   }
   if (!payload.data) throw new Error('飞书 API 没有返回数据。');
   return payload.data;

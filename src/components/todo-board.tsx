@@ -3,6 +3,8 @@
 import { useState } from 'react';
 import { TodoItem, TodoPriority } from '@/lib/types';
 import { Button } from '@/components/ui/button';
+import { ProjectReminderLink } from '@/components/project-reminder-link';
+import { TodoTimePicker } from '@/components/todo-time-picker';
 import { Input } from '@/components/ui/input';
 import { Textarea } from '@/components/ui/textarea';
 import { Badge } from '@/components/ui/badge';
@@ -28,6 +30,7 @@ interface TodoBoardProps {
   onUpdate: (id: string, updates: Partial<TodoItem>) => void;
   onToggle: (id: string) => void;
   onDelete: (id: string) => void;
+  onOpenProjectReminder?: (todo: TodoItem) => void;
   gmailItems: DailyGmailTodo[];
   gmailLoading: boolean;
   gmailRefreshing: boolean;
@@ -136,6 +139,7 @@ export function TodoBoard({
   onUpdate,
   onToggle,
   onDelete,
+  onOpenProjectReminder,
   gmailItems,
   gmailLoading,
   gmailRefreshing,
@@ -282,6 +286,7 @@ export function TodoBoard({
           </button>
           <div className="min-w-0 flex-1">
             <p className="truncate text-xs line-through">{entry.todo.title}</p>
+            <ProjectReminderLink todo={entry.todo} onOpen={onOpenProjectReminder} />
           </div>
           {showCompletedDate && entry.todo.completedAt && (
             <span className="shrink-0 text-[10px]">{new Date(entry.todo.completedAt).toLocaleDateString('zh-CN', { month: 'short', day: 'numeric' })}</span>
@@ -435,8 +440,8 @@ export function TodoBoard({
                 <div className="min-w-0 flex-1">
                   <div className="flex min-w-0 items-center gap-2">
                     <p className="max-w-[320px] truncate text-[13px] font-semibold text-foreground">{entry.todo.title}</p>
-                    <span className="shrink-0 rounded-md border border-violet-100 bg-violet-50 px-1.5 py-0.5 text-[9px] font-medium text-violet-600">手动</span>
-                    {entry.todo.tags.map((tag) => <Badge key={tag} variant="secondary" className="h-5 max-w-32 shrink truncate px-1.5 text-[9px]">{tag}</Badge>)}
+                    <span className="shrink-0 rounded-md border border-violet-100 bg-violet-50 px-1.5 py-0.5 text-[9px] font-medium text-violet-600">{entry.todo.projectReminder ? '项目提醒' : '手动'}</span>
+                    {entry.todo.tags.filter(tag => !entry.todo.projectReminder || tag !== '项目提醒').map((tag) => <Badge key={tag} variant="secondary" className="h-5 max-w-32 shrink truncate px-1.5 text-[9px]">{tag}</Badge>)}
                   </div>
                   <p className="mt-1 truncate text-[11px] text-muted-foreground">{entry.todo.description || '未填写任务说明'}</p>
                 </div>
@@ -451,6 +456,7 @@ export function TodoBoard({
                   )}
                 </div>
                 <div className="flex shrink-0 items-center opacity-45 transition-opacity duration-150 ease-out group-hover:opacity-100 group-focus-within:opacity-100 motion-reduce:transition-none">
+                  <ProjectReminderLink todo={entry.todo} onOpen={onOpenProjectReminder} />
                   <button type="button" onClick={() => openEditDialog(entry.todo)} className="flex h-7 w-7 items-center justify-center rounded-md text-blue-600 hover:bg-blue-50" aria-label={`编辑“${entry.todo.title}”`} title="编辑任务">
                     <Pencil className="h-3.5 w-3.5" />
                   </button>
@@ -582,10 +588,9 @@ export function TodoBoard({
               </div>
               <div className="space-y-2">
                 <label className="text-sm font-medium">截止时间</label>
-                <Input
-                  type="time"
+                <TodoTimePicker
                   value={todoDraft.dueTime}
-                  onChange={(e) => setTodoDraft({ ...todoDraft, dueTime: e.target.value })}
+                  onChange={(dueTime) => setTodoDraft({ ...todoDraft, dueTime })}
                 />
               </div>
             </div>

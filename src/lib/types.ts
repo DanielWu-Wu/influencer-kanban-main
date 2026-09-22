@@ -25,6 +25,12 @@ export interface TodoItem {
   tags: string[];
   createdAt: string;
   completedAt?: string;
+  projectReminder?: {
+    projectId: string;
+    sourceUrl: string;
+    target: 'project' | 'mail';
+    conversation?: import('./mail-account-bindings').ProjectConversationLocator;
+  };
 }
 
 export interface CalendarEvent {

@@ -7,6 +7,7 @@ import {
   type CooperationCalendarEvent,
 } from '@/lib/cooperation-projects';
 import { Button } from '@/components/ui/button';
+import { ProjectReminderLink } from '@/components/project-reminder-link';
 import { Input } from '@/components/ui/input';
 import { Textarea } from '@/components/ui/textarea';
 import { Badge } from '@/components/ui/badge';
@@ -39,6 +40,8 @@ interface WorkCalendarProps {
   onDeleteEvent: (id: string) => void;
   onRefreshCooperation: () => void;
   onOpenCooperationProject: (projectId: string) => void;
+  onOpenProjectReminder?: (todo: TodoItem) => void;
+  onToggleTodo?: (id: string) => void;
 }
 
 const WEEKDAYS = ['日', '一', '二', '三', '四', '五', '六'];
@@ -102,6 +105,8 @@ export function WorkCalendar({
   onDeleteEvent,
   onRefreshCooperation,
   onOpenCooperationProject,
+  onOpenProjectReminder,
+  onToggleTodo,
 }: WorkCalendarProps) {
   const [currentDate, setCurrentDate] = useState(new Date());
   const [selectedDate, setSelectedDate] = useState<Date | null>(null);
@@ -161,7 +166,7 @@ export function WorkCalendar({
   );
   const todosByDate = useMemo(
     () => indexByDate(
-      todos.filter((todo) => todo.status === 'pending' && Boolean(todo.dueDate)),
+      todos.filter((todo) => (todo.status === 'pending' || Boolean(todo.projectReminder)) && Boolean(todo.dueDate)),
       (todo) => todo.dueDate!,
     ),
     [todos],
@@ -383,8 +388,8 @@ export function WorkCalendar({
               {/* 待办指示器 */}
               {dateTodos.length > 0 && (
                 <div className="pointer-events-none absolute top-1 right-1">
-                  <Badge variant="destructive" className="h-4 w-4 p-0 text-[10px] flex items-center justify-center">
-                    {dateTodos.length}
+                  <Badge variant={dateTodos.some(todo => todo.status === 'pending') ? 'destructive' : 'secondary'} className="h-4 w-4 p-0 text-[10px] flex items-center justify-center">
+                    {dateTodos.filter(todo => todo.status === 'pending').length || '✓'}
                   </Badge>
                 </div>
               )}
@@ -393,7 +398,7 @@ export function WorkCalendar({
         })}
       </div>
 
-      {/* 选中日期详情：只读查看，不会创建日程 */}
+      {/* 选中日期详情：项目提醒共用待办完成状态 */}
       <Dialog open={showDayDetails} onOpenChange={setShowDayDetails}>
         <DialogContent className="flex max-h-[85vh] max-w-2xl flex-col overflow-hidden">
           <DialogHeader>
@@ -483,10 +488,15 @@ export function WorkCalendar({
                   <div key={todo.id} className="flex items-start gap-3 rounded-lg bg-blue-50 p-3">
                     <Clock className="mt-0.5 h-3.5 w-3.5 text-blue-600" />
                     <div className="min-w-0 flex-1">
-                      <p className="text-sm font-medium">{todo.title}</p>
+                      <p className={`text-sm font-medium ${todo.status === 'completed' ? 'line-through text-muted-foreground' : ''}`}>{todo.title}</p>
+                      {todo.dueTime && <p className="mt-1 text-xs text-muted-foreground">{todo.dueTime}</p>}
                       {todo.description ? <p className="mt-1 whitespace-pre-wrap text-xs text-muted-foreground">{todo.description}</p> : null}
                     </div>
-                    <Badge variant="secondary" className="shrink-0 text-[10px]">待办</Badge>
+                    <div className="flex shrink-0 flex-col items-end gap-1">
+                      <Badge variant="secondary" className="text-[10px]">{todo.status === 'completed' ? '已完成' : '待完成'}</Badge>
+                      <ProjectReminderLink todo={todo} onOpen={onOpenProjectReminder ? item => { setShowDayDetails(false); onOpenProjectReminder(item); } : undefined} />
+                      {todo.projectReminder && onToggleTodo && <Button size="sm" variant="outline" className="h-7 text-xs" onClick={() => onToggleTodo(todo.id)}>{todo.status === 'completed' ? '恢复待办' : '标记完成'}</Button>}
+                    </div>
                   </div>
                 ))}
               </section>

@@ -755,46 +755,44 @@ export function useCollaborations() {
 }
 
 export function useTodos() {
-  const { value: todos, save: saveCloudTodos, loading } = useCloudUserData<TodoItem[]>(USER_DATA_KEYS.TODOS, []);
-
-  const saveTodos = useCallback((newData: TodoItem[]) => {
-    saveCloudTodos(newData);
-  }, [saveCloudTodos]);
+  const { value: todos, update: updateCloudTodos, loading } = useCloudUserData<TodoItem[]>(USER_DATA_KEYS.TODOS, []);
 
   const addTodo = useCallback(
     (todo: Omit<TodoItem, 'id' | 'createdAt'>) => {
       const newTodo: TodoItem = { ...todo, id: generateId(), createdAt: new Date().toISOString() };
-      saveTodos([...todos, newTodo]);
+      updateCloudTodos((current) => [...current, newTodo]);
       return newTodo;
     },
-    [todos, saveTodos],
+    [updateCloudTodos],
   );
 
   const updateTodo = useCallback(
     (id: string, updates: Partial<TodoItem>) => {
-      saveTodos(todos.map((todo) => (todo.id === id ? { ...todo, ...updates } : todo)));
+      updateCloudTodos((current) => current.map((todo) => (todo.id === id ? { ...todo, ...updates } : todo)));
     },
-    [todos, saveTodos],
+    [updateCloudTodos],
   );
 
   const deleteTodo = useCallback(
     (id: string) => {
-      saveTodos(todos.filter((todo) => todo.id !== id));
+      updateCloudTodos((current) => current.filter((todo) => todo.id !== id));
     },
-    [todos, saveTodos],
+    [updateCloudTodos],
   );
 
   const toggleTodo = useCallback(
     (id: string) => {
-      const todo = todos.find((item) => item.id === id);
-      if (!todo) return;
-      const status = todo.status === 'completed' ? 'pending' : 'completed';
-      updateTodo(id, {
-        status,
-        completedAt: status === 'completed' ? new Date().toISOString() : undefined,
-      });
+      updateCloudTodos((current) => current.map((todo) => {
+        if (todo.id !== id) return todo;
+        const status = todo.status === 'completed' ? 'pending' : 'completed';
+        return {
+          ...todo,
+          status,
+          completedAt: status === 'completed' ? new Date().toISOString() : undefined,
+        };
+      }));
     },
-    [todos, updateTodo],
+    [updateCloudTodos],
   );
 
   const completeTodo = useCallback(

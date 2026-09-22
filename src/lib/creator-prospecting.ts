@@ -2,6 +2,7 @@ import type {
   ProspectEmailCandidate,
   ProspectEmailSource,
 } from './prospect-email-selection';
+import { recoverProspectWriteTask, type ProspectWriteTask } from './prospect-feishu-write';
 
 export const CREATOR_PROSPECTS_STORAGE_KEY = 'influencer-board-creator-prospects';
 export const CREATOR_PROSPECTS_DELETED_STORAGE_KEY = 'influencer-board-creator-prospects-deleted';
@@ -91,6 +92,9 @@ export type OutreachGenerationStage =
   | 'error';
 
 export type Prospect = {
+  feishuWriteTask?: ProspectWriteTask;
+  feishuWriteBacklog?: ProspectWriteTask[];
+  resourceContentTypes?: string[];
   schemaVersion: number;
   id: string;
   inputUrl: string;
@@ -128,6 +132,7 @@ export type Prospect = {
   repeatOutreach?: boolean;
   previousProspectId?: string;
   duplicateConfirmedUnique?: boolean;
+  ignoredSuspectedRecordIds?: string[];
   resourceMatchPreview?: {
     recordId: string;
     matchReason: string;
@@ -444,6 +449,10 @@ export function migrateProspects(value: unknown): Prospect[] {
       error: 'error',
     };
     const now = new Date().toISOString();
+    const confirmedSteps = [item.feishuWriteTask, ...(item.feishuWriteBacklog || [])]
+      .flatMap((task) => task?.steps || []).filter((step) => step.status === 'success' && step.recordId);
+    const confirmedResourceId = confirmedSteps.find((step) => step.key === 'resource')?.recordId;
+    const confirmedDevelopmentId = confirmedSteps.find((step) => step.key === 'development')?.recordId;
     const migratedWorkflowStatus = item.status === 'added_to_feishu' && !item.feishuRecordId
       ? 'resolved'
       : item.workflowStatus || legacyStatusMap[item.status || ''] || 'recorded';
@@ -460,9 +469,11 @@ export function migrateProspects(value: unknown): Prospect[] {
     return {
       ...item,
       schemaVersion: CREATOR_PROSPECTS_SCHEMA_VERSION,
+      feishuWriteTask: recoverProspectWriteTask(item.feishuWriteTask),
+      feishuWriteBacklog: item.feishuWriteBacklog?.map((task) => recoverProspectWriteTask(task)!),
       id: item.id || `prospect-${Date.now()}-${index}`,
       inputUrl: item.inputUrl || item.url || item.sourceUrl || '',
-      workflowStatus,
+      workflowStatus: workflowStatus === 'resolved' && confirmedDevelopmentId ? 'dedupe_completed' : workflowStatus,
       emailStatus: item.emailStatus || (publicEmail ? 'available' : 'missing'),
       emailSource: item.emailSource || (item.emailStatus === 'manual'
         ? 'manual'
@@ -481,18 +492,18 @@ export function migrateProspects(value: unknown): Prospect[] {
           ? 'unique'
           : 'unchecked'
         ),
-      resourceStatus: item.resourceStatus || (
+      resourceStatus: confirmedResourceId ? 'exists' : item.resourceStatus || (
         legacySingleTableRecord ? 'exists'
           : item.dedupeStatus === 'duplicate' ? 'exists'
           : item.dedupeStatus === 'suspected' ? 'suspected'
             : item.dedupeStatus === 'unique' ? 'missing'
               : 'unchecked'
       ),
-      developmentStatus: item.developmentStatus || (
+      developmentStatus: confirmedDevelopmentId ? 'exists' : item.developmentStatus || (
         legacySingleTableRecord ? 'unchecked' : item.feishuRecordId ? 'exists' : 'unchecked'
       ),
-      resourceRecordId: item.resourceRecordId || (legacySingleTableRecord ? item.feishuRecordId : undefined),
-      feishuRecordId: legacySingleTableRecord ? undefined : item.feishuRecordId,
+      resourceRecordId: item.resourceRecordId || confirmedResourceId || (legacySingleTableRecord ? item.feishuRecordId : undefined),
+      feishuRecordId: legacySingleTableRecord ? undefined : item.feishuRecordId || confirmedDevelopmentId,
       publicEmail,
       language: repairedLanguage,
       languageSource: item.languageSource !== 'manual' && repairedLanguage && repairedLanguage !== item.language

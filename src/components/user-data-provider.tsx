@@ -50,6 +50,70 @@ type UserDataContextValue = {
 
 const UserDataContext = createContext<UserDataContextValue | null>(null);
 
+const TODO_OUTBOX_PREFIX = 'influencer-board-todo-cloud-outbox-v1';
+const SAVE_RETRY_DELAYS_MS = [0, 600, 1800] as const;
+
+type PendingTodoWrite = {
+  id: string;
+  queuedAt: string;
+  data: unknown;
+};
+
+function todoOutboxKey(userId: string) {
+  return `${TODO_OUTBOX_PREFIX}:${userId}`;
+}
+
+function readPendingTodoWrite(userId: string): PendingTodoWrite | null {
+  if (typeof window === 'undefined') return null;
+  try {
+    const parsed = JSON.parse(window.localStorage.getItem(todoOutboxKey(userId)) || 'null') as Partial<PendingTodoWrite> | null;
+    if (!parsed || typeof parsed.id !== 'string' || typeof parsed.queuedAt !== 'string' || !Array.isArray(parsed.data)) {
+      return null;
+    }
+    return { id: parsed.id, queuedAt: parsed.queuedAt, data: parsed.data };
+  } catch {
+    return null;
+  }
+}
+
+function writePendingTodoWrite(userId: string, data: unknown): PendingTodoWrite | null {
+  if (typeof window === 'undefined') return null;
+  const pending = {
+    id: typeof crypto !== 'undefined' && 'randomUUID' in crypto
+      ? crypto.randomUUID()
+      : `${Date.now()}-${Math.random().toString(36).slice(2)}`,
+    queuedAt: new Date().toISOString(),
+    data,
+  } satisfies PendingTodoWrite;
+  try {
+    window.localStorage.setItem(todoOutboxKey(userId), JSON.stringify(pending));
+    return pending;
+  } catch {
+    return null;
+  }
+}
+
+function clearPendingTodoWrite(userId: string, pendingId?: string) {
+  if (typeof window === 'undefined') return;
+  if (pendingId) {
+    const current = readPendingTodoWrite(userId);
+    if (current?.id !== pendingId) return;
+  }
+  window.localStorage.removeItem(todoOutboxKey(userId));
+}
+
+function isPendingWriteNewer(pending: PendingTodoWrite, cloudUpdatedAt?: unknown) {
+  if (typeof cloudUpdatedAt !== 'string') return true;
+  const pendingTime = Date.parse(pending.queuedAt);
+  const cloudTime = Date.parse(cloudUpdatedAt);
+  return Number.isNaN(pendingTime) || Number.isNaN(cloudTime) || pendingTime > cloudTime;
+}
+
+function waitForRetry(delayMs: number) {
+  if (!delayMs) return Promise.resolve();
+  return new Promise<void>((resolve) => globalThis.setTimeout(resolve, delayMs));
+}
+
 function readLegacySnapshot() {
   return Object.fromEntries(
     LEGACY_STORAGE_KEYS.flatMap((key) => {
@@ -110,6 +174,67 @@ export function UserDataProvider({ children }: { children: React.ReactNode }) {
   const reportedErrors = useRef(new Set<string>());
   const currentAccountId = useRef<string | null>(accountUserId || null);
 
+  const replaceData = useCallback((next: Record<string, unknown>) => {
+    // Child mount effects may save immediately after hydration. Keep their
+    // merge source current before publishing the new data to consumers.
+    dataRef.current = next;
+    setData(next);
+  }, []);
+
+  const writeCloudValue = useCallback(async (key: UserDataKey, value: unknown) => {
+    let lastError: Error | null = null;
+    for (let attempt = 0; attempt < SAVE_RETRY_DELAYS_MS.length; attempt += 1) {
+      await waitForRetry(SAVE_RETRY_DELAYS_MS[attempt]);
+      try {
+        const response = await runSafeRequestWithSessionRecovery(
+          ensureSession,
+          () => fetch('/api/user-data', {
+            method: 'PUT',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ key, data: value }),
+            keepalive: true,
+          }),
+        );
+        const result = await response.json().catch(() => ({}));
+        if (response.ok && result.success) return;
+        lastError = new Error(result.error || '账号数据保存失败。');
+        if (![408, 429].includes(response.status) && response.status < 500) break;
+      } catch (error) {
+        lastError = error instanceof Error ? error : new Error('账号数据保存失败。');
+      }
+    }
+    throw lastError || new Error('账号数据保存失败。');
+  }, [ensureSession]);
+
+  const enqueueWrite = useCallback((
+    ownerId: string,
+    key: UserDataKey,
+    value: unknown,
+    pendingTodoId?: string,
+  ) => {
+    const previous = writeQueues.current.get(key) || Promise.resolve();
+    const next = previous
+      .catch(() => undefined)
+      .then(async () => {
+        if (currentAccountId.current !== ownerId) return;
+        await writeCloudValue(key, value);
+        if (key === 'todos') clearPendingTodoWrite(ownerId, pendingTodoId);
+        reportedErrors.current.delete(key);
+      })
+      .catch((saveError) => {
+        if (reportedErrors.current.has(key)) return;
+        reportedErrors.current.add(key);
+        toast.error(key === 'todos'
+          ? '任务暂未同步云端，系统会在网络恢复后自动重试。'
+          : saveError instanceof Error ? saveError.message : '账号数据保存失败。');
+      })
+      .finally(() => {
+        if (writeQueues.current.get(key) === next) writeQueues.current.delete(key);
+      });
+    writeQueues.current.set(key, next);
+    return next;
+  }, [writeCloudValue]);
+
   useEffect(() => {
     currentAccountId.current = accountUserId || null;
   }, [accountUserId]);
@@ -117,7 +242,7 @@ export function UserDataProvider({ children }: { children: React.ReactNode }) {
   useEffect(() => {
     if (!accountUserId || accountStatus !== 'active' || accountMustChangePassword) {
       writeQueues.current.clear();
-      setData({});
+      replaceData({});
       setDataOwnerId(null);
       setLoading(false);
       setError('');
@@ -128,7 +253,7 @@ export function UserDataProvider({ children }: { children: React.ReactNode }) {
     const load = async () => {
       setLoading(true);
       setError('');
-      setData({});
+      replaceData({});
       setDataOwnerId(null);
       try {
         if (accountIsAdmin) {
@@ -157,14 +282,25 @@ export function UserDataProvider({ children }: { children: React.ReactNode }) {
         const result = await response.json();
         if (!response.ok || !result.success) throw new Error(result.error || '账号数据读取失败。');
         if (active) {
-          setData(result.data || {});
+          const cloudData = result.data || {};
+          const pendingTodo = readPendingTodoWrite(accountUserId);
+          const cloudTodoUpdatedAt = result.meta?.updatedAtByKey?.todos;
+          const shouldRestorePendingTodo = pendingTodo && isPendingWriteNewer(pendingTodo, cloudTodoUpdatedAt);
+          const nextData = shouldRestorePendingTodo
+            ? { ...cloudData, todos: pendingTodo.data }
+            : cloudData;
+          if (pendingTodo && !shouldRestorePendingTodo) clearPendingTodoWrite(accountUserId, pendingTodo.id);
+          replaceData(nextData);
           setDataOwnerId(accountUserId);
+          if (shouldRestorePendingTodo) {
+            void enqueueWrite(accountUserId, 'todos', pendingTodo.data, pendingTodo.id);
+          }
         }
       } catch (loadError) {
         if (active) {
           const message = loadError instanceof Error ? loadError.message : '账号数据读取失败。';
           setError(message);
-          setData({});
+          replaceData({});
           setDataOwnerId(accountUserId);
         }
       } finally {
@@ -173,46 +309,34 @@ export function UserDataProvider({ children }: { children: React.ReactNode }) {
     };
     void load();
     return () => { active = false; };
-  }, [accountIsAdmin, accountMustChangePassword, accountStatus, accountUserId, ensureSession]);
-
-  useEffect(() => {
-    dataRef.current = data;
-  }, [data]);
+  }, [accountIsAdmin, accountMustChangePassword, accountStatus, accountUserId, enqueueWrite, ensureSession, replaceData]);
 
   const save = useCallback((key: UserDataKey, value: unknown) => {
     const ownerId = accountUserId;
     if (!ownerId) return;
-    dataRef.current = { ...dataRef.current, [key]: value };
-    setData(dataRef.current);
-    const previous = writeQueues.current.get(key) || Promise.resolve();
-    const next = previous
-      .catch(() => undefined)
-      .then(async () => {
-        if (currentAccountId.current !== ownerId) return;
-        const response = await runSafeRequestWithSessionRecovery(
-          ensureSession,
-          () => fetch('/api/user-data', {
-            method: 'PUT',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ key, data: value }),
-          }),
-        );
-        const result = await response.json().catch(() => ({}));
-        if (!response.ok || !result.success) {
-          throw new Error(result.error || '账号数据保存失败。');
-        }
-        reportedErrors.current.delete(key);
-      })
-      .catch((saveError) => {
-        if (reportedErrors.current.has(key)) return;
-        reportedErrors.current.add(key);
-        toast.error(saveError instanceof Error ? saveError.message : '账号数据保存失败。');
-      })
-      .finally(() => {
-        if (writeQueues.current.get(key) === next) writeQueues.current.delete(key);
-      });
-    writeQueues.current.set(key, next);
-  }, [accountUserId, ensureSession]);
+    replaceData({ ...dataRef.current, [key]: value });
+    const pendingTodo = key === 'todos' ? writePendingTodoWrite(ownerId, value) : null;
+    void enqueueWrite(ownerId, key, value, pendingTodo?.id);
+  }, [accountUserId, enqueueWrite, replaceData]);
+
+  useEffect(() => {
+    if (!accountUserId || accountStatus !== 'active' || accountMustChangePassword) return;
+    const retryPendingTodo = () => {
+      const pending = readPendingTodoWrite(accountUserId);
+      if (!pending || writeQueues.current.has('todos')) return;
+      replaceData({ ...dataRef.current, todos: pending.data });
+      void enqueueWrite(accountUserId, 'todos', pending.data, pending.id);
+    };
+    const handleVisibilityChange = () => {
+      if (document.visibilityState === 'visible') retryPendingTodo();
+    };
+    window.addEventListener('online', retryPendingTodo);
+    document.addEventListener('visibilitychange', handleVisibilityChange);
+    return () => {
+      window.removeEventListener('online', retryPendingTodo);
+      document.removeEventListener('visibilitychange', handleVisibilityChange);
+    };
+  }, [accountMustChangePassword, accountStatus, accountUserId, enqueueWrite, replaceData]);
 
   const update = useCallback((key: UserDataKey, updater: (current: unknown) => unknown) => {
     save(key, updater(dataRef.current[key]));

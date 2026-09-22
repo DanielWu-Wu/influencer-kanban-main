@@ -13,7 +13,7 @@ import { useEmailTranslations, useGmailAuth, useSettings } from '@/lib/data';
 import { 
   ArrowLeft, Reply, MoreHorizontal, Globe, Languages,
   Copy, Sparkles, ChevronDown, Loader2,
-  Paperclip, Download, Forward, Mail, MailOpen, ImageOff,
+  Paperclip, Forward, Mail, MailOpen, ImageOff,
   Database, Save, CheckCircle2, XCircle,
   ExternalLink, X,
   FileText,
@@ -22,6 +22,7 @@ import {
 } from 'lucide-react';
 import { EmailComposer } from './email-composer';
 import { IsolatedEmailBody } from './isolated-email-body';
+import { MailAttachmentGallery } from './mail-attachment-gallery';
 import { AITemplateReplyComposer } from './ai-template-reply-composer';
 import { NewEmailComposer } from './new-email-composer';
 import { YouTubeChannelAvatar } from './youtube-channel-avatar';
@@ -1655,9 +1656,9 @@ export function EmailDetail({
             const isExpanded = expandedMessages.has(message.id);
             const isNewest = index === 0;
             const isReplyTarget = replyTarget?.messageId === message.id;
-            const visibleAttachments = (message.attachments || []).filter(
-              (attachment) => !attachment.inline,
-            );
+            const isDraft = message.labels.includes('DRAFT');
+            // Keep inline files accessible too, especially in text-only translations.
+            const visibleAttachments = message.attachments || [];
             const displayBody = repairTextEncoding(message.body);
             const displayHtmlBody = message.htmlBody ? repairTextEncoding(message.htmlBody) : '';
             const sanitizedDisplayHtml = sanitizedDisplayHtmlByMessageId.get(message.id)
@@ -1697,9 +1698,19 @@ export function EmailDetail({
                       
                       {/* 发件人信息 */}
                       <div className="min-w-0">
-                        <div className="mb-0.5 flex items-center gap-2">
+                        <div className="mb-0.5 flex flex-wrap items-center gap-2">
                           <span className="font-medium">{sender.name}</span>
                           <span className="text-xs text-muted-foreground">&lt;{sender.email}&gt;</span>
+                          {isDraft ? (
+                            <Badge
+                              variant="outline"
+                              className="border-amber-200 bg-amber-50 text-amber-700"
+                              aria-label="邮件草稿，尚未发送"
+                              title="邮件草稿，尚未发送"
+                            >
+                              草稿
+                            </Badge>
+                          ) : null}
                         </div>
                         <div className="flex flex-wrap items-center gap-2 text-xs text-muted-foreground">
                           <span>{formatDate(message.date)}</span>
@@ -1748,8 +1759,14 @@ export function EmailDetail({
                           {message.isRead ? '\u6807\u8bb0\u4e3a\u672a\u8bfb' : '\u6807\u8bb0\u4e3a\u5df2\u8bfb'}
                         </span>
                       </Button>
-                      {message.hasAttachments && (
-                        <Badge variant="secondary" className="rounded-md bg-white/80 text-xs">有附件</Badge>
+                      {visibleAttachments.length > 0 && (
+                        <Button variant="outline" size="sm" onClick={(event) => {
+                          event.stopPropagation();
+                          setExpandedMessages((current) => new Set(current).add(message.id));
+                          requestAnimationFrame(() => document.getElementById(`attachments-${message.id}`)?.scrollIntoView({ block: 'nearest' }));
+                        }}>
+                          <Paperclip data-icon="inline-start" />附件（{visibleAttachments.length}）
+                        </Button>
                       )}
                       <Button 
                         variant="ghost" 
@@ -1795,6 +1812,17 @@ export function EmailDetail({
                         {message.bcc ? <p><span className="text-muted-foreground">密送：</span>{message.bcc}</p> : null}
                         {message.replyTo ? <p><span className="text-muted-foreground">Reply-To：</span>{message.replyTo}</p> : null}
                       </div>
+
+                      {visibleAttachments.length > 0 && (
+                        <MailAttachmentGallery
+                          key={JSON.stringify([translationAccountScope, mailScope, thread.id, message.id])}
+                          messageId={message.id}
+                          attachments={visibleAttachments}
+                          loadData={loadAttachmentDataUrl}
+                          downloadingIds={downloadingAttachmentIds}
+                          onDownload={handleDownloadAttachment}
+                        />
+                      )}
 
                       {translatingIds.has(message.id) && !isShowingTranslation ? (
                         <div className="flex items-center gap-2 rounded-lg border border-blue-100 bg-blue-50/80 px-3 py-2 text-xs text-blue-700">
@@ -1902,14 +1930,6 @@ export function EmailDetail({
                         </div>
                       )}
 
-                      {visibleAttachments.length > 0 && (
-                        <AttachmentList
-                          messageId={message.id}
-                          attachments={visibleAttachments}
-                          downloadingAttachmentIds={downloadingAttachmentIds}
-                          onDownload={handleDownloadAttachment}
-                        />
-                      )}
 
                       {/* 操作按钮 */}
                       <div className="flex items-center gap-2 pt-2">
@@ -2122,66 +2142,4 @@ export function EmailDetail({
       />
     </div>
   );
-}
-
-function AttachmentList({
-  messageId,
-  attachments,
-  downloadingAttachmentIds,
-  onDownload,
-}: {
-  messageId: string;
-  attachments: GmailAttachment[];
-  downloadingAttachmentIds: Set<string>;
-  onDownload: (messageId: string, attachment: GmailAttachment) => void;
-}) {
-  return (
-    <div className="space-y-2">
-      <div className="flex items-center gap-2 text-sm font-medium">
-        <Paperclip className="w-4 h-4" />
-        附件（{attachments.length}）
-      </div>
-      <div className="grid gap-2 sm:grid-cols-2">
-        {attachments.map((attachment) => (
-          <button
-            type="button"
-            key={`${attachment.id}-${attachment.filename}`}
-            className="flex min-w-0 items-center gap-3 rounded-lg border border-white/65 bg-white/72 p-3 text-left shadow-sm transition-colors hover:bg-white disabled:cursor-wait disabled:opacity-70"
-            disabled={downloadingAttachmentIds.has(`${messageId}:${attachment.id}`)}
-            onClick={() => onDownload(messageId, attachment)}
-          >
-            {attachment.mimeType.startsWith('image/') && attachment.dataUrl ? (
-              <img
-                src={attachment.dataUrl}
-                alt={attachment.filename}
-                className="h-12 w-12 flex-shrink-0 rounded-lg object-cover"
-              />
-            ) : (
-              <div className="flex h-12 w-12 flex-shrink-0 items-center justify-center rounded-lg bg-white/70">
-                <Paperclip className="w-5 h-5 text-muted-foreground" />
-              </div>
-            )}
-            <div className="min-w-0 flex-1">
-              <p className="truncate text-sm font-medium">{attachment.filename}</p>
-              <p className="text-xs text-muted-foreground">
-                {formatFileSize(attachment.size)}
-              </p>
-            </div>
-            {downloadingAttachmentIds.has(`${messageId}:${attachment.id}`) ? (
-              <Loader2 className="h-4 w-4 flex-shrink-0 animate-spin text-primary" />
-            ) : (
-              <Download className="h-4 w-4 flex-shrink-0 text-muted-foreground" />
-            )}
-          </button>
-        ))}
-      </div>
-    </div>
-  );
-}
-
-function formatFileSize(bytes: number) {
-  if (!bytes) return '未知大小';
-  if (bytes < 1024) return `${bytes} B`;
-  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
-  return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
 }

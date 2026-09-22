@@ -51,6 +51,7 @@ import { Button } from '@/components/ui/button';
 import { Calendar } from '@/components/ui/calendar';
 import { Checkbox } from '@/components/ui/checkbox';
 import { Input } from '@/components/ui/input';
+import { ProjectReminderButton, type ProjectReminderOptions } from '@/components/project-reminder-button';
 import {
   CooperationEmailActions,
   type NoticeDraft,
@@ -312,10 +313,11 @@ function ViewSwitcher({ value, onChange }: {
   );
 }
 
-function ProjectsTable({ projects, selectedId, onSelect }: {
+function ProjectsTable({ projects, selectedId, onSelect, reminders }: {
   projects: CooperationProject[];
   selectedId?: string;
   onSelect: (project: CooperationProject) => void;
+  reminders?: ProjectReminderOptions;
 }) {
   return (
     <div className="h-full overflow-auto bg-white">
@@ -365,7 +367,7 @@ function ProjectsTable({ projects, selectedId, onSelect }: {
                   <p className="mt-1 text-[10px] text-slate-400">{formatStageDuration(project.stageDate)}</p>
                 ) : null}
               </TableCell>
-              <TableCell className="text-xs text-slate-700">{project.nextAction}</TableCell>
+              <TableCell className="text-xs text-slate-700">{project.nextAction}{reminders && <ProjectReminderButton project={project} options={reminders} />}</TableCell>
               <TableCell>
                 <p className="text-xs text-slate-700">{formatCooperationDate(project.expectedPublishDate)}</p>
               </TableCell>
@@ -968,11 +970,13 @@ export function CooperationProjectsPage({
   onOpenSettings,
   openProjectId,
   onOpenProjectHandled,
+  reminders,
 }: {
   active: boolean;
   onOpenSettings: () => void;
   openProjectId?: string;
   onOpenProjectHandled?: () => void;
+  reminders?: ProjectReminderOptions;
 }) {
   const { settings, loading: settingsLoading } = useSettings();
   const url = settings.feishuCooperationUrl?.trim() || '';
@@ -1300,7 +1304,7 @@ export function CooperationProjectsPage({
               </div>
             </div>
           ) : view === 'list' ? (
-            <ProjectsTable projects={filteredProjects} selectedId={selectedProject?.id} onSelect={setSelectedProject} />
+            <ProjectsTable projects={filteredProjects} selectedId={selectedProject?.id} onSelect={setSelectedProject} reminders={reminders} />
           ) : view === 'board' ? (
             <ProjectsBoard projects={filteredProjects} onSelect={setSelectedProject} />
           ) : (

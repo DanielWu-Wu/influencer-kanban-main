@@ -9,7 +9,7 @@ export async function GET(request: NextRequest) {
   const keys = Array.from(PUBLIC_USER_DATA_KEYS);
   const { data, error } = await account.supabase
     .from('user_data')
-    .select('data_key,data')
+    .select('data_key,data,updated_at')
     .eq('user_id', account.user.id)
     .in('data_key', keys);
   if (error) return NextResponse.json({ error: error.message }, { status: 500 });
@@ -17,6 +17,9 @@ export async function GET(request: NextRequest) {
   return NextResponse.json({
     success: true,
     data: Object.fromEntries((data || []).map((row) => [row.data_key, row.data])),
+    meta: {
+      updatedAtByKey: Object.fromEntries((data || []).map((row) => [row.data_key, row.updated_at])),
+    },
   });
 }
 

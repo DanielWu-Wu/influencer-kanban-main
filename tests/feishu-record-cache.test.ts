@@ -6,6 +6,25 @@ import {
   invalidateFeishuRecordsCache,
 } from '../src/lib/feishu-record-cache';
 
+test('不完整分页不能被当成完整查重快照', async () => {
+  const originalFetch = globalThis.fetch;
+  try {
+    for (const withToken of [false, true]) {
+      clearFeishuRecordsCache();
+      let calls = 0;
+      globalThis.fetch = async () => {
+        calls++;
+        return Response.json({ success: true, data: { items: [], has_more: true, page_token: withToken ? `page-${calls}` : undefined } });
+      };
+      await assert.rejects(fetchFeishuRecordSnapshot('https://example.feishu.cn/base/incomplete'), /无法|不完整/);
+      assert.equal(calls, withToken ? 10 : 1);
+    }
+  } finally {
+    globalThis.fetch = originalFetch;
+    clearFeishuRecordsCache();
+  }
+});
+
 test('60秒快照复用、进行中请求去重、按 URL 失效与强制刷新', async () => {
   clearFeishuRecordsCache();
   const originalFetch = globalThis.fetch;

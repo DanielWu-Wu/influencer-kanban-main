@@ -942,7 +942,6 @@ export function AITemplateReplyComposer({
     const delaySeconds = Math.min(60, Math.max(0, settings.emailSendDelaySeconds ?? 0));
     const recipient = recipientEmail;
     const subject = buildGmailReplySubject(replyTarget);
-    if (!window.confirm(`确认通过 ${ownEmail || providerLabel} 发送给 ${recipient}？\n主题：${subject}\n${delaySeconds > 0 ? `${delaySeconds} 秒后发送，倒计时结束前可以取消。` : '邮件将立即发出。'}${draftSaved ? '\n之前保存的邮箱草稿仍会保留，请勿再去草稿箱重复发送。' : ''}`)) return;
     sendGuardRef.current = true;
     setSendState('preparing');
     setError('');
