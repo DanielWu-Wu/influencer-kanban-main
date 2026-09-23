@@ -11,6 +11,7 @@ const MINUTES = Array.from({ length: 60 }, (_, index) => String(index).padStart(
 export function TodoTimePicker({ value, onChange }: { value: string; onChange: (value: string) => void }) {
   const [open, setOpen] = useState(false);
   const [draft, setDraft] = useState('09:00');
+  const [portalContainer, setPortalContainer] = useState<HTMLDivElement | null>(null);
   const hour24 = Number(draft.slice(0, 2));
   const period = hour24 >= 12 ? '下午' : '上午';
   const hour = String(hour24 % 12 || 12).padStart(2, '0');
@@ -32,6 +33,7 @@ export function TodoTimePicker({ value, onChange }: { value: string; onChange: (
     : '选择时间';
 
   return (
+    <div ref={setPortalContainer}>
     <Popover open={open} onOpenChange={(nextOpen) => {
       if (nextOpen) setDraft(value || '09:00');
       setOpen(nextOpen);
@@ -41,7 +43,7 @@ export function TodoTimePicker({ value, onChange }: { value: string; onChange: (
           {display}<Clock data-icon="inline-end" />
         </Button>
       </PopoverTrigger>
-      <PopoverContent align="end" className="w-60 p-2" aria-label="选择截止时间">
+      <PopoverContent align="end" portalContainer={portalContainer} className="w-60 p-2" aria-label="选择截止时间">
         <div className="grid grid-cols-3 gap-2">
           {columns.map((column, columnIndex) => (
             <div key={column.label} className="min-w-0">
@@ -87,5 +89,6 @@ export function TodoTimePicker({ value, onChange }: { value: string; onChange: (
         </div>
       </PopoverContent>
     </Popover>
+    </div>
   );
 }
