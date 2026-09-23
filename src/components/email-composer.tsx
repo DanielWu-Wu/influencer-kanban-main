@@ -234,6 +234,8 @@ export function EmailComposer({
   const targetLangLockedRef = useRef(false);
   const handledAutoRetryTaskRef = useRef('');
   const localDraftDirtyRef = useRef(false);
+  const manualBodyEditedAtRef = useRef<string | undefined>(undefined);
+  const restoredDraftEditedAtRef = useRef<string | undefined>(undefined);
   const ignoredRestoredTaskIdsRef = useRef(new Set<string>());
   const targetContextKeyRef = useRef('');
   const isTencent = mailAccount?.provider === 'tencent_exmail';
@@ -271,7 +273,7 @@ export function EmailComposer({
     draft: { version: 1, identity: systemDraftIdentity, foreignBody: replyContent, chineseBody: editedChineseReply,
       userIdeas, targetLanguage: targetLang, targetLanguageName: targetLangName, targetLanguageNeedsConfirmation: targetLangNeedsConfirmation, tone: replyTone,
       snapshot: synchronizedDraft, confirmedForeign, hasSuggestion: Boolean(suggestion),
-      strategyEditing, translationEditing, attachments: [] },
+      strategyEditing, translationEditing, manualBodyEditedAt: manualBodyEditedAtRef.current, attachments: [] },
     files: attachments,
     paused: aiLoading || optimizationLoading || translatingEditedReply || sending || completion === 'scheduled' || completion === 'sent',
     canRestore: () => !localDraftDirtyRef.current && !aiLoading && !optimizationLoading && !translatingEditedReply,
@@ -397,6 +399,8 @@ export function EmailComposer({
   const restoreSystemDraft = (saved: MailReplySystemDraft) => {
     try {
       const restoredAttachments = restoreSystemDraftAttachments(saved);
+      manualBodyEditedAtRef.current = saved.manualBodyEditedAt;
+      restoredDraftEditedAtRef.current = saved.editedAt;
       // Ideas-only snapshots must not suppress a later background result.
       localDraftDirtyRef.current = Boolean(saved.sentAt || saved.foreignBody.trim() || saved.chineseBody.trim());
       if (translationTask?.id) ignoredRestoredTaskIdsRef.current.add(translationTask.id);
@@ -615,7 +619,14 @@ export function EmailComposer({
       targetLangName?: string;
       replyTone?: ReplyTone;
     } | undefined;
-    if (localDraftDirtyRef.current) {
+    const manualBodyEditTime = manualBodyEditedAtRef.current
+      ? Date.parse(manualBodyEditedAtRef.current)
+      : !restoredDraftEditedAtRef.current ? 0 : Date.parse(restoredDraftEditedAtRef.current);
+    const preserveEditedBody = localDraftDirtyRef.current && Boolean(replyContent.trim() || editedChineseReply.trim())
+      && (manualBodyEditedAtRef.current
+        ? manualBodyEditTime >= (generationTask.startedAt || generationTask.createdAt)
+        : manualBodyEditTime > (generationTask.completedAt || 0));
+    if (preserveEditedBody) {
       if (replyContent !== result.suggestion.suggestedReply || editedChineseReply !== result.suggestion.translatedReply) {
         setPendingGeneratedReply({ ...result, ideas: retryInput?.userIdeas || '', taskId: generationTask.id });
       }
@@ -623,6 +634,8 @@ export function EmailComposer({
     }
     setUserIdeas((current) => current.trim() ? current : retryInput?.userIdeas || '');
     localDraftDirtyRef.current = true;
+    manualBodyEditedAtRef.current = undefined;
+    restoredDraftEditedAtRef.current = undefined;
     setGeneratedIdeas(retryInput?.userIdeas || '');
     if (retryInput?.replyTone) setReplyTone(retryInput.replyTone);
     const completedSuggestion = result.suggestion;
@@ -1119,6 +1132,8 @@ export function EmailComposer({
       }
       // Navigation only invalidates editor updates, never the background task result.
       if (runId !== generationRunRef.current || generationContextRef.current !== generationContextKey) return completedResult;
+      manualBodyEditedAtRef.current = undefined;
+      restoredDraftEditedAtRef.current = undefined;
       // The mounted run owns its result. Task hydration must not overwrite newer ideas/body edits.
       appliedGenerationTaskRef.current = taskId || '';
       setStrategyEditing(false);
@@ -1899,9 +1914,10 @@ export function EmailComposer({
 
       {!suggestion && aiError && <ErrorMessage message={aiError} />}
 
-      {pendingGeneratedReply && <div className="rounded-lg border border-amber-200 bg-amber-50 p-3 text-sm">
-        <p>已有编辑内容已保留，生成任务的正文尚未采用。请查看后选择。</p>
-        <details className="my-2"><summary>查看新版邮件</summary><div className="whitespace-pre-wrap break-words">{pendingGeneratedReply.suggestion.suggestedReply}</div><div className="mt-2 whitespace-pre-wrap">{pendingGeneratedReply.suggestion.translatedReply}</div></details>
+      {pendingGeneratedReply && <details className="text-sm text-gray-600">
+        <summary className="cursor-pointer">查看生成稿</summary>
+        <div className="my-2 whitespace-pre-wrap break-words">{pendingGeneratedReply.suggestion.suggestedReply}</div>
+        <div className="my-2 whitespace-pre-wrap">{pendingGeneratedReply.suggestion.translatedReply}</div>
         <div className="flex gap-2">
           <Button variant="outline" onClick={() => setPendingGeneratedReply(null)}>保留当前正文</Button>
           <Button onClick={() => {
@@ -1920,7 +1936,7 @@ export function EmailComposer({
             setPendingGeneratedReply(null);
           }}>采用新版替换正文</Button>
         </div>
-      </div>}
+      </details>}
 
       {suggestion && (
         <>
@@ -2014,7 +2030,7 @@ export function EmailComposer({
               </div>
             </section>
           )}
-          <section inert={aiLoading || translatingEditedReply} className="overflow-hidden rounded-lg border border-gray-300 bg-white shadow-sm">
+          <section inert={aiLoading || generationTask?.status === 'queued' || generationTask?.status === 'running' || translatingEditedReply} className="overflow-hidden rounded-lg border border-gray-300 bg-white shadow-sm">
             <div className="flex items-center justify-between gap-3 border-b border-gray-100 px-4 py-3">
               <div className="min-w-0">
                 <div className="flex flex-wrap items-center gap-2">
@@ -2043,7 +2059,7 @@ export function EmailComposer({
                     </Badge>
                   )}
                 </div>
-                <p className="mt-0.5 text-xs text-gray-500">可直接编辑正文，发送前请核对价格、时间和承诺。</p>
+                <p className="mt-0.5 text-xs text-gray-500">{aiLoading ? '正在生成，完成后可编辑中外文正文。' : '可直接编辑正文，发送前请核对价格、时间和承诺。'}</p>
               </div>
               <Button variant="ghost" size="sm" className="shrink-0 text-gray-600 hover:bg-gray-100" onClick={copyToClipboard}>
                 {copied ? <Check data-icon="inline-start" /> : <Copy data-icon="inline-start" />}
@@ -2061,7 +2077,9 @@ export function EmailComposer({
             <RichEmailEditor
               value={replyContent}
               onChange={(value) => {
+                if (aiLoading || generationTask?.status === 'queued' || generationTask?.status === 'running') return;
                 bodyEditVersionRef.current += 1;
+                manualBodyEditedAtRef.current = new Date().toISOString();
                 localDraftDirtyRef.current = true;
                 updateCurrentDraftSavedStatus(false);
                 setReplyContent(value);
@@ -2093,14 +2111,16 @@ export function EmailComposer({
                     wrap="soft"
                     value={editedChineseReply}
                     onChange={(event) => {
+                      if (aiLoading || generationTask?.status === 'queued' || generationTask?.status === 'running') return;
                       bodyEditVersionRef.current += 1;
+                      manualBodyEditedAtRef.current = new Date().toISOString();
                       localDraftDirtyRef.current = true;
                       updateCurrentDraftSavedStatus(false);
                       setEditedChineseReply(event.target.value);
                     }}
                     placeholder="修改中文邮件正文..."
                     className="field-sizing-fixed min-h-56 min-w-0 max-w-full resize-y overflow-x-hidden break-words rounded-none border-0 bg-white px-4 py-3 text-sm leading-6 shadow-none [overflow-wrap:anywhere] focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-primary/20"
-                    disabled={translatingEditedReply}
+                    disabled={aiLoading || generationTask?.status === 'queued' || generationTask?.status === 'running' || translatingEditedReply}
                   />
                   <div className="flex flex-wrap items-center justify-between gap-3 border-t border-gray-100 bg-gray-50/70 px-4 py-3">
                     <p className="text-xs text-gray-500">将翻译为：{targetLangName}</p>

@@ -13,7 +13,8 @@ test('丢失保存响应的核对忽略对象键顺序，但不忽略审核状�
   const reordered = Object.fromEntries(Object.entries(draft).reverse()) as MailReplySystemDraft;
   assert.equal(sameSavedReplyDraft(draft, reordered), true);
   for (const change of [{ strategyEditing: true }, { confirmedForeign: { foreignBody: 'yes', chineseBody: '是', targetLanguage: 'en' } },
-    { sentAt: '2026-09-23T00:00:00Z' }, { editedAt: '2026-09-23T00:00:00Z' }]) {
+    { sentAt: '2026-09-23T00:00:00Z' }, { editedAt: '2026-09-23T00:00:00Z' },
+    { manualBodyEditedAt: '2026-09-23T00:00:00Z' }]) {
     assert.equal(sameSavedReplyDraft(draft, { ...draft, ...change }), false);
   }
 });
@@ -59,7 +60,8 @@ test('自动保存：旧草稿兼容，发送标记和附件说明可往返，�
   assert.equal(isMailReplySystemDraft(draft), true);
   const sent = { ...draft, sentAt: '2026-09-14T08:00:00Z', editedAt: '2026-09-14T07:00:00Z', attachmentWarning: '附件未暂存' };
   assert.equal(isMailReplySystemDraft(JSON.parse(JSON.stringify(sent))), true);
-  for (const change of [{ sentAt: 'bad' }, { editedAt: 123 }, { attachmentWarning: {} }]) {
+  assert.equal(isMailReplySystemDraft({ ...draft, manualBodyEditedAt: '2026-09-23T00:00:00Z' }), true);
+  for (const change of [{ sentAt: 'bad' }, { editedAt: 123 }, { manualBodyEditedAt: 'bad' }, { attachmentWarning: {} }]) {
     assert.equal(isMailReplySystemDraft({ ...draft, ...change }), false);
   }
 });

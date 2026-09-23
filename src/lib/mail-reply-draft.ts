@@ -54,6 +54,7 @@ export type MailReplySystemDraft = {
   strategyEditing: boolean;
   translationEditing: boolean;
   editedAt?: string;
+  manualBodyEditedAt?: string;
   sentAt?: string;
   attachmentWarning?: string;
   attachments: Array<{ name: string; type: string; lastModified: number; base64: string }>;
@@ -90,7 +91,7 @@ export function isMailReplySystemDraft(value: unknown): value is MailReplySystem
     )
   );
   return item.version === 1 && isMailReplyDraftIdentity(item.identity)
-    && [item.editedAt, item.sentAt].every((value) => value === undefined || (typeof value === 'string' && Number.isFinite(Date.parse(value))))
+    && [item.editedAt, item.manualBodyEditedAt, item.sentAt].every((value) => value === undefined || (typeof value === 'string' && Number.isFinite(Date.parse(value))))
     && (item.attachmentWarning === undefined || typeof item.attachmentWarning === 'string')
     && (item.targetLanguageNeedsConfirmation === undefined || typeof item.targetLanguageNeedsConfirmation === 'boolean')
     && ['foreignBody', 'chineseBody', 'userIdeas', 'targetLanguage', 'targetLanguageName'].every(
