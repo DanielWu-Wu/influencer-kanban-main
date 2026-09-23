@@ -16,6 +16,7 @@ function harness(harnessOptions = {}) {
   let fail = false;
   const writes = [];
   const errors = [];
+  const warnings = [];
   const storage = new Map(harnessOptions.storageEntries || []);
   const windowListeners = new Map();
   const documentListeners = new Map();
@@ -55,8 +56,15 @@ function harness(harnessOptions = {}) {
       if (name === 'react') return react;
       if (name === 'react/jsx-runtime') return { jsx: (type, props) => ({ type, props }), jsxs: (type, props) => ({ type, props }) };
       if (name.includes('auth-provider')) return { useAuth: () => ({ account, ensureSession }) };
+      if (name.includes('account-data-keys')) return { USER_DATA_KEYS: {
+        TODOS: 'todos',
+        EMAIL_GENERATION_TASKS: 'email_generation_tasks',
+      } };
       if (name.includes('session-recovery')) return { runSafeRequestWithSessionRecovery: (_, request) => request() };
-      if (name === 'sonner') return { toast: { error: message => errors.push(message) } };
+      if (name === 'sonner') return { toast: {
+        error: message => errors.push(message),
+        warning: message => warnings.push(message),
+      } };
       return {};
     },
     window: {
@@ -80,6 +88,9 @@ function harness(harnessOptions = {}) {
       },
     },
     fetch: async (_, requestOptions = {}) => {
+      if (requestOptions.keepalive && Buffer.byteLength(requestOptions.body || '') > 65536) {
+        throw new TypeError('Failed to fetch');
+      }
       if (requestOptions.method === 'PUT') writes.push(JSON.parse(requestOptions.body));
       return {
         ok: !fail,
@@ -98,7 +109,7 @@ function harness(harnessOptions = {}) {
     flush() { const pending = effects; effects = []; pending.forEach(fn => fn()); },
     async settle() { for (let i = 0; i < 20; i++) await Promise.resolve(); },
     switchAccount() { account = { ...account, userId: 'b' }; cloud = { todos: ['b'] }; },
-    fail() { fail = true; }, writes, errors,
+    fail() { fail = true; }, writes, errors, warnings,
     recover() { fail = false; },
     online() { windowListeners.get('online')?.(); },
     storage,
@@ -138,6 +149,27 @@ test('failed saves still report an error without removing unrelated templates', 
   h.fail(); store.save('todos', []); h.flush(); await h.settle();
   assert.equal(h.errors[0], '任务暂未同步云端，系统会在网络恢复后自动重试。');
   assert.equal(h.render().props.value.data.email_templates[0].id, 'personal');
+});
+
+test('background email task recovery does not expose the raw fetch error as a red alert', async () => {
+  const h = harness();
+  h.render(); h.flush(); await h.settle();
+  h.fail();
+  h.render().props.value.save('email_generation_tasks', ['interrupted']);
+  h.flush(); await h.settle();
+  assert.equal(h.errors.length, 0);
+  assert.equal(h.warnings[0], '邮件生成记录暂未同步云端，当前内容仍保留在页面中，请确认同步恢复后再关闭。');
+});
+
+test('large cloud snapshots avoid the browser keepalive body limit', async () => {
+  const h = harness();
+  h.render(); h.flush(); await h.settle();
+  const text = '回复正文'.repeat(10000);
+  h.render().props.value.save('email_generation_tasks', [text]);
+  h.flush(); await h.settle();
+  assert.equal(h.writes.length, 1);
+  assert.equal(h.writes[0].data[0], text);
+  assert.equal(h.errors.length + h.warnings.length, 0);
 });
 
 test('failed todo saves remain queued locally and retry silently when the network returns', async () => {

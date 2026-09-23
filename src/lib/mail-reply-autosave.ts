@@ -36,6 +36,20 @@ export function sameReplyDraftContent(left: MailReplySystemDraft, right: MailRep
   return content(left) === content(right);
 }
 
+// JSONB may reorder object keys. Compare the full saved snapshot, including
+// approval state and sent markers, before acknowledging a lost save response.
+export function sameSavedReplyDraft(left: MailReplySystemDraft, right: MailReplySystemDraft) {
+  const canonical = (value: unknown): unknown => {
+    if (Array.isArray(value)) return value.map(canonical);
+    if (value && typeof value === 'object') return Object.fromEntries(
+      Object.entries(value).filter(([, item]) => item !== undefined)
+        .sort(([a], [b]) => a.localeCompare(b)).map(([key, item]) => [key, canonical(item)]),
+    );
+    return value;
+  };
+  return JSON.stringify(canonical(left)) === JSON.stringify(canonical(right));
+}
+
 const encodedFiles = new WeakMap<File, Promise<MailReplySystemDraft['attachments'][number]>>();
 export async function prepareReplyDraft(draft: MailReplySystemDraft, files: File[], ownerId: string): Promise<MailReplySystemDraft> {
   const textOnly = { ...draft, attachments: [], attachmentWarning: attachmentReminder(files) || draft.attachmentWarning };

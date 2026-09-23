@@ -401,8 +401,14 @@ export function TodoBoard({
             {sourceStatus.map((source) => (
               <span key={`${source.provider}:${source.mailAccountId}`} className={source.state === 'fresh' ? '' : 'text-amber-700'} title={source.mailAddress}>
                 {source.provider === 'tencent_exmail' ? '腾讯企业邮箱' : 'Gmail'}（{source.mailAddress}）
-                {source.state === 'fresh' ? '实时' : source.state === 'cached' ? '缓存' : source.state === 'disconnected' ? '已断开' : '失败'}：
-                {source.loadedCount} 封，匹配红人 {source.matchedCount} 条{source.error ? `（${source.error}）` : ''}
+                {source.state === 'fresh'
+                  ? `实时：${source.loadedCount} 封，匹配红人 ${source.matchedCount} 条`
+                  : source.state === 'cached'
+                    ? `本轮读取失败，保留上次 ${source.loadedCount} 封、匹配红人 ${source.matchedCount} 条`
+                    : source.state === 'disconnected'
+                      ? '已断开'
+                      : '本轮读取失败，尚无可用缓存'}
+                {source.error ? `（${source.error}）` : ''}
               </span>
             ))}
           </div>

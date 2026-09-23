@@ -12,7 +12,7 @@ import {
 import { toast } from 'sonner';
 import { LoaderCircle } from 'lucide-react';
 import { useAuth } from '@/components/auth-provider';
-import type { UserDataKey } from '@/lib/account-data-keys';
+import { USER_DATA_KEYS, type UserDataKey } from '@/lib/account-data-keys';
 import { scopedLocalStorageKey } from '@/lib/account-cache-scope';
 import { Alert, AlertDescription, AlertTitle } from '@/components/ui/alert';
 import { Button } from '@/components/ui/button';
@@ -114,6 +114,16 @@ function waitForRetry(delayMs: number) {
   return new Promise<void>((resolve) => globalThis.setTimeout(resolve, delayMs));
 }
 
+const NETWORK_ERROR_PATTERN = /failed to fetch|network(?:error| request failed)|load failed/i;
+
+function cloudSaveErrorMessage(error: unknown) {
+  const message = error instanceof Error ? error.message.trim() : '';
+  if (!message || NETWORK_ERROR_PATTERN.test(message)) {
+    return '账号数据暂时无法连接云端，请检查网络后重试。';
+  }
+  return message;
+}
+
 function readLegacySnapshot() {
   return Object.fromEntries(
     LEGACY_STORAGE_KEYS.flatMap((key) => {
@@ -181,19 +191,22 @@ export function UserDataProvider({ children }: { children: React.ReactNode }) {
     setData(next);
   }, []);
 
-  const writeCloudValue = useCallback(async (key: UserDataKey, value: unknown) => {
+  const writeCloudValue = useCallback(async (ownerId: string, key: UserDataKey, value: unknown) => {
     let lastError: Error | null = null;
     for (let attempt = 0; attempt < SAVE_RETRY_DELAYS_MS.length; attempt += 1) {
       await waitForRetry(SAVE_RETRY_DELAYS_MS[attempt]);
+      if (currentAccountId.current !== ownerId) return;
       try {
         const response = await runSafeRequestWithSessionRecovery(
           ensureSession,
-          () => fetch('/api/user-data', {
-            method: 'PUT',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ key, data: value }),
-            keepalive: true,
-          }),
+          () => {
+            if (currentAccountId.current !== ownerId) throw new Error('账号已变化，本次同步已停止。');
+            return fetch('/api/user-data', {
+              method: 'PUT',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({ key, data: value }),
+            });
+          },
         );
         const result = await response.json().catch(() => ({}));
         if (response.ok && result.success) return;
@@ -217,16 +230,24 @@ export function UserDataProvider({ children }: { children: React.ReactNode }) {
       .catch(() => undefined)
       .then(async () => {
         if (currentAccountId.current !== ownerId) return;
-        await writeCloudValue(key, value);
+        await writeCloudValue(ownerId, key, value);
+        if (currentAccountId.current !== ownerId) return;
         if (key === 'todos') clearPendingTodoWrite(ownerId, pendingTodoId);
         reportedErrors.current.delete(key);
       })
       .catch((saveError) => {
+        if (currentAccountId.current !== ownerId) return;
         if (reportedErrors.current.has(key)) return;
         reportedErrors.current.add(key);
-        toast.error(key === 'todos'
-          ? '任务暂未同步云端，系统会在网络恢复后自动重试。'
-          : saveError instanceof Error ? saveError.message : '账号数据保存失败。');
+        if (key === USER_DATA_KEYS.TODOS) {
+          toast.error('任务暂未同步云端，系统会在网络恢复后自动重试。');
+          return;
+        }
+        if (key === USER_DATA_KEYS.EMAIL_GENERATION_TASKS) {
+          toast.warning('邮件生成记录暂未同步云端，当前内容仍保留在页面中，请确认同步恢复后再关闭。');
+          return;
+        }
+        toast.error(cloudSaveErrorMessage(saveError));
       })
       .finally(() => {
         if (writeQueues.current.get(key) === next) writeQueues.current.delete(key);

@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { localReplyDraftKey, prepareReplyDraft, readLocalReplyDraft, sameReplyDraftContent, serializeReplyDraftRequest, type LocalReplyDraft } from '../src/lib/mail-reply-autosave';
+import { localReplyDraftKey, prepareReplyDraft, readLocalReplyDraft, sameReplyDraftContent, sameSavedReplyDraft, serializeReplyDraftRequest, type LocalReplyDraft } from '../src/lib/mail-reply-autosave';
 import { isMailReplySystemDraft, type MailReplySystemDraft } from '../src/lib/mail-reply-draft';
 
 const draft: MailReplySystemDraft = {
@@ -8,6 +8,15 @@ const draft: MailReplySystemDraft = {
   foreignBody: 'Edited foreign', chineseBody: '尚未同步的中文', userIdeas: '人工修改', targetLanguage: 'en', targetLanguageName: '英语', tone: 'friendly',
   snapshot: null, confirmedForeign: null, hasSuggestion: true, strategyEditing: false, translationEditing: true, attachments: [],
 };
+
+test('丢失保存响应的核对忽略对象键顺序，但不忽略审核状态、发送标记或编辑版本', () => {
+  const reordered = Object.fromEntries(Object.entries(draft).reverse()) as MailReplySystemDraft;
+  assert.equal(sameSavedReplyDraft(draft, reordered), true);
+  for (const change of [{ strategyEditing: true }, { confirmedForeign: { foreignBody: 'yes', chineseBody: '是', targetLanguage: 'en' } },
+    { sentAt: '2026-09-23T00:00:00Z' }, { editedAt: '2026-09-23T00:00:00Z' }]) {
+    assert.equal(sameSavedReplyDraft(draft, { ...draft, ...change }), false);
+  }
+});
 
 test('自动保存：小附件保留完整字节，人工中文及未确认状态不变', async () => {
   const result = await prepareReplyDraft(draft, [new File(['hello'], 'note.txt', { type: 'text/plain', lastModified: 10 })], 'u');

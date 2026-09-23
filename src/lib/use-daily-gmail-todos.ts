@@ -321,7 +321,21 @@ export function useDailyGmailTodos(settings: AppSettings, active = true) {
           maxResults: '50',
           metadataOnly: '1',
         });
-        const response = await fetch(`/api/mail/tencent?${params.toString()}`, { cache: 'no-store' });
+        const url = `/api/mail/tencent?${params.toString()}`;
+        let response: Response;
+        try {
+          response = await fetch(url, { cache: 'no-store' });
+        } catch (firstError) {
+          const message = firstError instanceof Error ? firstError.message : '';
+          if (!/failed to fetch|networkerror|load failed/i.test(message)) throw firstError;
+          if (!navigator.onLine) throw new Error('网络暂时中断，恢复联网后会重新检查腾讯邮箱。');
+          await new Promise<void>((resolve) => window.setTimeout(resolve, 1500));
+          try {
+            response = await fetch(url, { cache: 'no-store' });
+          } catch (retryError) {
+            throw new Error('腾讯邮箱连接暂时失败，系统会在下次检查时重试。', { cause: retryError });
+          }
+        }
         const result = await response.json();
         if (!response.ok || !result.success) throw new Error(String(result.error || '读取失败'));
         return ((Array.isArray(result.data) ? result.data : []) as Array<Record<string, unknown>>).map((message) => ({
@@ -573,8 +587,10 @@ export function useDailyGmailTodos(settings: AppSettings, active = true) {
         ...item,
         summaryPending: pendingSummaryKeys.has(messageCacheKey(item)),
       })));
-      lastSuccessfulRefreshAtRef.current = Date.now();
-      lastSuccessfulRefreshScopeRef.current = loadScope;
+      if (!sourceErrors.length) {
+        lastSuccessfulRefreshAtRef.current = Date.now();
+        lastSuccessfulRefreshScopeRef.current = loadScope;
+      }
       setLoading(false);
       setRefreshing(false);
       setError(sourceErrors.join('；'));

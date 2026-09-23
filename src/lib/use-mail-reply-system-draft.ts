@@ -4,14 +4,23 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useAuth } from '@/components/auth-provider';
 import { runSafeRequestWithSessionRecovery } from './session-recovery';
 import { isMailReplyDraftIdentity, isMailReplySystemDraft, mailReplyDraftIdentityKey, MAX_SYSTEM_DRAFT_BYTES, type MailReplyDraftIdentity, type MailReplySystemDraft } from './mail-reply-draft';
-import { attachmentReminder, localReplyDraftKey, prepareReplyDraft, readLocalReplyDraft, sameReplyDraftContent, serializeReplyDraftRequest, type LocalReplyDraft } from './mail-reply-autosave';
+import { attachmentReminder, localReplyDraftKey, prepareReplyDraft, readLocalReplyDraft, sameReplyDraftContent, sameSavedReplyDraft, serializeReplyDraftRequest, type LocalReplyDraft } from './mail-reply-autosave';
 
 type Session = {
   scope: string; ready: boolean; closed: boolean; saving: boolean; blocked: boolean; conflict: boolean;
   base: string | null | undefined; record: LocalReplyDraft | null; prepared: Promise<void>;
   timer?: ReturnType<typeof setTimeout>; fingerprint: string; files?: File[]; epoch: number;
   status: string; error: string; warning: string; localError: string;
+  retryable?: boolean; recovering?: boolean; recoveryAttempts?: number; attempted?: LocalReplyDraft;
 };
+
+class DraftConnectionError extends Error {}
+
+function draftErrorMessage(error: unknown) {
+  const message = error instanceof Error ? error.message : '';
+  if (/failed to fetch|networkerror|load failed/i.test(message)) return '回复内容暂未同步云端，连接恢复后将重试。';
+  return message || '回复内容暂未同步云端，请重试。';
+}
 
 export function useMailReplySystemDraft(identity: MailReplyDraftIdentity, enabled: boolean, options: {
   draft: MailReplySystemDraft; files: File[]; paused: boolean;
@@ -41,19 +50,40 @@ export function useMailReplySystemDraft(identity: MailReplyDraftIdentity, enable
     const abort = () => controller.abort();
     signal?.addEventListener('abort', abort, { once: true });
     if (signal?.aborted) controller.abort();
-    const timer = setTimeout(abort, 15_000);
     try {
-      const response = await runSafeRequestWithSessionRecovery(ensureSession, () => fetch('/api/mail/system-draft', {
-        method: 'POST', headers: { 'Content-Type': 'application/json' }, body: payload, signal: controller.signal,
-        keepalive: new TextEncoder().encode(payload).byteLength < 60_000,
-      }));
+      const response = await runSafeRequestWithSessionRecovery(ensureSession, async () => {
+        if (controller.signal.aborted) throw new DOMException('读取已取消', 'AbortError');
+        // Session recovery has its own timeout. Start the data timeout only
+        // after the session is ready, and include reading the response body.
+        const timer = setTimeout(abort, 15_000);
+        try {
+          const response = await fetch('/api/mail/system-draft', {
+            method: 'POST', headers: { 'Content-Type': 'application/json' }, body: payload, signal: controller.signal,
+          });
+          const body = await response.text();
+          return new Response(body, { status: response.status, headers: response.headers });
+        } finally { clearTimeout(timer); }
+      });
+      if ([408, 429].includes(response.status) || response.status >= 500) {
+        throw new DraftConnectionError('回复暂存服务暂时不可用，稍后自动重试。');
+      }
       const result = await response.json();
       if (response.status === 409) { session.conflict = true; throw new Error('另一页面已保存不同版本，当前内容仍保留在本机。'); }
       if (!response.ok || !result.success) throw new Error(result.error || '自动保存暂时失败。');
       if (result.draft !== undefined && result.draft !== null && (!isMailReplySystemDraft(result.draft)
         || mailReplyDraftIdentityKey(result.draft.identity) !== identityKey)) throw new Error('保存内容与当前邮件不符，未恢复。');
       return result as { draft?: MailReplySystemDraft | null; savedAt: string | null };
-    } finally { clearTimeout(timer); signal?.removeEventListener('abort', abort); }
+    } catch (error) {
+      if (signal?.aborted) throw error;
+      if (controller.signal.aborted) throw new DraftConnectionError('回复暂存请求超时，稍后自动重试。');
+      if (/账号服务暂时无法连接|连接恢复超时|账号连接暂未恢复/.test(error instanceof Error ? error.message : '')) {
+        throw new DraftConnectionError('账号连接暂未恢复，回复内容将在连接恢复后重新同步。');
+      }
+      if (error instanceof TypeError || /failed to fetch|networkerror|load failed/i.test(error instanceof Error ? error.message : '')) {
+        throw new DraftConnectionError('回复内容暂未同步云端，连接恢复后将重试。');
+      }
+      throw error;
+    } finally { signal?.removeEventListener('abort', abort); }
     // identityKey includes every identity field, including the selected incoming body.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [ensureSession, identityKey, ownerId, session]);
@@ -90,7 +120,9 @@ export function useMailReplySystemDraft(identity: MailReplyDraftIdentity, enable
           await preparing;
           if (preparing !== session.prepared) continue;
           const record = { ...session.record, baseSavedAt: session.base ?? null };
+          session.attempted = record;
           const result = await request('save', record);
+          session.attempted = undefined;
           session.base = result.savedAt;
           if (session.record.revision === record.revision) {
             session.record = { ...record, dirty: false, baseSavedAt: result.savedAt };
@@ -98,10 +130,12 @@ export function useMailReplySystemDraft(identity: MailReplyDraftIdentity, enable
             session.status = record.draft.sentAt ? '此回复已发送' : '已自动保存';
           }
           session.error = '';
+          session.retryable = false; session.recoveryAttempts = 0;
         }
       } catch (error) {
         session.blocked = true;
-        session.error = error instanceof Error ? error.message : '同步失败，内容已暂存本机。';
+        session.retryable = error instanceof DraftConnectionError;
+        session.error = draftErrorMessage(error);
         session.status = '尚未同步';
       } finally { session.saving = false; notify(); }
     });
@@ -117,7 +151,7 @@ export function useMailReplySystemDraft(identity: MailReplyDraftIdentity, enable
       session.base = result.savedAt;
       const selected = local?.dirty ? local : result.draft
         ? { ownerId, revision: crypto.randomUUID(), draft: result.draft, dirty: false, baseSavedAt: result.savedAt } : null;
-      if (local?.dirty && local.baseSavedAt !== result.savedAt) {
+      if (local?.dirty && local.baseSavedAt !== result.savedAt && !(result.draft && sameSavedReplyDraft(local.draft, result.draft))) {
         session.conflict = true; session.blocked = true;
         session.error = '云端已有不同版本，本机修改已保留。';
         session.status = '已暂存本机，尚未同步';
@@ -138,7 +172,8 @@ export function useMailReplySystemDraft(identity: MailReplyDraftIdentity, enable
       }
       session.blocked = true;
       session.status = '尚未同步';
-      session.error = error instanceof Error ? error.message : '云端读取失败，当前编辑将暂存本机。';
+      session.retryable = error instanceof DraftConnectionError;
+      session.error = draftErrorMessage(error);
     }).finally(() => {
       if (!controller.signal.aborted && current.current === session) { session.ready = true; notify(); }
     });
@@ -181,32 +216,55 @@ export function useMailReplySystemDraft(identity: MailReplyDraftIdentity, enable
   }, [eligible, fingerprint, flush, notify, files, paused, hasLocalEdits, ownerId, readLocal, session, session.ready, writeLocal]);
 
   const retry = useCallback(async (replace = false) => {
-    if (session.saving || (session.conflict && !replace)) return;
+    if (session.saving || session.recovering || (session.conflict && !replace)) return;
+    session.recovering = true;
     try {
       const result = await serializeReplyDraftRequest(scope, () => request('read'));
       if (current.current !== session || session.closed) return;
       if (!session.record) {
         session.base = result.savedAt; session.blocked = false; session.conflict = false; session.error = '';
+        session.retryable = false; session.recoveryAttempts = 0;
         if (result.draft && latestOptions.current.canRestore()) {
           session.record = { ownerId, revision: crypto.randomUUID(), draft: result.draft, dirty: false, baseSavedAt: result.savedAt };
           session.warning = result.draft.sentAt ? '' : result.draft.attachmentWarning || '';
           latestOptions.current.onRestore(result.draft); writeLocal(session.record);
           session.status = result.draft.sentAt ? '此回复已发送' : '已自动恢复';
-        }
+        } else session.status = '';
         notify(); return;
       }
-      if (!replace && session.record?.baseSavedAt !== result.savedAt && result.draft) {
+      const acknowledged = result.draft && (
+        sameSavedReplyDraft(session.record.draft, result.draft)
+        || (session.attempted && sameSavedReplyDraft(session.attempted.draft, result.draft))
+      );
+      if (!replace && session.record?.baseSavedAt !== result.savedAt && !acknowledged) {
         session.conflict = true; session.error = '云端已有不同版本，本机修改已保留。'; notify(); return;
       }
+      session.attempted = undefined;
       session.base = result.savedAt; session.blocked = false; session.conflict = false; session.error = '';
       if (session.record) session.record = { ...session.record, dirty: true, baseSavedAt: result.savedAt };
       await flush();
-    } catch (error) { session.error = error instanceof Error ? error.message : '重试失败'; notify(); }
+    } catch (error) { session.retryable = error instanceof DraftConnectionError; session.error = draftErrorMessage(error); notify(); }
+    finally { session.recovering = false; }
   }, [flush, notify, ownerId, request, scope, session, writeLocal]);
   useEffect(() => {
-    const online = () => { if (!session.conflict && (session.blocked || session.record?.dirty)) void retry(); };
-    if (eligible) window.addEventListener('online', online);
-    return () => window.removeEventListener('online', online);
+    const recover = () => {
+      if (!session.closed && !session.conflict && !session.recovering && !session.saving
+        && session.retryable && navigator.onLine && document.visibilityState === 'visible'
+        && (session.recoveryAttempts || 0) < 3) {
+        session.recoveryAttempts = (session.recoveryAttempts || 0) + 1;
+        void retry();
+      }
+    };
+    const online = () => { session.recoveryAttempts = 0; recover(); };
+    if (!eligible) return;
+    const timer = window.setInterval(recover, 15_000);
+    window.addEventListener('online', online);
+    document.addEventListener('visibilitychange', recover);
+    return () => {
+      window.clearInterval(timer);
+      window.removeEventListener('online', online);
+      document.removeEventListener('visibilitychange', recover);
+    };
   }, [eligible, retry, session]);
 
   const markSent = async () => {
