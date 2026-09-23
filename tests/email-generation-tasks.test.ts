@@ -5,6 +5,7 @@ import {
   EMAIL_GENERATION_PROGRESS,
   MAIL_AI_TASK_CONTEXT_VERSION,
   advanceEmailGenerationProgress,
+  hasCompleteEmailReplyTaskResult,
   buildEmailGenerationTaskScopeKey,
   buildGmailEmailGenerationTaskKey,
   buildGmailEmailTranslationTaskKey,
@@ -25,6 +26,15 @@ import {
   updateEmailGenerationTaskDraftSavedAt,
   type EmailGenerationTask,
 } from '../src/lib/email-generation-tasks';
+
+test('reply tasks require recoverable content before reporting completion', () => {
+  for (const kind of ['gmail_ai_reply', 'tencent_ai_reply', 'gmail_template_reply', 'tencent_template_reply'] as const) {
+    assert.equal(hasCompleteEmailReplyTaskResult(kind, undefined), false);
+    assert.equal(hasCompleteEmailReplyTaskResult(kind, { suggestion: { suggestedReply: '' }, targetLang: 'en' }), false);
+    assert.equal(hasCompleteEmailReplyTaskResult(kind, { suggestion: { suggestedReply: 'Hello' }, targetLang: 'en' }), false);
+    assert.equal(hasCompleteEmailReplyTaskResult(kind, { suggestion: { suggestedReply: 'Hello', translatedReply: '你好' }, targetLang: 'en' }), true);
+  }
+});
 
 function task(
   id: string,

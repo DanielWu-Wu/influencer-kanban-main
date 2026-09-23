@@ -22,6 +22,7 @@ import {
   EMAIL_GENERATION_PROGRESS,
   EMAIL_GENERATION_TOASTER_ID,
   advanceEmailGenerationProgress,
+  hasCompleteEmailReplyTaskResult,
   markInterruptedEmailGenerationTasks,
   normalizeEmailGenerationConcurrency,
   readEmailGenerationTaskSnapshot,
@@ -239,6 +240,10 @@ export function EmailGenerationTaskProvider({ children }: { children: ReactNode 
     void runner({ signal: controller.signal, report })
       .then((result) => {
         if (disposedRef.current || controller.signal.aborted || scopeKeyRef.current !== taskScopeKey) return;
+        const runningTask = tasksRef.current.find((task) => task.id === taskId);
+        if (runningTask && !hasCompleteEmailReplyTaskResult(runningTask.kind, result)) {
+          throw new Error('生成任务未返回完整邮件正文，请重试。');
+        }
         let completedTask: EmailGenerationTask | undefined;
         replaceTasks((current) => current.map((task) => {
           if (task.id !== taskId || task.status !== 'running') return task;

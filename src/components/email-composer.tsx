@@ -67,6 +67,7 @@ import {
   buildGmailEmailTranslationTaskKey,
   buildMailEmailGenerationTaskKey,
   EMAIL_GENERATION_PROGRESS,
+  hasCompleteEmailReplyTaskResult,
   isEmailGenerationTaskRestorableForContext,
   MAIL_AI_TASK_CONTEXT_VERSION,
 } from '@/lib/email-generation-tasks';
@@ -396,16 +397,17 @@ export function EmailComposer({
   const restoreSystemDraft = (saved: MailReplySystemDraft) => {
     try {
       const restoredAttachments = restoreSystemDraftAttachments(saved);
-      localDraftDirtyRef.current = true;
-      if (generationTask?.id) ignoredRestoredTaskIdsRef.current.add(generationTask.id);
+      // Ideas-only snapshots must not suppress a later background result.
+      localDraftDirtyRef.current = Boolean(saved.sentAt || saved.foreignBody.trim() || saved.chineseBody.trim());
       if (translationTask?.id) ignoredRestoredTaskIdsRef.current.add(translationTask.id);
       if (saved.sentAt) {
+        if (generationTask?.id) ignoredRestoredTaskIdsRef.current.add(generationTask.id);
         setReplyContent(''); setEditedChineseReply(''); setUserIdeas(''); setAttachments([]);
         setSuggestion(null); setSynchronizedDraft(null); setConfirmedForeign(null); setCompletion(null);
         return;
       }
       targetLangLockedRef.current = true;
-      appliedGenerationTaskRef.current = generationTask?.id || '';
+      appliedGenerationTaskRef.current = '';
       setReplyContent(saved.foreignBody);
       setEditedChineseReply(saved.chineseBody);
       setUserIdeas(saved.userIdeas);
@@ -571,7 +573,7 @@ export function EmailComposer({
       return;
     }
     if (appliedGenerationTaskRef.current === generationTask.id) return;
-    if (localDraftDirtyRef.current) return;
+    if (localDraftDirtyRef.current && generationTask.status !== 'completed') return;
     appliedGenerationTaskRef.current = generationTask.id;
     setAiLoading(false);
     setGenerationStage('');
@@ -602,7 +604,7 @@ export function EmailComposer({
     }
     if (generationTask.status !== 'completed') return;
     const result = generationTask.result as GmailAIReplyTaskResult | undefined;
-    if (!result?.suggestion?.suggestedReply) {
+    if (!result || !hasCompleteEmailReplyTaskResult(generationTask.kind, result)) {
       setAiError('这条生成记录缺少可恢复的邮件正文，请重新生成。');
       return;
     }
@@ -613,7 +615,14 @@ export function EmailComposer({
       targetLangName?: string;
       replyTone?: ReplyTone;
     } | undefined;
-    setUserIdeas(retryInput?.userIdeas || '');
+    if (localDraftDirtyRef.current) {
+      if (replyContent !== result.suggestion.suggestedReply || editedChineseReply !== result.suggestion.translatedReply) {
+        setPendingGeneratedReply({ ...result, ideas: retryInput?.userIdeas || '', taskId: generationTask.id });
+      }
+      return;
+    }
+    setUserIdeas((current) => current.trim() ? current : retryInput?.userIdeas || '');
+    localDraftDirtyRef.current = true;
     setGeneratedIdeas(retryInput?.userIdeas || '');
     if (retryInput?.replyTone) setReplyTone(retryInput.replyTone);
     const completedSuggestion = result.suggestion;
@@ -635,7 +644,7 @@ export function EmailComposer({
     setGeneratedLangName(result.targetLangName);
     setStrategyEditing(false);
     setAiError('');
-  }, [generationTask, systemDraft.ready]);
+  }, [generationTask, systemDraft.ready, replyContent, editedChineseReply]);
 
   useEffect(() => {
     if (!requestedGenerationTask || requestedTaskMatchesContext) return;
@@ -1096,13 +1105,20 @@ export function EmailComposer({
         }
       }
 
-      if (runId !== generationRunRef.current || generationContextRef.current !== generationContextKey || !finalResult) return;
+      if (!finalResult) throw new Error('AI 未返回完整邮件正文，请重试。');
       const result = finalResult;
       const cleanSuggestedReply = stripConfiguredEmailSignature(
         result.suggestedReply,
         settings.emailSignature,
       );
       const cleanSuggestion = { ...result, suggestedReply: cleanSuggestedReply };
+      const completedResult = { suggestion: cleanSuggestion, targetLang: generationTargetLang,
+        targetLangName: generationTargetLangName, usedAnalysis: Boolean(analysis) } satisfies GmailAIReplyTaskResult;
+      if (!hasCompleteEmailReplyTaskResult(expectedTaskKind, completedResult)) {
+        throw new Error('AI 未返回完整邮件正文，请重试。');
+      }
+      // Navigation only invalidates editor updates, never the background task result.
+      if (runId !== generationRunRef.current || generationContextRef.current !== generationContextKey) return completedResult;
       // The mounted run owns its result. Task hydration must not overwrite newer ideas/body edits.
       appliedGenerationTaskRef.current = taskId || '';
       setStrategyEditing(false);
@@ -1143,7 +1159,7 @@ export function EmailComposer({
         usedAnalysis: Boolean(analysis),
       } satisfies GmailAIReplyTaskResult;
     } catch (error) {
-      if (controller.signal.aborted || runId !== generationRunRef.current || generationContextRef.current !== generationContextKey) return;
+      if (controller.signal.aborted || runId !== generationRunRef.current || generationContextRef.current !== generationContextKey) throw error;
       appliedGenerationTaskRef.current = taskId || '';
       if (previousSuggestion) setStrategyEditing(false);
       if (bodyEditVersionRef.current === bodyEditVersion) {
@@ -1884,7 +1900,7 @@ export function EmailComposer({
       {!suggestion && aiError && <ErrorMessage message={aiError} />}
 
       {pendingGeneratedReply && <div className="rounded-lg border border-amber-200 bg-amber-50 p-3 text-sm">
-        <p>生成期间你修改了正文，已保留当前编辑。新版邮件尚未采用。</p>
+        <p>已有编辑内容已保留，生成任务的正文尚未采用。请查看后选择。</p>
         <details className="my-2"><summary>查看新版邮件</summary><div className="whitespace-pre-wrap break-words">{pendingGeneratedReply.suggestion.suggestedReply}</div><div className="mt-2 whitespace-pre-wrap">{pendingGeneratedReply.suggestion.translatedReply}</div></details>
         <div className="flex gap-2">
           <Button variant="outline" onClick={() => setPendingGeneratedReply(null)}>保留当前正文</Button>
@@ -1898,6 +1914,7 @@ export function EmailComposer({
             setTargetLang(result.targetLang); setTargetLangName(result.targetLangName); setGeneratedLangName(result.targetLangName);
             setDraftUsedAnalysis(result.usedAnalysis); setTranslationEditing(false); setTranslationUpdated(false);
             setTranslationExpanded(true); setConfirmedForeign(null);
+            setStrategyEditing(false);
             setSynchronizedDraft(result.suggestion.translatedReply.trim() ? { foreignBody: result.suggestion.suggestedReply,
               chineseBody: result.suggestion.translatedReply, targetLanguage: result.targetLang } : null);
             setPendingGeneratedReply(null);

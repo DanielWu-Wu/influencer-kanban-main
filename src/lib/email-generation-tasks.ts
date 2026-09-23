@@ -89,6 +89,14 @@ function isRecord(value: unknown): value is Record<string, unknown> {
   return Boolean(value && typeof value === 'object' && !Array.isArray(value));
 }
 
+export function hasCompleteEmailReplyTaskResult(kind: EmailGenerationTaskKind, value: unknown) {
+  if (!['gmail_ai_reply', 'tencent_ai_reply', 'gmail_template_reply', 'tencent_template_reply'].includes(kind)) return true;
+  return isRecord(value) && isRecord(value.suggestion)
+    && typeof value.suggestion.suggestedReply === 'string' && Boolean(value.suggestion.suggestedReply.trim())
+    && typeof value.suggestion.translatedReply === 'string'
+    && typeof value.targetLang === 'string' && Boolean(value.targetLang.trim());
+}
+
 function cloneJsonValue(value: unknown) {
   if (value === undefined) return undefined;
   try {
