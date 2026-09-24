@@ -3,7 +3,6 @@
 import { sharedMailFetch as fetch, mailReads, currentGmailReadScope, MAIL_FLAGS_CHANGED_EVENT } from '@/lib/shared-mail-read';
 
 import { useCallback, useEffect, useRef, useState } from 'react';
-import { toast } from 'sonner';
 import {
   AlertCircle,
   ChevronLeft,
@@ -90,6 +89,7 @@ import { getMailThreadRowVisualState } from '@/lib/mail-read-state';
 const GMAIL_PAGE_SIZE = 50;
 const GMAIL_DETAIL_BATCH_SIZE = 16;
 const GMAIL_AUTO_REFRESH_MS = 60_000;
+const GMAIL_FAILED_READ_RETRY_MS = 10_000;
 const GMAIL_THREAD_DETAIL_CACHE_MS = 60_000;
 const GMAIL_THREAD_PREFETCH_DELAY_MS = 180;
 const GMAIL_SEARCH_DEBOUNCE_MS = 400;
@@ -702,6 +702,9 @@ export function GmailInbox({
   const { settings } = useSettings();
   const latestFetchIdRef = useRef(0);
   const activeFetchKeyRef = useRef<string | null>(null);
+  const retryTimerRef = useRef<number | null>(null);
+  const retryAttemptRef = useRef(0);
+  const partialRefreshRef = useRef<{ key: string; at: number } | null>(null);
   const wasActiveRef = useRef(active);
   const subjectTranslationRunRef = useRef(0);
   const avatarPrefetchRunRef = useRef(0);
@@ -724,7 +727,8 @@ export function GmailInbox({
   const [actionThreadId, setActionThreadId] = useState<string | null>(null);
   const [openingThreadId, setOpeningThreadId] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
-  const [syncFailures, setSyncFailures] = useState({ key: '', count: 0 });
+  const [incomplete, setIncomplete] = useState(false);
+  const [retryKey, setRetryKey] = useState(0);
   const [subjectTranslationError, setSubjectTranslationError] = useState<string | null>(null);
   const [searchQuery, setSearchQuery] = useState('');
   const [debouncedSearchQuery, setDebouncedSearchQuery] = useState('');
@@ -803,11 +807,16 @@ export function GmailInbox({
     if (threadPrefetchTimerRef.current !== null) {
       window.clearTimeout(threadPrefetchTimerRef.current);
     }
+    if (retryTimerRef.current !== null) window.clearTimeout(retryTimerRef.current);
   }, []);
 
   useEffect(() => {
     latestFetchIdRef.current += 1;
     activeFetchKeyRef.current = null;
+    if (retryTimerRef.current !== null) window.clearTimeout(retryTimerRef.current);
+    retryTimerRef.current = null;
+    retryAttemptRef.current = 0;
+    partialRefreshRef.current = null;
     setActivePaginationKey(paginationKey);
     setPageTokens(['']);
     setPageIndex(0);
@@ -823,6 +832,7 @@ export function GmailInbox({
       setThreads([]);
       setLastSyncedAt(null);
       setNormalUnreadCount(null);
+      setIncomplete(false);
       setLoading(false);
       return;
     }
@@ -832,6 +842,7 @@ export function GmailInbox({
     setNextPageToken(cached.nextPageToken);
     setLastSyncedAt(cached.lastSyncedAt);
     setNormalUnreadCount(cached.normalUnreadCount);
+    setIncomplete(Boolean(cached.incomplete));
     setLoading(false);
   }, [activePaginationKey, inboxCacheKey, paginationKey]);
 
@@ -847,11 +858,13 @@ export function GmailInbox({
       normalUnreadCount,
       lastSyncedAt,
       fetchedAt: Date.parse(lastSyncedAt),
+      incomplete,
     });
   }, [
     activePaginationKey,
     displayedInboxCacheKey,
     inboxCacheKey,
+    incomplete,
     lastSyncedAt,
     nextPageToken,
     normalUnreadCount,
@@ -949,12 +962,19 @@ export function GmailInbox({
     const cached = readGmailInboxCache(requestCacheKey);
     if (source === 'automatic' && cached && isGmailInboxCacheFresh(cached)) return;
     activeFetchKeyRef.current = fetchKey;
+    if (retryTimerRef.current !== null) window.clearTimeout(retryTimerRef.current);
+    retryTimerRef.current = null;
     const fetchId = latestFetchIdRef.current + 1;
     latestFetchIdRef.current = fetchId;
     const isCurrentRequest = () => (
       fetchId === latestFetchIdRef.current
       && isGmailInboxCacheKeyCurrent(requestCacheKey, currentInboxCacheKeyRef.current)
     );
+    const scheduleRetry = () => {
+      const delay = Math.min(GMAIL_FAILED_READ_RETRY_MS * 2 ** retryAttemptRef.current, GMAIL_AUTO_REFRESH_MS);
+      retryAttemptRef.current += 1;
+      retryTimerRef.current = window.setTimeout(() => setRetryKey((current) => current + 1), delay);
+    };
     setLoading(true);
     setError(null);
     let requiresAttention = false;
@@ -1049,9 +1069,11 @@ export function GmailInbox({
         setDisplayedInboxCacheKey(requestCacheKey);
         setNextPageToken(listResult.nextPageToken || null);
         setThreads([]);
+        setIncomplete(false);
         if (unreadCount !== null) setNormalUnreadCount(unreadCount);
         setLastSyncedAt(syncedAt);
-        setSyncFailures({ key: requestCacheKey, count: 0 });
+        retryAttemptRef.current = 0;
+        partialRefreshRef.current = null;
         if (pageIndex === 0 && !isGlobalSearch && (mailbox === 'inbox' || mailbox === 'unread')) {
           publishInboxMailSnapshot({
             accountScope: requestAccountScope, provider: 'gmail',
@@ -1063,44 +1085,75 @@ export function GmailInbox({
         return;
       }
 
-      const nextThreads: GmailThread[] = [];
+      const visibleById = new Map<string, GmailThread>();
+      setIncomplete(true);
+      const referenceIds = new Set(threadRefs.map((thread) => thread.id));
+      const retryOnlyFailed = source === 'automatic'
+        && partialRefreshRef.current?.key === requestCacheKey
+        && Date.now() - partialRefreshRef.current.at < GMAIL_AUTO_REFRESH_MS;
+      for (const thread of cached?.threads || []) {
+        if (referenceIds.has(thread.id)) visibleById.set(thread.id, thread);
+      }
+      let failedThreadCount = 0;
       for (let index = 0; index < threadRefs.length; index += GMAIL_DETAIL_BATCH_SIZE) {
         const batch = threadRefs.slice(index, index + GMAIL_DETAIL_BATCH_SIZE);
         const batchResults = await Promise.all(
-          batch.map(async (thread) => {
+          batch.map(async (thread): Promise<{ raw?: Record<string, unknown>; cached?: GmailThread } | null> => {
+            const cachedThread = retryOnlyFailed ? visibleById.get(thread.id) : undefined;
+            if (cachedThread) return { cached: cachedThread };
             try {
               const response = await fetchWithTimeout(
                 `https://gmail.googleapis.com/gmail/v1/users/me/threads/${thread.id}?format=metadata&metadataHeaders=From&metadataHeaders=To&metadataHeaders=Subject&metadataHeaders=Date&metadataHeaders=Received`,
                 { headers },
                 12_000,
               );
-              if (response.status === 401 || response.status === 403) requiresAttention = true;
-              return response.ok ? response.json() : null;
-            } catch {
+              if (isGmailAuthError(response.status, response.ok ? '' : await response.clone().text())) requiresAttention = true;
+              if (!response.ok) {
+                console.warn('Gmail 会话摘要读取失败', { threadId: thread.id, status: response.status });
+                return null;
+              }
+              return { raw: await response.json() as Record<string, unknown> };
+            } catch (readError) {
+              console.warn('Gmail 会话摘要读取失败', { threadId: thread.id, error: readError });
               return null;
             }
           }),
         );
         if (!isCurrentRequest()) return;
 
-        if (batchResults.some((thread) => !thread)) {
-          throw new Error('部分邮件未能读取，本轮未完成更新；已保留上次列表，请稍后重试。');
-        }
-
         const parsedBatch = await Promise.all(
-          batchResults
-            .filter((thread): thread is Record<string, unknown> => Boolean(thread))
-            .map((thread) => parseGmailThread(thread, accessToken, false)),
+          batchResults.map(async (result, batchIndex) => {
+            if (result?.cached) return result.cached;
+            if (!result?.raw) return null;
+            try {
+              return await parseGmailThread(result.raw, accessToken, false);
+            } catch (parseError) {
+              console.warn('Gmail 会话摘要解析失败', { threadId: batch[batchIndex].id, error: parseError });
+              return null;
+            }
+          }),
         );
+        failedThreadCount += parsedBatch.filter((thread) => !thread).length;
+        const successfullyParsed = parsedBatch.filter((thread): thread is GmailThread => thread !== null);
         const visibleBatch = isGlobalSearch
-          ? parsedBatch
-          : parsedBatch.filter((thread) => shouldShowThreadInMailbox(thread, mailbox, category));
+          ? successfullyParsed
+          : successfullyParsed.filter((thread) => shouldShowThreadInMailbox(thread, mailbox, category));
         if (!isCurrentRequest()) return;
-        nextThreads.push(...visibleBatch);
+        visibleBatch.forEach((thread) => visibleById.set(thread.id, thread));
+        batch.forEach((reference, batchIndex) => {
+          if (!parsedBatch[batchIndex] || !visibleBatch.some((thread) => thread.id === reference.id)) {
+            visibleById.delete(reference.id);
+          }
+        });
+        setDisplayedInboxCacheKey(requestCacheKey);
+        setThreads(isGlobalSearch
+          ? [...visibleById.values()].sort((left, right) => getDateTimestamp(right.lastMessageDate) - getDateTimestamp(left.lastMessageDate))
+          : sortThreadsByLatest([...visibleById.values()], mailbox));
+        setLoading(false);
       }
       const sortedThreads = isGlobalSearch
-        ? [...nextThreads].sort((left, right) => getDateTimestamp(right.lastMessageDate) - getDateTimestamp(left.lastMessageDate))
-        : sortThreadsByLatest(nextThreads, mailbox);
+        ? [...visibleById.values()].sort((left, right) => getDateTimestamp(right.lastMessageDate) - getDateTimestamp(left.lastMessageDate))
+        : sortThreadsByLatest([...visibleById.values()], mailbox);
       const syncedAt = new Date().toISOString();
       // 在释放请求锁前写入成功缓存，避免相邻的 focus / visibilitychange
       // 在 React 的缓存同步 effect 执行前又启动一轮读取。
@@ -1110,33 +1163,40 @@ export function GmailInbox({
         normalUnreadCount: unreadCount ?? cached?.normalUnreadCount ?? null,
         lastSyncedAt: syncedAt,
         fetchedAt: Date.parse(syncedAt),
+        incomplete: failedThreadCount > 0,
       });
       setDisplayedInboxCacheKey(requestCacheKey);
       setNextPageToken(listResult.nextPageToken || null);
       setThreads(sortedThreads);
+      setIncomplete(failedThreadCount > 0);
       if (unreadCount !== null) setNormalUnreadCount(unreadCount);
       setLastSyncedAt(syncedAt);
-      setSyncFailures({ key: requestCacheKey, count: 0 });
-      if (pageIndex === 0 && !isGlobalSearch && (mailbox === 'inbox' || mailbox === 'unread')) {
+      if (failedThreadCount > 0 && !requiresAttention) {
+        if (!retryOnlyFailed) partialRefreshRef.current = { key: requestCacheKey, at: Date.now() };
+        scheduleRetry();
+      } else if (failedThreadCount > 0) {
+        setError('Gmail 授权可能已失效，请重新连接后重试。');
+      } else {
+        retryAttemptRef.current = 0;
+        partialRefreshRef.current = null;
+      }
+      if (failedThreadCount === 0 && pageIndex === 0 && !isGlobalSearch && (mailbox === 'inbox' || mailbox === 'unread')) {
         publishInboxMailSnapshot({
           accountScope: requestAccountScope, provider: 'gmail',
           mailAccountId: `gmail:${requestMailAddress}`, mailAddress: requestMailAddress,
           threads: sortedThreads,
           loadThread: (thread) => fetchThreadDetail(thread, accessToken, 2),
         });
+        notifyPrimaryInboxRefreshed(mailbox, category, isGlobalSearch);
       }
-      notifyPrimaryInboxRefreshed(mailbox, category, isGlobalSearch);
     } catch (caughtError) {
       if (isCurrentRequest()) {
-        setSyncFailures((current) => ({
-          key: requestCacheKey,
-          count: current.key === requestCacheKey ? current.count + 1 : 1,
-        }));
-        // 后台短暂失败保留上次列表；授权和首次加载错误仍需明确反馈。
-        if (requiresAttention || !cached?.threads.length) {
+        // Only authentication failures require an interruption; other reads retry silently.
+        if (requiresAttention || isGmailAuthError(0, caughtError instanceof Error ? caughtError.message : '')) {
           setError((caughtError as Error).message);
-        } else if (source === 'manual') {
-          toast.error('刷新未成功，已保留原邮件，系统会自动重试。');
+        } else {
+          setIncomplete(true);
+          scheduleRetry();
         }
       }
     } finally {
@@ -1165,7 +1225,7 @@ export function GmailInbox({
   useEffect(() => {
     if (!auth?.isConnected || !auth.accessToken) return;
     void fetchThreads('automatic');
-  }, [auth?.isConnected, auth?.accessToken, fetchThreads, inboxCacheKey, refreshKey]);
+  }, [auth?.isConnected, auth?.accessToken, fetchThreads, inboxCacheKey, refreshKey, retryKey]);
 
   useEffect(() => {
     const becameActive = active && !wasActiveRef.current;
@@ -1914,11 +1974,6 @@ export function GmailInbox({
           {lastSyncedAt && (
             <span className="mt-0.5 text-[11px] text-muted-foreground">
               {'\u4e0a\u6b21\u540c\u6b65'} {formatSyncTime(lastSyncedAt)}
-              {syncFailures.key === inboxCacheKey && syncFailures.count >= 3 ? (
-                <span className="ml-2 text-amber-700" role="status" title="连续刷新失败，当前显示上次同步的邮件；系统会继续自动尝试，也可点击右侧刷新。">
-                  更新暂缓
-                </span>
-              ) : null}
             </span>
           )}
           {subjectTranslationError && (
@@ -2031,6 +2086,10 @@ export function GmailInbox({
             <Button variant="outline" size="sm" className="mt-3" onClick={() => void fetchThreads()}>
               {'\u91cd\u8bd5'}
             </Button>
+          </div>
+        ) : filteredThreads.length === 0 && incomplete ? (
+          <div className="flex items-center justify-center gap-2 p-8 text-sm text-muted-foreground">
+            <Loader2 className="h-4 w-4 animate-spin" />正在后台读取邮件…
           </div>
         ) : filteredThreads.length === 0 ? (
           <div className="p-8 text-center text-sm text-muted-foreground">

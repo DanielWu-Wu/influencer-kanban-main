@@ -9,6 +9,7 @@ export interface GmailInboxCacheEntry {
   normalUnreadCount: number | null;
   lastSyncedAt: string;
   fetchedAt: number;
+  incomplete?: boolean;
 }
 
 const gmailInboxCache = new Map<string, GmailInboxCacheEntry>();
@@ -52,7 +53,7 @@ export function isGmailInboxCacheFresh(
   entry: GmailInboxCacheEntry,
   now = Date.now(),
 ) {
-  return now - entry.fetchedAt < GMAIL_INBOX_CACHE_FRESH_MS;
+  return !entry.incomplete && now - entry.fetchedAt < GMAIL_INBOX_CACHE_FRESH_MS;
 }
 
 export function clearGmailInboxCache() {

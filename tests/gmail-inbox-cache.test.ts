@@ -57,6 +57,7 @@ test('Gmail 邮件列表缓存只在新鲜期内阻止重复抓取', () => {
 
   assert.equal(isGmailInboxCacheFresh(entry, 69_999), true);
   assert.equal(isGmailInboxCacheFresh(entry, 70_000), false);
+  assert.equal(isGmailInboxCacheFresh({ ...entry, incomplete: true }, 10_001), false);
 });
 
 test('Gmail 邮件列表缓存按视图、搜索条件和页码隔离', () => {
