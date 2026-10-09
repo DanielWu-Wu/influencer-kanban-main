@@ -635,7 +635,7 @@ export function OutreachEmailTab({
         </div>
       </div>
 
-      <div className="min-h-0 flex-1 space-y-3 overflow-y-auto pr-1">
+      <div className="min-h-0 flex-1 space-y-3 overflow-y-auto pr-1 [scrollbar-gutter:stable]">
         {filtered.map((prospect) => {
           const isExpanded = expandedIds.includes(prospect.id);
           const safeDraftBody = sanitizeOutreachEmailBody(prospect.aiDraft?.body);
@@ -694,6 +694,7 @@ export function OutreachEmailTab({
                       <span className="min-w-0">
                         <span className="flex flex-wrap items-center gap-2">
                           <span className="truncate text-sm font-semibold">{prospect.title || prospect.inputUrl}</span>
+                          {prospect.outreachRoundId ? <span className="text-xs text-muted-foreground">本轮：{new Date(prospect.outreachRoundStartedAt || prospect.createdAt).toLocaleString('zh-CN')}</span> : null}
                           {isGenerating ? (
                             <Badge variant="outline" className="border-blue-200 bg-blue-50 text-blue-700">
                               <Loader2 className="mr-1 h-3 w-3 animate-spin" />
@@ -742,7 +743,7 @@ export function OutreachEmailTab({
                       </span>
                     </span>
                   </button>
-                  <div className="flex shrink-0 items-center gap-3 border-l border-border/60 px-4">
+                  <div className="flex w-40 shrink-0 items-center justify-between gap-2 border-l border-border/60 px-3">
                     <a
                       href={prospect.url || prospect.sourceUrl || prospect.inputUrl}
                       target="_blank"

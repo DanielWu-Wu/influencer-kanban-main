@@ -6,6 +6,20 @@ import {
   invalidateFeishuRecordsCache,
 } from '../src/lib/feishu-record-cache';
 
+test('同时强制刷新同一表共享请求，避免批量写入重复扫描', async () => {
+  clearFeishuRecordsCache();
+  const originalFetch = globalThis.fetch;
+  let calls = 0;
+  globalThis.fetch = async () => {
+    calls++; await new Promise((resolve) => setTimeout(resolve, 5));
+    return Response.json({ success: true, data: { items: [], has_more: false } });
+  };
+  try {
+    await Promise.all(Array.from({ length: 8 }, () => fetchFeishuRecordSnapshot('https://example.feishu.cn/base/refresh', { force: true })));
+    assert.equal(calls, 1);
+  } finally { globalThis.fetch = originalFetch; clearFeishuRecordsCache(); }
+});
+
 test('不完整分页不能被当成完整查重快照', async () => {
   const originalFetch = globalThis.fetch;
   try {

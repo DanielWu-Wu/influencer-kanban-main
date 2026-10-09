@@ -1,0 +1,8 @@
+.vm-demo > section { max-width: 1240px; }
+.vm-demo article > div:first-child > a { max-width: 560px; }
+@media (min-width: 768px) {
+  .vm-demo { padding: 32px 32px 80px; }
+  .vm-demo > section > div.grid { grid-template-columns: 320px minmax(0, 1fr); }
+  .vm-demo[data-layout="list"] > section > div.grid { grid-template-columns: 420px minmax(0, 1fr); }
+  .vm-demo aside { max-height: none; border-bottom: 0; border-right: 1px solid var(--border); }
+}

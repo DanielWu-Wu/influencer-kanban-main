@@ -74,6 +74,7 @@ import {
   TableRow,
 } from '@/components/ui/table';
 import { useSettings } from '@/lib/data';
+import { VideoMonitorPanel } from '@/components/video-monitor-panel';
 import {
   fetchFeishuRecordSnapshot,
   invalidateFeishuRecordsCache,
@@ -1227,6 +1228,7 @@ export function CooperationProjectsPage({
                     : `邮件待检查 ${readyNoticeTasks.length}`}
               </Button>
             ) : null}
+            <VideoMonitorPanel key={url} url={url} mapping={mapping} onProjectUpdated={refreshProjects} />
             <Button variant="outline" size="sm" className="h-9" disabled={refreshing} onClick={() => void loadRecords(true)}>
               <RefreshCw className={`mr-1.5 h-3.5 w-3.5 ${refreshing ? 'animate-spin' : ''}`} />刷新数据
             </Button>

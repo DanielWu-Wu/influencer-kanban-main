@@ -209,3 +209,39 @@ export function findFeishuRecordMatch(
   }
   return { kind: 'none' };
 }
+
+/** Several rounds for the same channel are history, not duplicate creator profiles. */
+export function findFeishuDevelopmentHistoryMatch(
+  prospect: Parameters<typeof findFeishuRecordMatch>[0],
+  index: FeishuRecordIndex,
+  preferredRecordId?: string,
+): FeishuRecordMatch {
+  const match = findFeishuRecordMatch(prospect, index);
+  if (match.kind !== 'conflict') return match;
+  const channelId = String(prospect.channelId || '').trim().toLowerCase();
+  const channelUrl = normalizeYouTubeKey(prospect.url || prospect.sourceUrl || prospect.inputUrl);
+  const sameChannel = match.records.every((record) => (
+    (channelId && index.channelIds.get(channelId)?.includes(record))
+    || (channelUrl && index.channelUrls.get(channelUrl)?.includes(record))
+  ));
+  if (!sameChannel) return match;
+  return {
+    kind: 'exact',
+    record: match.records.find((record) => record.record_id === preferredRecordId) || match.records[0],
+    reason: `同一频道已有 ${match.records.length} 轮开发记录，本轮独立创建，保留历史`,
+  };
+}
+
+/** Journal only this creator's pre-existing candidates, not thousands of unrelated IDs per row. */
+export function getFeishuCandidateRecordIds(
+  prospect: Parameters<typeof findFeishuRecordMatch>[0], index: FeishuRecordIndex,
+) {
+  const candidates = [
+    ...(index.channelIds.get(String(prospect.channelId || '').toLowerCase()) || []),
+    ...(index.channelUrls.get(normalizeYouTubeKey(prospect.url || prospect.sourceUrl || prospect.inputUrl)) || []),
+    ...splitFeishuEmails(prospect.publicEmail).flatMap((email) => index.emails.get(email) || []),
+    ...(index.handles.get(extractYouTubeHandle(prospect.customUrl || prospect.sourceUrl || prospect.inputUrl)) || []),
+    ...(index.channelNames.get(String(prospect.title || '').trim().toLowerCase()) || []),
+  ];
+  return Array.from(new Set(candidates.map((record) => record.record_id)));
+}

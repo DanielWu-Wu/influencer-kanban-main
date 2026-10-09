@@ -1,0 +1,19 @@
+.vml-demo{padding:24px 28px 80px;background:#eef2f6}
+.vml-demo>section{max-width:1380px}
+.vml-demo>section>div.grid{grid-template-columns:480px minmax(0,1fr)}
+.vml-demo aside{max-height:none;border-bottom:0;border-right:1px solid var(--border)}
+.vml-demo aside>button{padding:18px;gap:16px;align-items:flex-start}
+.vml-demo .vml-cover{width:192px}
+.vml-demo aside>button p:first-child{-webkit-line-clamp:3}
+.vml-demo[data-layout="cards"]>section>div.grid{grid-template-columns:360px minmax(0,1fr)}
+.vml-demo[data-layout="cards"] aside>button{display:block;padding:20px}
+.vml-demo[data-layout="cards"] .vml-cover{width:100%;margin-bottom:14px}
+.vml-demo[data-layout="gallery"]>section>div.grid{grid-template-columns:560px minmax(0,1fr)}
+.vml-demo[data-layout="gallery"] aside{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:12px;padding:16px;align-content:start;background:#f8fafc}
+.vml-demo[data-layout="gallery"] aside>button{display:block;border:1px solid #dbe2ea;border-radius:10px;padding:10px;background:white}
+.vml-demo[data-layout="gallery"] aside>button.bg-blue-50\/70{border-color:#60a5fa;background:#eff6ff}
+.vml-demo[data-layout="gallery"] .vml-cover{width:100%;margin-bottom:12px}
+.vml-demo article{padding:26px}
+.vml-demo aside>button:focus-visible{outline:2px solid #2563eb;outline-offset:-3px}
+@media(max-width:1000px){.vml-demo>section>div.grid{grid-template-columns:420px minmax(0,1fr)}.vml-demo[data-layout="gallery"]>section>div.grid{grid-template-columns:440px minmax(0,1fr)}.vml-demo .vml-cover{width:160px}}
+@media(max-width:760px){.vml-demo{padding:12px 12px 76px}.vml-demo>section>div.grid,.vml-demo[data-layout="cards"]>section>div.grid,.vml-demo[data-layout="gallery"]>section>div.grid{grid-template-columns:1fr;grid-template-rows:260px minmax(0,1fr)}.vml-demo aside{border-right:0;border-bottom:1px solid #dbe2ea}.vml-demo[data-layout="cards"] aside{display:flex;overflow-x:auto}.vml-demo[data-layout="cards"] aside>button{width:280px;flex-shrink:0}.vml-demo[data-layout="gallery"] aside{grid-template-columns:repeat(2,minmax(0,1fr))}.vml-demo article{padding:16px}}

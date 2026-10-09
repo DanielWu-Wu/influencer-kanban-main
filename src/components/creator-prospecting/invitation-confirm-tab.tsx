@@ -1,6 +1,6 @@
 'use client';
 
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import {
   ArrowLeft,
   Check,
@@ -15,7 +15,6 @@ import {
   Loader2,
   Mail,
   RefreshCw,
-  Search,
   SkipForward,
   Sparkles,
   Youtube,
@@ -53,6 +52,7 @@ import {
   WORKFLOW_META,
 } from '@/lib/creator-prospecting';
 import type { OutreachAiContext } from '@/lib/outreach-context';
+import { canConfirmProspectDirection } from '@/lib/prospect-onboarding';
 import {
   OUTREACH_LANGUAGE_OPTIONS,
   outreachLanguageLabel,
@@ -73,6 +73,7 @@ type Props = {
   onEmailChange: (id: string, value: string) => void;
   onSave: (prospect: Prospect) => void;
   onConfirmOutreach: (prospect: Prospect) => void;
+  onConfirmBatchOutreach: () => void;
   onBack: (prospect: Prospect) => void;
   onSkip: (prospect: Prospect) => void;
   onCheckHistory: (prospect: Prospect) => void;
@@ -376,24 +377,14 @@ export function InvitationConfirmTab({
   onInferContactName,
   onInferOutreachLanguage,
 }: Props) {
-  const [query, setQuery] = useState('');
   const [selectedId, setSelectedId] = useState<string>('');
   const [descriptionTranslations, setDescriptionTranslations] = useState<Record<string, DescriptionTranslation>>({});
   const [cooperationIdeaGenerations, setCooperationIdeaGenerations] = useState<Record<string, CooperationIdeaGeneration>>({});
   const descriptionTranslationRequestsRef = useRef(new Set<string>());
   const cooperationIdeaRequestsRef = useRef(new Set<string>());
+  const cooperationIdeaRunningRef = useRef(0);
   const latestProspectsRef = useRef(prospects);
-  const visible = useMemo(() => {
-    const normalized = query.trim().toLowerCase();
-    if (!normalized) return prospects;
-    return prospects.filter((item) => [
-      item.title,
-      item.country,
-      item.language,
-      item.publicEmail,
-    ].some((value) => String(value || '').toLowerCase().includes(normalized)));
-  }, [prospects, query]);
-  const selected = prospects.find((item) => item.id === selectedId) || visible[0];
+  const selected = prospects.find((item) => item.id === selectedId) || prospects[0];
   const selectedDescription = selected?.description?.trim() || '';
   const selectedDescriptionTranslation = selected
     ? descriptionTranslations[selected.id]
@@ -459,8 +450,10 @@ export function InvitationConfirmTab({
     if (!force && isCurrentAiIdea && prospect.cooperationIdeaContextKey === contextKey) return;
     if (force) cooperationIdeaRequestsRef.current.delete(contextKey);
     if (cooperationIdeaRequestsRef.current.has(contextKey)) return;
+    if (!force && cooperationIdeaRunningRef.current >= 3) return;
 
     cooperationIdeaRequestsRef.current.add(contextKey);
+    cooperationIdeaRunningRef.current += 1;
     setCooperationIdeaGenerations((current) => ({
       ...current,
       [prospect.id]: { contextKey, status: 'loading' },
@@ -490,7 +483,6 @@ export function InvitationConfirmTab({
         }));
       })
       .catch((error) => {
-        cooperationIdeaRequestsRef.current.delete(contextKey);
         setCooperationIdeaGenerations((current) => ({
           ...current,
           [prospect.id]: {
@@ -499,7 +491,7 @@ export function InvitationConfirmTab({
             error: error instanceof Error ? error.message : 'AI 合作想法生成失败，请稍后重试。',
           },
         }));
-      });
+      }).finally(() => { cooperationIdeaRunningRef.current -= 1; });
   }, [onPatch, onSuggestCooperationIdea]);
 
   useEffect(() => {
@@ -515,8 +507,9 @@ export function InvitationConfirmTab({
   }, [requestDescriptionTranslation, selected]);
 
   useEffect(() => {
-    if (selected) requestCooperationIdea(selected);
-  }, [requestCooperationIdea, selected]);
+    // Prepare batch directions with bounded concurrency, without overwriting manual ideas.
+    for (const prospect of prospects) requestCooperationIdea(prospect);
+  }, [requestCooperationIdea, prospects, cooperationIdeaGenerations]);
 
   useEffect(() => {
     if (
@@ -540,7 +533,7 @@ export function InvitationConfirmTab({
       <div className="flex min-h-96 flex-1 flex-col items-center justify-center rounded-lg border border-dashed bg-white/45 text-center">
         <CheckCircle2 className="mb-3 h-10 w-10 text-muted-foreground" />
         <h3 className="font-semibold">没有待确认邀约方向的红人</h3>
-        <p className="mt-1 text-sm text-muted-foreground">先在“红人录入”完成识别、查重、新建线索和确认待开发。</p>
+        <p className="mt-1 text-sm text-muted-foreground">在“红人录入”识别频道后，点击“建档并进入邀约”。</p>
       </div>
     );
   }
@@ -548,17 +541,8 @@ export function InvitationConfirmTab({
   return (
     <div className="grid min-h-0 flex-1 gap-3 lg:grid-cols-[300px_minmax(0,1fr)]">
       <aside className="flex min-h-0 flex-col border-r border-border/70 pr-3">
-        <div className="relative mb-3">
-          <Search className="absolute left-2.5 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
-          <Input
-            value={query}
-            onChange={(event) => setQuery(event.target.value)}
-            placeholder="筛选待确认红人"
-            className="h-9 bg-white/75 pl-8"
-          />
-        </div>
         <div className="min-h-0 space-y-1 overflow-y-auto">
-          {visible.map((prospect) => (
+          {prospects.map((prospect) => (
             <button
               key={prospect.id}
               type="button"
@@ -609,6 +593,7 @@ export function InvitationConfirmTab({
                   {countryLabel(selected.country)} · {prospectLanguageLabel(selected)} · 粉丝 {formatCompactNumber(selected.subscriberCount)}
                   {' · '}近期均播 {formatCompactNumber(selected.recentAverageViews)}
                 </p>
+                {selected.resourceContentTypeNotice ? <p className="mt-1 text-xs text-muted-foreground">{selected.resourceContentTypeNotice}</p> : null}
               </div>
             </div>
             <div className="flex items-center gap-2">
@@ -999,12 +984,7 @@ export function InvitationConfirmTab({
                 </Button>
                 <Button
                   onClick={() => onConfirmOutreach(selected)}
-                  disabled={
-                    !selected.targetProduct?.trim()
-                    || !selected.cooperationType?.trim()
-                    || !selected.outreachLanguage?.trim()
-                    || !selected.cooperationIdea?.trim()
-                  }
+                  disabled={!canConfirmProspectDirection(selected)}
                 >
                   <Sparkles className="mr-1 h-4 w-4" />
                   确认生成开发信

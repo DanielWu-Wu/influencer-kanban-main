@@ -236,7 +236,7 @@ function resolveFieldName(
   return Object.keys(record.fields).find((fieldName) => normalizedAliases.has(normalizeFieldName(fieldName)));
 }
 
-function rawMappedValue(
+export function rawMappedValue(
   record: CachedFeishuRecord,
   mapping: FeishuFieldMapping,
   key: FeishuFieldKey,

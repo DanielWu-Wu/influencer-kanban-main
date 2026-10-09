@@ -1,6 +1,6 @@
 'use client';
 
-import { useEffect, useMemo, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   CheckCircle2,
   ChevronDown,
@@ -40,8 +40,9 @@ import {
 
 type ConnectionState = {
   loading: boolean;
-  configured: boolean;
+  configured: boolean | null;
   connected: boolean;
+  reconnectRequired?: boolean;
   name?: string;
   credentialSource?: 'personal' | 'global';
   appId?: string;
@@ -168,7 +169,7 @@ export function FeishuSettings({
   } = useSettings();
   const [connection, setConnection] = useState<ConnectionState>({
     loading: true,
-    configured: false,
+    configured: null,
     connected: false,
   });
   const [message, setMessage] = useState('');
@@ -204,34 +205,38 @@ export function FeishuSettings({
     setCallbackUrl(`${window.location.origin}/api/auth/feishu/callback`);
   }, []);
 
-  useEffect(() => {
-    const loadConnection = async () => {
-      try {
-        const response = await fetch('/api/auth/feishu/session', { cache: 'no-store' });
-        const result = await response.json();
-        if (!response.ok) throw new Error(result.error || '读取飞书连接状态失败。');
-        setConnection({
-          loading: false,
-          configured: Boolean(result.configured),
-          connected: Boolean(result.connected),
-          name: result.data?.name,
-          credentialSource: result.source,
-          appId: result.appId || result.data?.appId,
-        });
-        if (typeof result.callbackUrl === 'string' && result.callbackUrl) {
-          setCallbackUrl(result.callbackUrl);
-        }
-      } catch (error) {
-        setConnection({
-          loading: false,
-          configured: false,
-          connected: false,
-          error: error instanceof Error ? error.message : '读取飞书连接状态失败。',
-        });
+  const loadConnection = useCallback(async () => {
+    setConnection((current) => ({ ...current, loading: true, error: undefined }));
+    try {
+      const response = await fetch('/api/auth/feishu/session', { cache: 'no-store' });
+      const result = await response.json();
+      if (!response.ok) throw new Error(result.error || '读取飞书连接状态失败。');
+      setConnection({
+        loading: false,
+        configured: Boolean(result.configured),
+        connected: Boolean(result.connected),
+        reconnectRequired: Boolean(result.reconnectRequired),
+        name: result.data?.name,
+        credentialSource: result.source,
+        appId: result.appId || result.data?.appId,
+        error: typeof result.error === 'string' ? result.error : undefined,
+      });
+      if (typeof result.callbackUrl === 'string' && result.callbackUrl) {
+        setCallbackUrl(result.callbackUrl);
       }
-    };
-    void loadConnection();
+    } catch (error) {
+      setConnection({
+        loading: false,
+        configured: null,
+        connected: false,
+        error: error instanceof Error ? error.message : '读取飞书连接状态失败。',
+      });
+    }
   }, []);
+
+  useEffect(() => {
+    void loadConnection();
+  }, [loadConnection]);
 
   const disconnect = async () => {
     await fetch('/api/auth/feishu/session', { method: 'DELETE' });
@@ -462,6 +467,13 @@ export function FeishuSettings({
 
           {connection.loading ? (
             <StatusBox icon={<LoaderCircle className="h-4 w-4 animate-spin" />} text="正在检查飞书连接状态..." />
+          ) : connection.configured === null ? (
+            <div className="rounded-lg border border-white/65 bg-white/55 p-4">
+              <p className="mb-3 text-sm">暂时无法确认飞书连接状态。已保存的应用凭证状态尚未核实。</p>
+              <Button type="button" variant="outline" size="sm" onClick={() => void loadConnection()}>
+                <RefreshCw className="mr-2 h-4 w-4" />重新检查连接
+              </Button>
+            </div>
           ) : !connection.configured ? (
             <StatusBox tone="warning" text="请先在上方保存你自己的飞书企业应用 App ID 和 App Secret。三张表网址可以先填写并暂存。" />
           ) : connection.connected ? (
@@ -480,14 +492,16 @@ export function FeishuSettings({
             </div>
           ) : (
             <div className="space-y-3 rounded-lg border border-white/65 bg-white/55 p-4">
-              <p className="text-sm font-medium">授权你的飞书账号</p>
+              <p className="text-sm font-medium">{connection.reconnectRequired ? '飞书授权需要重新连接' : '授权你的飞书账号'}</p>
               <p className="text-xs leading-5 text-muted-foreground">
-                授权后，看板只能访问你本人原本有权限使用的多维表格。
+                {connection.reconnectRequired
+                  ? '应用凭证仍已保存。重新连接后，再检查三张表的读取状态。'
+                  : '授权后，看板只能访问你本人原本有权限使用的多维表格。'}
               </p>
               <Button className="h-10 w-full gap-2 rounded-lg bg-blue-600 hover:bg-blue-700" asChild>
                 <a href="/api/auth/feishu">
                   <Plug className="h-4 w-4" />
-                  一键连接飞书
+                  {connection.reconnectRequired ? '重新连接飞书' : '一键连接飞书'}
                 </a>
               </Button>
             </div>

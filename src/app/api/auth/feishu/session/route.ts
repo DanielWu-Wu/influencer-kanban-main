@@ -3,9 +3,9 @@ import {
   deleteStoredFeishuOAuthPending,
   getStoredFeishuAuth,
   refreshStoredFeishuAuth,
-  toBrowserFeishuAuth,
 } from '@/lib/feishu-cloud-auth';
 import { getFeishuAppCredentialStatus } from '@/lib/feishu-app-credentials';
+import { getFeishuSessionState } from '@/lib/feishu-session-state';
 import { deleteUserSecret } from '@/lib/user-private-storage';
 import { getRequestUser } from '@/lib/supabase/server';
 
@@ -18,21 +18,12 @@ export async function GET(request: NextRequest) {
       || `${new URL(request.url).origin}/api/auth/feishu/callback`;
     const credentials = await getFeishuAppCredentialStatus(appAuth.supabase);
     const stored = await getStoredFeishuAuth(appAuth.supabase);
-    if (!stored) {
-      return NextResponse.json({
-        ...credentials,
-        connected: false,
-        callbackUrl,
-      });
-    }
-    // 即使令牌尚未过期，也要确认它仍属于当前账号正在使用的企业应用。
-    const fresh = await refreshStoredFeishuAuth(appAuth.supabase);
-    return NextResponse.json({
-      ...credentials,
-      connected: true,
-      callbackUrl,
-      data: toBrowserFeishuAuth(fresh),
-    });
+    const state = await getFeishuSessionState(
+      credentials,
+      stored,
+      () => refreshStoredFeishuAuth(appAuth.supabase),
+    );
+    return NextResponse.json({ ...state, callbackUrl });
   } catch (error) {
     return NextResponse.json(
       { error: error instanceof Error ? error.message : '读取飞书连接状态失败。' },

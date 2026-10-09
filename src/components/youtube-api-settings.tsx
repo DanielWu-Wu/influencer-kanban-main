@@ -19,6 +19,7 @@ import {
   Youtube,
 } from 'lucide-react';
 import { useSettings } from '@/lib/data';
+import { ApifyTranscriptSettings } from '@/components/apify-transcript-settings';
 
 const STORED_YOUTUBE_KEY = '••••••••••••';
 
@@ -30,6 +31,7 @@ interface YouTubeApiSettingsProps {
 export function YouTubeApiSettings({ expanded, onToggle }: YouTubeApiSettingsProps) {
   const { settings, updateSettings, loading } = useSettings();
   const [apiKey, setApiKey] = useState('');
+  const [transcriptExpanded, setTranscriptExpanded] = useState(false);
   const [defaultRegion, setDefaultRegion] = useState('ES');
   const [defaultLanguage, setDefaultLanguage] = useState('es');
   const [maxSearchResults, setMaxSearchResults] = useState(25);
@@ -149,7 +151,7 @@ export function YouTubeApiSettings({ expanded, onToggle }: YouTubeApiSettingsPro
               <div>
                 <CardTitle className="text-base">YouTube API</CardTitle>
                 <CardDescription className="text-xs mt-0.5">
-                  预留创作者搜索、频道数据补全和红人筛选能力
+                  频道资料、视频检测与字幕服务设置
                 </CardDescription>
               </div>
             </div>
@@ -288,6 +290,10 @@ export function YouTubeApiSettings({ expanded, onToggle }: YouTubeApiSettingsPro
               {saving ? '保存中...' : justSaved ? '已保存' : '保存 YouTube 设置'}
             </Button>
           </div>
+          <ApifyTranscriptSettings
+            expanded={transcriptExpanded}
+            onToggle={() => setTranscriptExpanded(value => !value)}
+          />
         </CardContent>
       )}
     </Card>

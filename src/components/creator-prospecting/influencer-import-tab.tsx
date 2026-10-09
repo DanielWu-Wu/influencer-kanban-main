@@ -13,7 +13,6 @@ import {
   Trash2,
   UserCheck,
   UserPlus,
-  Zap,
   Youtube,
 } from 'lucide-react';
 import { toast } from 'sonner';
@@ -60,6 +59,7 @@ import {
   type Prospect,
   WORKFLOW_META,
 } from '@/lib/creator-prospecting';
+import { canStartProspectRound, hasConfirmedProspectEmail } from '@/lib/prospect-onboarding';
 import { outreachLanguageLabel } from '@/lib/outreach-languages';
 import {
   hasProspectEmailAlternatives,
@@ -72,6 +72,7 @@ import {
 import { ProspectWriteStatusLine } from './prospect-write-status';
 
 type Props = {
+  historyProspects: Prospect[];
   onRetryWrite: (prospect: Prospect) => void;
   onContentTypesChange: (id: string, value: string) => void;
   prospects: Prospect[];
@@ -276,7 +277,8 @@ function DevelopmentStatusText({
 }
 
 export function InfluencerImportTab({
-  prospects,
+  prospects: pendingProspects,
+  historyProspects,
   selectedIds,
   input,
   preference,
@@ -308,6 +310,9 @@ export function InfluencerImportTab({
   onRetryWrite,
   onContentTypesChange,
 }: Props) {
+  const [showHistory, setShowHistory] = useState(false);
+  const prospects = useMemo(() => showHistory ? [...pendingProspects, ...historyProspects] : pendingProspects,
+    [showHistory, pendingProspects, historyProspects]);
   const [query, setQuery] = useState('');
   const selected = useMemo(
     () => prospects.filter((item) => selectedIds.includes(item.id) && !['checking', 'writing'].includes(item.feishuWriteTask?.status || '')),
@@ -336,18 +341,11 @@ export function InfluencerImportTab({
     && !item.resourceRecordId
   ));
   const canConfirm = selected.some(canConfirmInvitation);
-  const canQuickOnboard = selected.some((item) => (
-    !item.emailSelectionRequired
-    && (
-      item.workflowStatus === 'resolved'
-      || item.resourceStatus === 'missing'
-      || canCreateFeishuRecord(item)
-    )
-  ));
+  const canQuickOnboard = selected.some(canStartProspectRound);
 
   return (
     <div className="flex min-h-0 flex-1 flex-col gap-3">
-      <section className="grid gap-3 border-b border-border/70 pb-4 xl:grid-cols-[minmax(360px,0.9fr)_minmax(0,1.1fr)]">
+      <section className="grid gap-3 border-b border-border/70 pb-4 lg:grid-cols-[minmax(320px,0.9fr)_minmax(0,1.1fr)]">
         <div>
           <label htmlFor="creator-links" className="mb-1.5 block text-sm font-semibold">
             批量导入频道链接
@@ -384,6 +382,14 @@ export function InfluencerImportTab({
           飞书查重
         </Button>
         <Button
+          onClick={() => onQuickOnboard(selected)}
+          disabled={!canQuickOnboard || preparingQuickPreview || checkingDedupe || writingFeishu}
+          title="每次主动点击发起新一轮；已有资源档案复用，历史开发记录保留。未完成任务使用行内重试。"
+        >
+          {writingFeishu ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <UserCheck className="mr-2 h-4 w-4" />}
+          {writingFeishu ? '正在建档…' : `建档并进入邀约（${selected.filter(canStartProspectRound).length}）`}
+        </Button>
+        <Button
           variant="outline"
           onClick={() => onAddResources(selected)}
           disabled={!canAddResource || preparingResourcePreview || writingFeishu}
@@ -397,22 +403,11 @@ export function InfluencerImportTab({
           disabled={!canCreate || preparingDevelopmentPreview || writingFeishu}
         >
           {preparingDevelopmentPreview ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <UserPlus className="mr-2 h-4 w-4" />}
-          {preparingDevelopmentPreview ? '准备预览中…' : `新建开发记录（${selected.length}）`}
+          {preparingDevelopmentPreview ? '准备预览中…' : `仅新建开发记录（${selected.filter(canCreateFeishuRecord).length}）`}
         </Button>
-        <Button
-          variant="outline"
-          onClick={() => onQuickOnboard(selected)}
-          disabled={!canQuickOnboard || preparingQuickPreview || checkingDedupe || writingFeishu}
-          className="border-sky-200 bg-sky-50/70 text-sky-800 hover:bg-sky-100 hover:text-sky-900"
-        >
-          {preparingQuickPreview
-            ? <Loader2 className="mr-2 h-4 w-4 animate-spin" />
-            : <Zap className="mr-2 h-4 w-4" />}
-          {preparingQuickPreview ? '准备快速建档…' : `快速建档（${selected.length}）`}
-        </Button>
-        <Button variant="outline" onClick={() => onConfirmInvitation(selected)} disabled={!canConfirm}>
+        <Button variant="outline" onClick={() => onConfirmInvitation(selected)} disabled={!canConfirm || writingFeishu}>
           <UserCheck className="mr-2 h-4 w-4" />
-          确认待开发（{selected.filter(canConfirmInvitation).length}）
+          继续本轮邀约（{selected.filter(canConfirmInvitation).length}）
         </Button>
         <Button variant="ghost" onClick={onClearInput} disabled={!input}>
           清空输入
@@ -468,6 +463,11 @@ export function InfluencerImportTab({
           />
         </div>
       </div>
+
+      <label className="flex items-center gap-2 text-xs text-muted-foreground">
+        <Checkbox checked={showHistory} onCheckedChange={(checked) => setShowHistory(checked === true)} />
+        显示历史轮次（{historyProspects.length}），选择后可发起新一轮，原邮件和草稿保留
+      </label>
 
       <div className="min-h-0 flex-1 overflow-auto rounded-lg border border-border/70 bg-white/70">
         <Table className="min-w-[1180px]">
@@ -615,6 +615,7 @@ export function InfluencerImportTab({
                     <p className="mt-1 text-xs text-muted-foreground">
                       {prospect.emailSelectionRequired ? '选择后会写入资源库和开发记录表' : '会写入资源库和开发记录表'}
                     </p>
+                    {!prospect.emailSelectionRequired && !hasConfirmedProspectEmail(prospect) ? <p className="mt-1 text-xs text-amber-700">发起邀约前，请填写一个有效邮箱。</p> : null}
                   </TableCell>
                   <TableCell>
                     <ResourceStatusText
@@ -635,13 +636,16 @@ export function InfluencerImportTab({
                   </TableCell>
                   <TableCell>
                     <Badge variant="outline" className={workflow.className}>{workflow.label}</Badge>
+                    {prospect.outreachRoundId ? <p className="mt-1 text-xs text-muted-foreground">本轮建立于 {new Date(prospect.outreachRoundStartedAt || prospect.createdAt).toLocaleString('zh-CN')}</p> : null}
                     <ProspectWriteStatusLine prospect={prospect} onRetry={onRetryWrite} />
                     {prospect.resourceStatus === 'missing' ? <Input
                       aria-label={`${prospect.title || prospect.inputUrl} 内容类型`}
                       placeholder="内容类型（可选，逗号分隔）"
                       className="mt-2 min-w-40"
                       defaultValue={(prospect.resourceContentTypes || []).join('，')}
-                      onBlur={(event) => onContentTypesChange(prospect.id, event.target.value)}
+                      onBlur={(event) => {
+                        if (event.target.value.trim() !== (prospect.resourceContentTypes || []).join('，')) onContentTypesChange(prospect.id, event.target.value);
+                      }}
                     /> : null}
                   </TableCell>
                   <TableCell className="text-right">

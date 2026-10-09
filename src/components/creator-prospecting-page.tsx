@@ -69,6 +69,8 @@ import {
 import {
   appendFeishuEmailValue,
   buildFeishuRecordIndex,
+  findFeishuDevelopmentHistoryMatch,
+  getFeishuCandidateRecordIds,
   findFeishuRecordMatch,
   flattenFeishuValue,
   normalizeFeishuEmailValue,
@@ -77,7 +79,8 @@ import {
 import type { FeishuBatchResult } from '@/lib/feishu-batch';
 import { getSupabaseBrowserClient } from '@/lib/supabase/client';
 import { getAccountCacheScope, scopedLocalStorageKey } from '@/lib/account-cache-scope';
-import { executeProspectWriteTask, recoverProspectWriteTask, writeTaskContextMatches, type ProspectWriteKind, type ProspectWriteStep, type ProspectWriteTask } from '@/lib/prospect-feishu-write';
+import { executeProspectWriteTask, executeProspectWriteTaskBatch, recoverProspectWriteTask, writeTaskContextMatches, type ProspectWriteKind, type ProspectWriteStep, type ProspectWriteTask } from '@/lib/prospect-feishu-write';
+import { applyProspectBatchDefaults, canConfirmProspectDirection, canStartProspectRound, createProspectOutreachRound, resolveProspectContentTypes } from '@/lib/prospect-onboarding';
 import {
   applyManualProspectEmail,
   buildProspectEmailCandidates,
@@ -361,6 +364,8 @@ function buildDevelopmentFields(prospect: Prospect, mapping: FeishuFieldMapping)
   const fields: Record<string, unknown> = {};
   const notes = [
     '来源：红人开发台',
+    prospect.outreachRoundId ? `开发轮次：${prospect.outreachRoundId}` : '',
+    prospect.outreachNotes ? `本轮开发要求：${prospect.outreachNotes}` : '',
     prospect.targetProduct ? `目标产品：${prospect.targetProduct}` : '',
     prospect.cooperationType ? `合作形式：${prospect.cooperationType}` : '',
     prospect.cooperationIdea ? `合作想法：${prospect.cooperationIdea}` : '',
@@ -373,7 +378,7 @@ function buildDevelopmentFields(prospect: Prospect, mapping: FeishuFieldMapping)
   putMappedField(fields, mapping, 'region', prospect.country ? countryLabel(prospect.country) : '');
   putMappedField(fields, mapping, 'channelUrl', buildFeishuUrlValue(prospect));
   putMappedField(fields, mapping, 'email', normalizeFeishuEmailValue(prospect.publicEmail));
-  const developmentDate = new Date(prospect.createdAt);
+  const developmentDate = new Date(prospect.outreachRoundStartedAt || prospect.createdAt);
   developmentDate.setHours(0, 0, 0, 0);
   putMappedField(fields, mapping, 'developmentDate', developmentDate.getTime());
   putMappedField(fields, mapping, 'prospectingStatus', WORKFLOW_META[prospect.workflowStatus].label);
@@ -868,7 +873,8 @@ export function CreatorProspectingPage({
   const [inferringOutreachLanguageIds, setInferringOutreachLanguageIds] = useState<string[]>([]);
   const [resolving, setResolving] = useState(false);
   const [checkingDedupe, setCheckingDedupe] = useState(false);
-  const writingFeishu = false;
+  const [writingFeishu, setWritingFeishu] = useState(false);
+  const onboardingSourcesRef = useRef(new Set<string>());
   const [preparingResourcePreview, setPreparingResourcePreview] = useState(false);
   const [preparingDevelopmentPreview, setPreparingDevelopmentPreview] = useState(false);
   const [preparingQuickPreview, setPreparingQuickPreview] = useState(false);
@@ -883,6 +889,7 @@ export function CreatorProspectingPage({
   const [resourceContentTypeStatus, setResourceContentTypeStatus] = useState<ResourceContentTypeStatus>('idle');
   const [resourceContentTypeAiStatus, setResourceContentTypeAiStatus] = useState<ResourceContentTypeAiStatus>('idle');
   const resourceContentTypeCacheRef = useRef(new Map<string, string[]>());
+  const resourceContentTypeRequestsRef = useRef(new Map<string, Promise<string[]>>());
   const resourceContentTypeAiCacheRef = useRef(new Map<string, string[]>());
   const resourceContentTypeManualIdsRef = useRef(new Set<string>());
   const resourcePreviewRunRef = useRef(0);
@@ -1597,7 +1604,9 @@ export function CreatorProspectingPage({
       });
       const result = await response.json();
       if (!response.ok || !result.success) throw new Error(getErrorMessage(result, '飞书状态同步失败。'));
-      updateProspect(prospect.id, { syncError: undefined });
+      updateProspect(prospect.id, { syncError: undefined,
+        ...(settings.feishuProspectingFieldMapping?.prospectingStatus ? { stageSyncNotice: undefined } : {}),
+      });
       return true;
     } catch (error) {
       updateProspect(prospect.id, { syncError: error instanceof Error ? error.message : '飞书状态同步失败。' });
@@ -1877,7 +1886,7 @@ export function CreatorProspectingPage({
       const patches = new Map<string, Partial<Prospect>>();
       for (const prospect of targets) {
         const resourceMatch = findFeishuRecordMatch(prospect, resourceIndex);
-        const developmentMatch = findFeishuRecordMatch(prospect, developmentIndex);
+        const developmentMatch = findFeishuDevelopmentHistoryMatch(prospect, developmentIndex, prospect.previousDevelopmentRecordId);
         const resourceRecord = getMatchedRecord(resourceMatch);
         const developmentRecord = getMatchedRecord(developmentMatch);
         const resourceStatus = resourceMatch.kind === 'exact'
@@ -2079,7 +2088,10 @@ export function CreatorProspectingPage({
     const cacheKey = `${settings.feishuUrl}::${fieldName}`;
     const cached = resourceContentTypeCacheRef.current.get(cacheKey);
     if (cached) return cached;
+    const pending = resourceContentTypeRequestsRef.current.get(cacheKey);
+    if (pending) return pending;
 
+    const request = (async () => {
     const response = await fetch('/api/feishu/inspect', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
@@ -2095,6 +2107,9 @@ export function CreatorProspectingPage({
     const options = rawOptions.map(extractFeishuOptionName).filter(Boolean);
     resourceContentTypeCacheRef.current.set(cacheKey, options);
     return options;
+    })().finally(() => resourceContentTypeRequestsRef.current.delete(cacheKey));
+    resourceContentTypeRequestsRef.current.set(cacheKey, request);
+    return request;
   };
 
   const classifyResourceContentTypes = async (
@@ -2449,7 +2464,7 @@ export function CreatorProspectingPage({
     const items = quickPreviewItems.filter((item) => !item.blockedReason);
     const overrides = new Map(items.map((item) => [item.prospect.id, { resource: item.resourceFields, development: item.developmentFields }]));
     closeQuickPreview();
-    await startQuietFeishuWrite(items.map((item) => item.prospect), 'quick', overrides);
+    await startQuietFeishuWrite(items.map((item) => item.prospect), 'quick', overrides, Boolean(previewContextRef.current?.advanceToInvitation));
   };
 
   const confirmWriteFeishu = async () => {
@@ -2506,10 +2521,51 @@ export function CreatorProspectingPage({
     const patch: Partial<Prospect> = step.key === 'resource'
       ? { resourceStatus: 'exists', resourceRecordId: step.recordId }
       : step.key === 'development'
-        ? { workflowStatus: 'dedupe_completed', developmentStatus: 'exists', feishuRecordId: step.recordId }
+        ? { workflowStatus: task.advanceToInvitation ? 'invitation_pending' : 'dedupe_completed', developmentStatus: 'exists', feishuRecordId: step.recordId }
+        : step.key === 'invitation'
+          ? { stageSyncNotice: undefined, syncError: undefined }
         : { syncError: undefined };
     saveWriteTask(id, task, patch);
     invalidateFeishuRecordsCache(step.url);
+  };
+
+  const readFeishuRecord = async (url: string, recordId: string): Promise<FeishuRecord> => {
+    const response = await fetch('/api/feishu/records', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ action: 'get', url, recordId }),
+    });
+    const result = await response.json();
+    if (!response.ok || !result.success || !result.data?.record) {
+      throw new Error(getErrorMessage(result, '读取目标飞书记录失败。'));
+    }
+    return result.data.record;
+  };
+
+  const validateQuietStep = async (
+    step: ProspectWriteStep, task: ProspectWriteTask,
+    snapshots = new Map<string, Promise<FeishuRecordSnapshot>>(),
+  ) => {
+    if (step.action === 'batchCreate') {
+      const mapping = step.key === 'resource' ? settings.feishuFieldMapping || {} : settings.feishuProspectingFieldMapping || {};
+      if (!snapshots.has(step.url)) snapshots.set(step.url, fetchFeishuRecordSnapshot(step.url, {
+        force: true, fieldNames: getRequiredDedupeFields(mapping),
+      }));
+      const snapshot = await snapshots.get(step.url)!;
+      const prospect = task.identity;
+      if (!prospect) return '原线索不存在，已停止写入。';
+      const index = buildFeishuRecordIndex(snapshot.records, mapping);
+      const match = step.key === 'resource' ? findFeishuRecordMatch(prospect, index)
+        : findFeishuDevelopmentHistoryMatch(prospect, index);
+      if (match.kind === 'conflict' || (match.kind === 'suspected' && !step.acceptedSuspectedIds?.includes(match.record.record_id))) return '发现疑似重复或多条匹配，需先确认关联。';
+      if (match.kind === 'exact' && !step.knownRecordIds?.includes(match.record.record_id)) return '飞书出现新的匹配记录，请核实后再处理。';
+    } else {
+      if (!step.recordId) return '缺少目标记录编号，已停止写入。';
+      const record = await readFeishuRecord(step.url, step.recordId);
+      for (const [field, before] of Object.entries(step.before || {})) {
+        if (flattenFeishuValue(record.fields[field]) !== flattenFeishuValue(before)) return '飞书中的原值已变化，请查看差异后重新确认。';
+      }
+    }
+    return undefined;
   };
 
   const executeQuietTask = async (id: string, task: ProspectWriteTask) => {
@@ -2520,27 +2576,10 @@ export function CreatorProspectingPage({
       current,
       save: (next) => saveWriteTask(id, next),
       applied: (step, next) => applyWriteStep(id, next, step),
-      validate: async (step) => {
-        const snapshot = await fetchFeishuRecordSnapshot(step.url, { force: true });
-        if (step.action === 'batchCreate') {
-          const mapping = step.key === 'resource' ? settings.feishuFieldMapping || {} : settings.feishuProspectingFieldMapping || {};
-          const prospect = task.identity;
-          if (!prospect) return '原线索不存在，已停止写入。';
-          const match = findFeishuRecordMatch(prospect, buildFeishuRecordIndex(snapshot.records, mapping));
-          if (match.kind === 'conflict' || (match.kind === 'suspected' && !step.acceptedSuspectedIds?.includes(match.record.record_id))) return '发现疑似重复或多条匹配，需先确认关联。';
-          if (match.kind === 'exact' && !step.knownRecordIds?.includes(match.record.record_id)) return '飞书出现新的匹配记录，请核实后再处理。';
-        } else {
-          const record = snapshot.records.find((item) => item.record_id === step.recordId);
-          if (!record) return '目标记录已不存在，已停止写入。';
-          for (const [field, before] of Object.entries(step.before || {})) {
-            if (flattenFeishuValue(record.fields[field]) !== flattenFeishuValue(before)) return '飞书中的原值已变化，请查看差异后重新确认。';
-          }
-        }
-        return undefined;
-      },
+      validate: (step) => validateQuietStep(step, task),
       write: async (step) => {
-        const results = await requestFeishuBatch(step.action, step.url, step.operationId,
-          [{ clientId: id, recordId: step.recordId, fields: step.fields }]);
+        const results = await requestFeishuBatch(step.action, step.url, step.batch?.operationId || step.operationId,
+          step.batch?.items || [{ clientId: id, recordId: step.recordId, fields: step.fields }]);
         return results.find((result) => result.clientId === id)
           || { clientId: id, status: 'failed', outcomeCertain: false, error: '没有收到该条写入结果。' };
       },
@@ -2555,19 +2594,35 @@ export function CreatorProspectingPage({
   };
 
   const startQuietFeishuWrite = async (items: Prospect[], kind: ProspectWriteKind,
-    overrides = new Map<string, Partial<Record<ProspectWriteStep['key'], Record<string, unknown>>>>()) => {
+    overrides = new Map<string, Partial<Record<ProspectWriteStep['key'], Record<string, unknown>>>>(),
+    advanceToInvitation = false) => {
     const context = structuredClone(writeContext);
     const mapping = structuredClone(settings.feishuProspectingFieldMapping || {});
     const resourceMapping = structuredClone(settings.feishuFieldMapping || {});
     const frozen = structuredClone(items).filter((item) => beginProspectWrite([item.id]));
     let preparationSnapshots: Promise<[FeishuRecordSnapshot, FeishuRecordSnapshot]> | undefined;
-    let successCount = 0;
+    const prepared: Array<{ clientId: string; task: ProspectWriteTask }> = [];
+    const validationSnapshots = new Map<string, Promise<FeishuRecordSnapshot>>();
+    const resourceOwners = new Map<string, string>();
+    const loadResources = async (): Promise<FeishuRecordSnapshot> => {
+      if (!frozen.every((p) => p.resourceStatus === 'exists' && p.resourceRecordId)) {
+        return fetchFeishuRecordSnapshot(context.resourceUrl, { fieldNames: getRequiredDedupeFields(resourceMapping) });
+      }
+      const records: FeishuRecord[] = [];
+      const ids = Array.from(new Set(frozen.map((p) => p.resourceRecordId!)));
+      await mapWithConcurrency(ids, 4, async (id) => { records.push(await readFeishuRecord(context.resourceUrl, id)); });
+      const now = Date.now();
+      return { records, fetchedAt: now, expiresAt: now + 60_000, cacheHit: false, cacheKey: 'linked-resources', fieldNames: getRequiredDedupeFields(resourceMapping) };
+    };
+    const startedAt = performance.now();
     const moved: string[] = [];
-    // Two independent rows may progress; the same row is locked before the first await.
-    await mapWithConcurrency(frozen, 2, async (source) => {
+    setWritingFeishu(true);
+    // Preparation is shared; writes are grouped by table and dependency step below.
+    await mapWithConcurrency(frozen, 3, async (source) => {
       const live = prospectsRef.current.find((item) => item.id === source.id);
       if (!live) { finishProspectWrite([source.id]); return; }
       const task: ProspectWriteTask = { id: crypto.randomUUID(), ...context, kind, status: 'checking', steps: [],
+        advanceToInvitation, progress: kind === 'invitation' ? '正在核对开发记录' : '正在查重与准备本轮记录',
         identity: { inputUrl: source.inputUrl, title: source.title, channelId: source.channelId, url: source.url, publicEmail: source.publicEmail, customUrl: source.customUrl } };
       const current = () => writeMountedRef.current && writeTaskContextMatches(task, writeContextRef.current) && context.scope === getAccountCacheScope();
       try {
@@ -2577,18 +2632,36 @@ export function CreatorProspectingPage({
         saveWriteTask(source.id, task, mayAdvance && previous && previous.status !== 'success'
           ? { feishuWriteBacklog: [...(live.feishuWriteBacklog || []), previous] } : {});
         if (source.emailSelectionRequired) throw new Error('请先在该行选择准确邮箱。');
-        if (!['resolved', 'dedupe_completed'].includes(source.workflowStatus)) throw new Error('请先完成频道识别；已进入后续阶段的记录不能重复建档。');
+        if (!['resolved', 'dedupe_completed'].includes(source.workflowStatus)) throw new Error('请先完成频道识别。');
+        const add = (key: ProspectWriteStep['key'], url: string, fields: Record<string, unknown>, record?: FeishuRecord,
+          knownRecordIds: string[] = []) => {
+          const compact = compactFeishuWriteFields(overrides.get(source.id)?.[key] || fields);
+          if (!Object.keys(compact).length) throw new Error(`${key === 'resource' ? '红人资源库' : '开发记录表'}没有可写入字段，请检查该表的字段映射。`);
+          task.steps.push({ key, url, fields: compact, action: record ? 'batchUpdate' : 'batchCreate',
+            recordId: record?.record_id, operationId: `${task.id}:${key}`, status: 'pending', knownRecordIds,
+            acceptedSuspectedIds: [...(source.ignoredSuspectedRecordIds || []), ...(source.resourceRecordId ? [source.resourceRecordId] : []), ...(source.previousDevelopmentRecordId ? [source.previousDevelopmentRecordId] : [])],
+            before: record ? Object.fromEntries(Object.keys(compact).map((field) => [field, record.fields[field] ?? ''])) : undefined });
+        };
+        // Moving an existing round never needs creator dedupe or the resource table.
+        if (kind === 'invitation') {
+          if (source.workflowStatus !== 'dedupe_completed' || !source.feishuRecordId) throw new Error('请等待开发记录创建成功，再继续本轮邀约。');
+          if (!context.developmentUrl) throw new Error('请先连接开发记录表。');
+          if (mapping.prospectingStatus) {
+            const record = await readFeishuRecord(context.developmentUrl, source.feishuRecordId);
+            add('invitation', context.developmentUrl, { [mapping.prospectingStatus]: WORKFLOW_META.invitation_pending.label }, record);
+          }
+          saveWriteTask(source.id, task, { workflowStatus: 'invitation_pending', priority: source.priority || 'medium',
+            stageSyncNotice: mapping.prospectingStatus ? '邀约阶段正在同步飞书。' : '未映射开发流程状态，阶段仅保存在工作台。', syncError: undefined });
+          moved.push(source.id); prepared.push({ clientId: source.id, task }); return;
+        }
         if (!context.resourceUrl || !context.developmentUrl) throw new Error('请先连接资源库和开发记录表。');
-        if (!mapping.channelUrl || !(resourceMapping.channelUrl || resourceMapping.channelId)) throw new Error('请先配置频道链接字段映射，以便准确查重。');
+        if (!mapping.channelUrl || !(resourceMapping.channelUrl || resourceMapping.channelId)) throw new Error('请先配置资源库和开发记录表的频道链接字段映射，以便准确查重。');
         preparationSnapshots ||= Promise.all([
-          fetchFeishuRecordSnapshot(context.resourceUrl, { force: true }),
-          fetchFeishuRecordSnapshot(context.developmentUrl, { force: true }),
+          loadResources(),
+          fetchFeishuRecordSnapshot(context.developmentUrl, { fieldNames: getRequiredDedupeFields(mapping) }),
         ]);
         const [resources, developments] = await preparationSnapshots;
         if (!current()) return;
-        const acceptedSuspectedIds = [...(source.ignoredSuspectedRecordIds || []),
-          ...(source.resourceStatus === 'exists' && source.resourceRecordId ? [source.resourceRecordId] : []),
-          ...(source.developmentStatus === 'history_exists' && source.previousDevelopmentRecordId ? [source.previousDevelopmentRecordId] : [])];
         const confirmedMatch = (match: FeishuRecordMatch, linkedId?: string): FeishuRecordMatch => {
           if (match.kind !== 'suspected') return match;
           if (linkedId === match.record.record_id) return { ...match, kind: 'exact' };
@@ -2596,7 +2669,7 @@ export function CreatorProspectingPage({
           return match;
         };
         const resourceMatch = confirmedMatch(findFeishuRecordMatch(source, buildFeishuRecordIndex(resources.records, resourceMapping)), source.resourceStatus === 'exists' ? source.resourceRecordId : undefined);
-        const developmentMatch = confirmedMatch(findFeishuRecordMatch(source, buildFeishuRecordIndex(developments.records, mapping)), source.developmentStatus === 'history_exists' ? source.previousDevelopmentRecordId : undefined);
+        const developmentMatch = confirmedMatch(findFeishuDevelopmentHistoryMatch(source, buildFeishuRecordIndex(developments.records, mapping), source.previousDevelopmentRecordId), source.previousDevelopmentRecordId);
         const resource = resourceMatch.kind === 'exact' ? resourceMatch.record : undefined;
         const development = developmentMatch.kind === 'exact' ? developmentMatch.record : undefined;
         if ([resourceMatch.kind, developmentMatch.kind].some((value) => value === 'suspected' || value === 'conflict')) {
@@ -2616,46 +2689,42 @@ export function CreatorProspectingPage({
         if (emailPatch.emailSelectionRequired || normalizeFeishuEmailValue(emailPatch.publicEmail) !== normalizeFeishuEmailValue(source.publicEmail)) {
           task.status = 'review'; task.error = '发现不同邮箱，请在该行选择后重新操作。'; saveWriteTask(source.id, task, emailPatch); return;
         }
-        const add = (key: ProspectWriteStep['key'], url: string, fields: Record<string, unknown>, record?: FeishuRecord) => {
-          const compact = compactFeishuWriteFields(overrides.get(source.id)?.[key] || fields);
-          if (!Object.keys(compact).length) throw new Error('没有可写入字段，请检查字段映射。');
-          task.steps.push({ key, url, fields: compact, action: record ? 'batchUpdate' : 'batchCreate',
-            recordId: record?.record_id, operationId: `${task.id}:${key}`, status: 'pending',
-            acceptedSuspectedIds,
-            before: record ? Object.fromEntries(Object.keys(compact).map((field) => [field, record.fields[field] ?? ''])) : undefined,
-            knownRecordIds: key === 'resource' ? resources.records.map((r) => r.record_id) : developments.records.map((r) => r.record_id) });
-        };
-        if (kind === 'invitation') {
-          if (source.workflowStatus !== 'dedupe_completed' || !source.feishuRecordId) throw new Error('请等待开发记录创建成功，再确认待开发。');
-          const record = developments.records.find((r) => r.record_id === source.feishuRecordId);
-          if (!record) throw new Error('原开发记录未找到，不能同步阶段。');
-          // Only the deliberate stage change is written, not unrelated unsaved fields.
-          const fields: Record<string, unknown> = {};
-          putMappedField(fields, mapping, 'prospectingStatus', WORKFLOW_META.invitation_pending.label);
-          add('invitation', context.developmentUrl, fields, record);
-          saveWriteTask(source.id, task, { workflowStatus: 'invitation_pending', priority: source.priority || 'medium' });
-          moved.push(source.id);
-        } else {
           if ((kind === 'resource' || kind === 'quick') && !resource && !source.resourceRecordId) {
-            add('resource', context.resourceUrl, buildResourceFields(source, resourceMapping, source.resourceContentTypes || []));
+            // Multiple selected rounds of one channel must not create multiple profiles.
+            const creatorKey = source.channelId || normalizeYouTubeKey(source.url || source.inputUrl);
+            if (resourceOwners.has(creatorKey)) throw new Error('本批次已有该频道正在建档，请完成后再发起下一轮。');
+            resourceOwners.set(creatorKey, source.id);
+            task.progress = '正在识别频道类型'; saveWriteTask(source.id, task);
+            const classification = await resolveProspectContentTypes(source, async () => {
+              if (!resourceMapping.contentType) return [];
+              const options = await loadContentTypeOptions(resourceMapping.contentType);
+              if (!options.length) return [];
+              return classifyResourceContentTypes(source, options);
+            });
+            if (!current()) return;
+            const latest = prospectsRef.current.find((item) => item.id === source.id);
+            const types = latest?.resourceContentTypesManual ? latest.resourceContentTypes || [] : classification.values;
+            saveWriteTask(source.id, task, { resourceContentTypes: types, resourceContentTypeNotice: latest?.resourceContentTypesManual ? undefined : classification.notice });
+            add('resource', context.resourceUrl, buildResourceFields(source, resourceMapping, types), undefined, getFeishuCandidateRecordIds(source, buildFeishuRecordIndex(resources.records, resourceMapping)));
           }
           if ((kind === 'development' || kind === 'quick') && !source.feishuRecordId) {
-            add('development', context.developmentUrl, buildDevelopmentFields({ ...source, workflowStatus: 'dedupe_completed' }, mapping));
+            add('development', context.developmentUrl, buildDevelopmentFields({ ...source, workflowStatus: advanceToInvitation ? 'invitation_pending' : 'dedupe_completed' }, mapping), undefined, getFeishuCandidateRecordIds(source, buildFeishuRecordIndex(developments.records, mapping)));
           }
           if ((kind === 'development' || kind === 'quick') && resource) {
             const sync = buildResourceEmailSyncPreview({ ...source, resourceRecordId: resource.record_id }, resource, resourceMapping.email);
             if (sync.status === 'will_update') add('email', context.resourceUrl, { [sync.fieldName]: sync.nextValue }, resource);
           }
-          const identityChanged = (source.resourceRecordId && resource?.record_id !== source.resourceRecordId)
-            || (source.previousDevelopmentRecordId && development?.record_id !== source.previousDevelopmentRecordId)
-            || (!source.previousDevelopmentRecordId && development && !source.feishuRecordId);
+          const identityChanged = (source.resourceRecordId && resource?.record_id !== source.resourceRecordId);
           if (identityChanged) {
             task.status = 'review'; task.error = '关联或历史开发记录发生变化，请查看本轮写入内容后确认。'; saveWriteTask(source.id, task); return;
           }
-          saveWriteTask(source.id, task, resource ? { resourceRecordId: resource.record_id, resourceStatus: 'exists' } : {});
-        }
-        const result = await executeQuietTask(source.id, task);
-        if (result.status === 'success') successCount++;
+          task.preparationMs = Math.round(performance.now() - startedAt);
+          saveWriteTask(source.id, task, {
+            ...(resource ? { resourceRecordId: resource.record_id, resourceStatus: 'exists' as const } : {}),
+            ...(development ? { previousDevelopmentRecordId: development.record_id, repeatOutreach: true } : {}),
+            ...(advanceToInvitation && !mapping.prospectingStatus ? { stageSyncNotice: '未映射开发流程状态，阶段仅保存在工作台。' } : {}),
+          });
+          prepared.push({ clientId: source.id, task });
       } catch (error) {
         if (current()) {
           // Preserve the persisted writing state if storage fails after submission.
@@ -2674,15 +2743,67 @@ export function CreatorProspectingPage({
             try { saveWriteTask(source.id, stopped); } catch { /* Keep the last durable journal. */ }
           }
         }
-        finishProspectWrite([source.id]);
+        if (!prepared.some((entry) => entry.clientId === source.id)) finishProspectWrite([source.id]);
       }
     });
+    try {
+      await executeProspectWriteTaskBatch(prepared, {
+        current: (task) => writeMountedRef.current && writeTaskContextMatches(task, writeContextRef.current) && task.scope === getAccountCacheScope(),
+        save: saveWriteTask,
+        validate: (step, task) => validateQuietStep(step, task, validationSnapshots),
+        write: (step) => requestFeishuBatch(step.action, step.url, step.batch?.operationId || step.operationId, step.batch!.items),
+        applied: (id, step, task) => {
+          applyWriteStep(id, task, step);
+          if (step.key === 'development' && task.advanceToInvitation) moved.push(id);
+        },
+      });
+    } catch {
+      toast.error('无法保存写入状态，已停止后续操作。请通过行内任务核实，不要重复建档。');
+    } finally {
+      for (const { clientId, task } of prepared) {
+        if (writeMountedRef.current && context.scope === getAccountCacheScope()) {
+          const stored = prospectsRef.current.find((p) => p.id === clientId)?.feishuWriteTask;
+          if (stored?.id === task.id && (['writing', 'checking'].includes(stored.status) || !writeTaskContextMatches(task, writeContextRef.current))) {
+            try { saveWriteTask(clientId, recoverProspectWriteTask(stored)!); } catch { /* Keep durable recovery journal. */ }
+          }
+        }
+      }
+      finishProspectWrite(frozen.map((p) => p.id));
+      if (writeMountedRef.current) setWritingFeishu(false);
+    }
     if (context.scope !== getAccountCacheScope() || !writeMountedRef.current) return;
     if (moved.length) {
       setSelectedIds((ids) => ids.filter((id) => !moved.includes(id)));
-      if (shouldAdvanceProspectingStage(importProspects.map((p) => p.id), moved)) setActiveTab('invitation');
+      if (advanceToInvitation || shouldAdvanceProspectingStage(importProspects.map((p) => p.id), moved)) setActiveTab('invitation');
     }
-    if (items.length > 1) toast.info(`本次处理 ${items.length} 条，完成 ${successCount} 条；其余请查看行内状态。`);
+    if (items.length > 1) {
+      const successCount = prepared.filter(({ clientId }) => prospectsRef.current.find((p) => p.id === clientId)?.feishuWriteTask?.status === 'success').length;
+      toast.info(`本次处理 ${items.length} 条，完成 ${successCount} 条；其余请查看行内状态。`);
+    }
+  };
+
+  const handleOnboardInvitation = async (items: Prospect[]) => {
+    const targets = items.filter((item) => canStartProspectRound(item) && !onboardingSourcesRef.current.has(item.id));
+    if (!targets.length) { toast.error('请先确定频道和邮箱；未完成的任务请使用“重试未完成步骤”。'); return; }
+    targets.forEach((item) => onboardingSourcesRef.current.add(item.id));
+    const now = new Date().toISOString();
+    const rounds = targets.map((source) => {
+      const newRound = Boolean(source.feishuRecordId || source.outreachRoundId);
+      const round = newRound ? createProspectOutreachRound(source, generateId(), now)
+        : { ...structuredClone(source), outreachRoundId: generateId(), outreachRoundStartedAt: now, updatedAt: now };
+      return applyProspectBatchDefaults(round, { notes: userPreference });
+    });
+    try {
+      if (!settings.feishuUrl || !settings.feishuProspectingUrl) throw new Error('请先连接资源库和开发记录表。');
+      if (getAccountCacheScope() !== componentAccountScope) return;
+      const replacingIds = new Set(rounds.map((round) => round.id));
+      const next = [...rounds, ...prospectsRef.current.filter((item) => !replacingIds.has(item.id))];
+      // Persist the independent round before any external request.
+      localStorage.setItem(scopedLocalStorageKey(CREATOR_PROSPECTS_STORAGE_KEY), JSON.stringify(next));
+      prospectsRef.current = next; setProspects(next); setSelectedIds(rounds.map((round) => round.id));
+      await startQuietFeishuWrite(rounds, 'quick', new Map(), true);
+    } catch (error) { toast.error(error instanceof Error ? error.message : '本轮建档未完成，请查看行内状态。'); }
+    finally { targets.forEach((item) => onboardingSourcesRef.current.delete(item.id)); }
   };
 
   const retryQuietTask = async (prospect: Prospect) => {
@@ -2694,7 +2815,7 @@ export function CreatorProspectingPage({
         if (task.kind === 'resource') await openResourcePreview([prospect]);
         else if (task.kind === 'quick') await openQuickOnboardingPreview([prospect]);
         else await openDevelopmentPreview([prospect]);
-      } else await startQuietFeishuWrite([prospect], task.kind);
+      } else await startQuietFeishuWrite([prospect], task.kind, new Map(), Boolean(task.advanceToInvitation));
       return;
     }
     if (!beginProspectWrite([prospect.id])) return;
@@ -2711,7 +2832,9 @@ export function CreatorProspectingPage({
         finally { if (run === writeReviewRunRef.current) setWriteReviewBusy(false); }
         return;
       }
-      await executeQuietTask(prospect.id, task);
+      const result = await executeQuietTask(prospect.id, task);
+      if (writeMountedRef.current && task.scope === getAccountCacheScope() && task.advanceToInvitation
+        && result.steps.some((step) => step.key === 'development' && step.status === 'success')) setActiveTab('invitation');
     } catch (error) { toast.error(error instanceof Error ? error.message : '无法继续处理'); }
     finally { finishProspectWrite([prospect.id]); }
   };
@@ -2755,7 +2878,7 @@ export function CreatorProspectingPage({
   };
 
   const handleConfirmInvitation = async (items: Prospect[]) => {
-    await startQuietFeishuWrite(items, 'invitation');
+    await startQuietFeishuWrite(items.filter((item) => item.workflowStatus === 'dedupe_completed' && item.feishuRecordId), 'invitation');
   };
 
   const handleSaveInvitation = async (prospect: Prospect) => {
@@ -2767,13 +2890,8 @@ export function CreatorProspectingPage({
   };
 
   const handleConfirmOutreach = async (prospect: Prospect) => {
-    if (
-      !prospect.targetProduct?.trim()
-      || !prospect.cooperationType?.trim()
-      || !prospect.cooperationIdea?.trim()
-      || !prospect.outreachLanguage?.trim()
-    ) {
-      toast.error('请先确认目标产品、合作形式、开发信语言和合作想法。');
+    if (!canConfirmProspectDirection(prospect)) {
+      toast.error('请先确定邮箱，并确认目标产品、合作形式、开发信语言和合作想法。');
       return;
     }
     const nextProspect: Prospect = { ...prospect, workflowStatus: 'outreach_pending' };
@@ -2786,6 +2904,13 @@ export function CreatorProspectingPage({
     toast.success('邀约方向已确认，正在生成开发信。');
     void syncFeishuProspect(prospect, { workflowStatus: 'outreach_pending' });
     void handleGenerateOutreach(nextProspect);
+  };
+
+  const handleConfirmBatchOutreach = () => {
+    const ready = invitationProspects.filter(canConfirmProspectDirection);
+    for (const prospect of ready) void handleConfirmOutreach(prospect);
+    const remaining = invitationProspects.length - ready.length;
+    if (remaining) toast.info(`已提交 ${ready.length} 个红人生成开发信；其余 ${remaining} 个仍需补齐邀约信息。`);
   };
 
   const handleCheckHistory = async (prospect: Prospect) => {
@@ -3485,13 +3610,14 @@ export function CreatorProspectingPage({
       </nav>
 
       <main className="flex min-h-0 flex-1 flex-col p-4">
-        {activeTab === 'import' ? <p className="mb-2 text-xs text-muted-foreground">点击即后台写入；新建开发记录会向准确关联的资源库追加已选邮箱，保留原邮箱。异常请查看该行状态。</p> : null}
+        {activeTab === 'import' ? <p className="mb-2 text-xs text-muted-foreground">“建档并进入邀约”每次发起新一轮：已有资源档案复用，历史开发记录保留；会向关联资源追加已选邮箱。未完成任务请使用行内重试。</p> : null}
         {activeTab !== 'import' ? prospects.filter((p) => (p.feishuWriteTask && p.feishuWriteTask.status !== 'success') || p.feishuWriteBacklog?.some((t) => t.status !== 'success')).map((p) => (
           <div key={p.id} className="mb-2 flex items-center gap-3 text-sm"><span>{p.title || p.inputUrl}</span><ProspectWriteStatusLine prospect={p} onRetry={retryQuietTask} /></div>
         )) : null}
         {activeTab === 'import' && (
           <InfluencerImportTab
             prospects={importProspects}
+            historyProspects={prospects.filter((p) => !importProspects.some((item) => item.id === p.id))}
             selectedIds={selectedIds}
             input={input}
             preference={userPreference}
@@ -3508,9 +3634,9 @@ export function CreatorProspectingPage({
             onCheckDedupe={handleCheckDedupe}
             onAddResources={(items) => void startQuietFeishuWrite(items, 'resource')}
             onCreateRecords={(items) => void startQuietFeishuWrite(items, 'development')}
-            onQuickOnboard={(items) => void startQuietFeishuWrite(items, 'quick')}
+            onQuickOnboard={(items) => void handleOnboardInvitation(items)}
             onRetryWrite={retryQuietTask}
-            onContentTypesChange={(id, value) => updateProspect(id, { resourceContentTypes: splitContentTypeInput(value) })}
+            onContentTypesChange={(id, value) => updateProspect(id, { resourceContentTypes: splitContentTypeInput(value), resourceContentTypesManual: true, resourceContentTypeNotice: undefined })}
             onConfirmInvitation={handleConfirmInvitation}
             onEmailChange={updateProspectEmail}
             onEmailSelect={selectProspectEmail}
@@ -3641,6 +3767,7 @@ export function CreatorProspectingPage({
             onEmailChange={updateProspectEmail}
             onSave={handleSaveInvitation}
             onConfirmOutreach={handleConfirmOutreach}
+            onConfirmBatchOutreach={handleConfirmBatchOutreach}
             onBack={handleBackToImport}
             onSkip={handleSkip}
             onCheckHistory={handleCheckHistory}

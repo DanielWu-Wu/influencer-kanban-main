@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { migrateProspects } from '../src/lib/creator-prospecting';
-import { executeProspectWriteTask, recoverProspectWriteTask, writeTaskContextMatches, type ProspectWriteTask } from '../src/lib/prospect-feishu-write';
+import { executeProspectWriteTask, executeProspectWriteTaskBatch, recoverProspectWriteTask, writeTaskContextMatches, type ProspectWriteTask } from '../src/lib/prospect-feishu-write';
 
 function task(): ProspectWriteTask {
   return { id: 'op', scope: 'user-a', resourceUrl: 'resource', developmentUrl: 'development', mappingSignature: 'mapping', kind: 'quick', status: 'pending', steps: [
@@ -92,4 +92,68 @@ test('请求成功但保存日志失败，刷新后必须核实而不是重建',
   assert.equal(recovered.status, 'unknown');
   await executeProspectWriteTask(recovered, port);
   assert.deepEqual(port.writes, ['op:resource']);
+});
+
+test('多条建档按依赖波次批量提交，先保存所有请求快照再发出请求', async () => {
+  const entries = ['a', 'b', 'c'].map((clientId) => ({ clientId, task: { ...task(), id: clientId } }));
+  const saved = new Map<string, ProspectWriteTask>(); const writes: string[][] = [];
+  const result = await executeProspectWriteTaskBatch(entries, {
+    current: () => true, save: (id, value) => { saved.set(id, structuredClone(value)); },
+    validate: async () => undefined, applied: () => {},
+    write: async (step) => {
+      const ids = step.batch!.items.map((item) => item.clientId); writes.push(ids);
+      for (const id of ids) assert.ok(saved.get(id)!.steps.some((item) => item.status === 'writing' && item.batch?.operationId === step.batch!.operationId));
+      return ids.map((clientId) => ({ clientId, status: 'success', recordId: `${step.key}-${clientId}` }));
+    },
+  });
+  assert.deepEqual(writes, [['a', 'b', 'c'], ['a', 'b', 'c']]);
+  assert.ok(result.every((entry) => entry.task.status === 'success'));
+});
+
+test('一条匹配异常不会阻塞同批其他条目，明确失败重试保留批次内容和编号', async () => {
+  const entries = ['good', 'blocked'].map((clientId) => ({ clientId, task: { ...task(), id: clientId } }));
+  const writes: string[][] = [];
+  const result = await executeProspectWriteTaskBatch(entries, {
+    current: () => true, save: () => {}, applied: () => {},
+    validate: async (_step, value) => value.id === 'blocked' ? '关联冲突' : undefined,
+    write: async (step) => {
+      writes.push(step.batch!.items.map((item) => item.clientId));
+      return step.batch!.items.map(({ clientId }) => ({ clientId, status: 'failed', outcomeCertain: true, error: 'rejected' }));
+    },
+  });
+  assert.deepEqual(writes, [['good']]);
+  assert.equal(result.find((entry) => entry.clientId === 'blocked')!.task.status, 'review');
+  const failed = result.find((entry) => entry.clientId === 'good')!.task;
+  const envelope = structuredClone(failed.steps[0].batch);
+  await executeProspectWriteTask(failed, { ...io(), write: async (step) => {
+    if (step.key === 'resource') assert.deepEqual(step.batch, envelope);
+    return { clientId: 'good', status: 'success', recordId: `rec-${step.key}` };
+  } });
+});
+
+test('批量请求响应丢失不自动重建，持久化失败前不提交', async () => {
+  const entries = [{ clientId: 'a', task: task() }]; let calls = 0;
+  const port = { current: () => true, save: () => {}, validate: async () => undefined, applied: () => {},
+    write: async () => { calls++; throw new Error('network'); } };
+  const result = await executeProspectWriteTaskBatch(entries, port);
+  assert.equal(result[0].task.status, 'unknown');
+  await executeProspectWriteTaskBatch(result, port); assert.equal(calls, 1);
+  calls = 0;
+  await assert.rejects(executeProspectWriteTaskBatch(entries, { ...port, save: () => { throw new Error('quota'); } }));
+  assert.equal(calls, 0);
+});
+
+test('明确失败后的单条重试不重新提交同批其他记录，沿用该条稳定标识', async () => {
+  const original = task(); original.steps = [original.steps[0]];
+  const entries = ['a', 'b'].map((clientId) => ({ clientId, task: { ...structuredClone(original), id: clientId,
+    steps: [{ ...original.steps[0], operationId: `${clientId}:resource` }] } }));
+  const failed = await executeProspectWriteTaskBatch(entries, {
+    current: () => true, save: () => {}, applied: () => {}, validate: async () => undefined,
+    write: async (step) => step.batch!.items.map(({ clientId }) => ({ clientId, status: 'failed', outcomeCertain: true, error: '拒绝写入' })),
+  });
+  const result = await executeProspectWriteTask(failed[0].task, { ...io(), write: async (step) => {
+    assert.equal(step.batch, undefined); assert.equal(step.operationId, 'a:resource');
+    return { clientId: 'a', status: 'success', recordId: 'a-record' };
+  } });
+  assert.equal(result.status, 'success'); assert.equal(failed[1].task.status, 'failed');
 });

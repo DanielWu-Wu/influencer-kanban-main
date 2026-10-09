@@ -80,18 +80,17 @@ export function fetchFeishuRecordSnapshot(
   const normalizedUrl = url.trim();
   const fieldNames = normalizeFieldNames(options.fieldNames);
   const cacheKey = buildCacheKey(normalizedUrl, fieldNames);
+  // A refresh may bypass a stored snapshot, but must join an active refresh.
+  const pending = pendingRequests.get(cacheKey);
+  if (pending) return pending.then((snapshot) => ({ ...snapshot, cacheHit: true }));
   if (options.force) {
     recordCache.delete(cacheKey);
-    pendingRequests.delete(cacheKey);
     requestVersions.set(cacheKey, (requestVersions.get(cacheKey) || 0) + 1);
   }
   const cached = recordCache.get(cacheKey);
   if (cached && cached.snapshot.expiresAt > Date.now()) {
     return Promise.resolve({ ...cached.snapshot, cacheHit: true });
   }
-
-  const pending = pendingRequests.get(cacheKey);
-  if (pending) return pending.then((snapshot) => ({ ...snapshot, cacheHit: true }));
 
   const requestVersion = requestVersions.get(cacheKey) || 0;
   const request = loadFeishuRecords(normalizedUrl, fieldNames)

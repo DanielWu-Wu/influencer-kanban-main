@@ -119,6 +119,6 @@ export function buildOutreachAiContext(
     senderName: settings.senderName || '',
     emailSignature: settings.emailSignature || '',
     preferredLanguage: prospect.outreachLanguage || '',
-    userPreference: userPreference.trim(),
+    userPreference: (prospect.outreachNotes ?? userPreference).trim(),
   };
 }

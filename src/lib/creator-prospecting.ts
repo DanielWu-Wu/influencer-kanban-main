@@ -92,6 +92,12 @@ export type OutreachGenerationStage =
   | 'error';
 
 export type Prospect = {
+  outreachRoundId?: string;
+  outreachRoundStartedAt?: string;
+  outreachNotes?: string;
+  resourceContentTypesManual?: boolean;
+  resourceContentTypeNotice?: string;
+  stageSyncNotice?: string;
   feishuWriteTask?: ProspectWriteTask;
   feishuWriteBacklog?: ProspectWriteTask[];
   resourceContentTypes?: string[];
@@ -190,7 +196,7 @@ type LegacyProspect = Partial<Prospect> & {
 export const WORKFLOW_META: Record<ProspectWorkflowStatus, { label: string; className: string }> = {
   recorded: { label: '已录入', className: 'border-slate-200 bg-slate-50 text-slate-700' },
   resolved: { label: '已识别', className: 'border-emerald-200 bg-emerald-50 text-emerald-700' },
-  dedupe_completed: { label: '飞书查重完成', className: 'border-blue-200 bg-blue-50 text-blue-700' },
+  dedupe_completed: { label: '开发记录已创建', className: 'border-blue-200 bg-blue-50 text-blue-700' },
   invitation_pending: { label: '待确认邀约方向', className: 'border-amber-200 bg-amber-50 text-amber-700' },
   outreach_pending: { label: '待生成开发信', className: 'border-indigo-200 bg-indigo-50 text-indigo-700' },
   outreach_generated: { label: '开发信已生成', className: 'border-violet-200 bg-violet-50 text-violet-700' },
@@ -473,7 +479,9 @@ export function migrateProspects(value: unknown): Prospect[] {
       feishuWriteBacklog: item.feishuWriteBacklog?.map((task) => recoverProspectWriteTask(task)!),
       id: item.id || `prospect-${Date.now()}-${index}`,
       inputUrl: item.inputUrl || item.url || item.sourceUrl || '',
-      workflowStatus: workflowStatus === 'resolved' && confirmedDevelopmentId ? 'dedupe_completed' : workflowStatus,
+      workflowStatus: workflowStatus === 'resolved' && confirmedDevelopmentId
+        ? item.feishuWriteTask?.advanceToInvitation ? 'invitation_pending' : 'dedupe_completed'
+        : workflowStatus,
       emailStatus: item.emailStatus || (publicEmail ? 'available' : 'missing'),
       emailSource: item.emailSource || (item.emailStatus === 'manual'
         ? 'manual'
