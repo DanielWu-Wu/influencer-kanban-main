@@ -2237,8 +2237,7 @@ export function EmailComposer({
                   </Button>
                 )}
                 <Button
-                  variant="ghost"
-                  className="text-gray-600 hover:bg-gray-100 hover:text-gray-900"
+                  variant="outline"
                   disabled={aiLoading || optimizationLoading || translatingEditedReply || translationEditing || sending || savingDraft}
                   onClick={() => {
                     optimizationRunRef.current += 1;
@@ -2251,7 +2250,7 @@ export function EmailComposer({
                     setAiError('');
                   }}
                 >
-                  调整策略
+                  调整回复想法
                 </Button>
                 <Button
                   variant="outline"
