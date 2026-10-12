@@ -6,6 +6,7 @@ import './feishu-field-value.test';
 import './cooperation-projects.test';
 import './video-monitor.test';
 import './video-monitor-writeback.test';
+import './video-monitor-workflow.test';
 import './video-monitor-runner.test';
 import './cooperation-email-thread.test';
 import './email-language.test';

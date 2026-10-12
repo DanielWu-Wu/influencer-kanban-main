@@ -316,9 +316,9 @@ export function GmailPage({
           {MAILBOXES.map(({ id, label, icon: Icon }) => (
             <Button
               key={id}
-              variant={mailbox === id ? 'secondary' : 'ghost'}
+              variant={!showSettings && mailbox === id ? 'secondary' : 'ghost'}
               className={`h-10 w-full justify-start gap-3 rounded-lg px-3 font-normal ${
-                mailbox === id ? 'bg-primary/[0.08] text-primary shadow-[inset_2px_0_0_var(--primary)]' : 'hover:bg-white/72'
+                !showSettings && mailbox === id ? 'bg-primary/[0.08] text-primary shadow-[inset_2px_0_0_var(--primary)]' : 'hover:bg-white/72'
               }`}
               onClick={() => handleMailboxChange(id)}
             >

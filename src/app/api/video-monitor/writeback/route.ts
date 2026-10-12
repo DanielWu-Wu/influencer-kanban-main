@@ -12,8 +12,9 @@ export const maxDuration = 60;
 const schema = z.discriminatedUnion('action', [
   z.object({ action: z.literal('preview'), table: z.string().max(2000), key: z.string().max(200), mapping: z.record(z.string(), z.string().max(200)) }),
   z.object({ action: z.literal('commit'), token: z.string().uuid() }),
+  z.object({ action: z.literal('verify'), token: z.string().uuid() }),
 ]);
-type StoredPreview = { table: string; key: string; path: string; write: Record<string, unknown>; original: Record<string, unknown>; preview: VideoWritePreview; completedAt?: number; submittingAt?: number };
+export type StoredVideoWritePreview = { table: string; key: string; path: string; write: Record<string, unknown>; original: Record<string, unknown>; preview: VideoWritePreview; completedAt?: number; submittingAt?: number };
 
 export async function POST(request: NextRequest) {
   const auth = await getRequestUser(request);
@@ -51,18 +52,28 @@ export async function POST(request: NextRequest) {
       const plan = buildVideoWritePlan(body.mapping, new Map(fields.map(field => [field.field_name, field.type])), record.record.fields, { id: video.id, channelId: video.snippet.channelId, title: video.snippet.title, publishedAt: video.snippet.publishedAt, statistics: video.statistics || {} });
       const token = crypto.randomUUID();
       const preview: VideoWritePreview = { token, name: result.project.name, products: result.project.products, title: video.snippet.title, recordId: result.project.id, fetchedAt: Date.now(), rows: plan.rows };
-      await writeMonitorData(auth.supabase, auth.user.id, `video_write_${token}`, { table: body.table, key: body.key, path, write: plan.write, original: plan.original, preview } satisfies StoredPreview, null);
+      await writeMonitorData(auth.supabase, auth.user.id, `video_write_${token}`, { table: body.table, key: body.key, path, write: plan.write, original: plan.original, preview } satisfies StoredVideoWritePreview, null);
       return NextResponse.json({ preview });
     }
     const storageKey = `video_write_${body.token}`;
-    const stored = await readMonitorData<StoredPreview>(auth.supabase, auth.user.id, storageKey);
+    const stored = await readMonitorData<StoredVideoWritePreview>(auth.supabase, auth.user.id, storageKey);
     if (!stored) throw new Error('写回预览不存在，请重新预览。');
     const plan = stored.value;
-    if (Date.now() - plan.preview.fetchedAt > 10 * 60_000) throw new Error('预览已超过10分钟，请重新读取最新数据。');
+    // Verification is read-only and remains available after the preview expires.
+    if (body.action === 'verify') {
+      const fields = (await getRecord(plan.path)).record.fields;
+      if (sameVideoWriteFields(fields, plan.write)) return NextResponse.json({ syncedAt: plan.completedAt || Date.now(), alreadyApplied: true });
+      if (plan.submittingAt && Date.now() - plan.submittingAt < 60_000) throw new Error('写回仍在提交或核实中，请稍等一分钟后再核对。');
+      if (sameVideoWriteFields(fields, plan.original)) return NextResponse.json({ notApplied: true });
+      throw new Error('飞书原值已发生变化，无法确认本次提交结果。请人工核对原记录，未再次写入。');
+    }
     const saved = await readMonitorData(auth.supabase, auth.user.id, monitorTableKey(plan.table));
-    if (!saved || unpackMonitorState(saved.value).results.find(item => item.key === plan.key)?.status !== 'confirmed') throw new Error('该视频已不再是已确认状态，请重新核对。');
+    const results = saved && unpackMonitorState(saved.value).results;
+    if (!results || results.find(item => item.key === plan.key)?.status !== 'confirmed') throw new Error('该视频已不再是已确认状态，请重新核对。');
+    if (results.some(item => item.project.id === plan.preview.recordId && item.key !== plan.key && item.writeAttempt)) throw new Error('同一合作还有另一条视频的提交结果待核实，请先核对，未覆盖。');
     const before = (await getRecord(plan.path)).record.fields;
     if (sameVideoWriteFields(before, plan.write)) return NextResponse.json({ syncedAt: plan.completedAt || Date.now(), alreadyApplied: true });
+    if (Date.now() - plan.preview.fetchedAt > 10 * 60_000) throw new Error('预览已超过10分钟，请重新读取最新数据。');
     if (!sameVideoWriteFields(before, plan.original)) throw new Error('飞书这5个字段已被修改，未覆盖。请重新打开写回预览核对。');
     if (plan.submittingAt && Date.now() - plan.submittingAt < 60_000) throw new Error('这次写回仍在提交或核实中，请稍等一分钟后重试。');
     // Reserve this preview version so concurrent duplicate confirmations cannot both write.

@@ -31,7 +31,7 @@ export async function monitorPool<T>(items: T[], limit: number, active: () => bo
 }
 
 export function needsMonitorAnalysis(old: MonitorResult | undefined, project: MonitorProject, video: MonitorVideo) {
-  if (old?.status === 'confirmed' || old?.status === 'excluded') return false;
+  if (old?.status === 'confirmed' || old?.status === 'excluded' || old?.writeAttempt) return false;
   const changed = !old || !sameProjectInput(old.project, project) || old.video.title !== video.title || old.video.description !== video.description;
   if (changed) return true;
   // Failed/unavailable captions require explicit retry. Changed cooperation inputs still re-evaluate.

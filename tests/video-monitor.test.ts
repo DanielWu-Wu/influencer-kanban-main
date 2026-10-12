@@ -56,13 +56,12 @@ test('P3 50 条云端检查点之间的本机增量可恢复，拒绝旧版本�
   assert.equal(restoreMonitorPendingProgress(cloud, 'rev1', { ...queued, results: [{ ...secondResult, key: 'other:video' }] }), null);
 });
 
-test('P3 仅同时缺少实际上线日期和链接才默认纳入，保留多产品', () => {
+test('P3 视频链接为空就默认纳入，已有日期不阻止，保留多产品', () => {
   const blank = monitorProjects([row({})], EMPTY_FEISHU_MAPPING)[0];
   assert.equal(blank.eligible, true);
   assert.deepEqual(blank.products, ['P210', 'S400A1']);
-  for (const fields of [{ 实际上线日期: '无效但非空' }, { 视频上线链接: '已有链接' }, { 实际上线日期: 1780000000000 }]) {
-    assert.equal(monitorProjects([row(fields)], EMPTY_FEISHU_MAPPING)[0].eligible, false);
-  }
+  for (const fields of [{ 实际上线日期: '无效但非空' }, { 实际上线日期: 1780000000000 }]) assert.equal(monitorProjects([row(fields)], EMPTY_FEISHU_MAPPING)[0].eligible, true);
+  assert.equal(monitorProjects([row({ 视频上线链接: '已有链接' })], EMPTY_FEISHU_MAPPING)[0].eligible, false);
 });
 test('P3 非 YouTube 项目不纳入，字段映射优先，预计原文保留', () => {
   assert.equal(monitorProjects([row({ 推广平台: ['TikTok'] })], EMPTY_FEISHU_MAPPING).length, 0);

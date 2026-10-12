@@ -17,6 +17,9 @@ export type MonitorResult = {
   status: 'pending' | 'confirmed' | 'excluded' | 'no_match' | 'incomplete';
   assessment?: VideoAssessment; error?: string; checkedAt: number;
   feishuSyncedAt?: number;
+  writeAttempt?: { token: string; error?: string };
+  writeError?: string;
+  compactedAt?: number;
 };
 export type MonitorChannel = { input: string; projectIds: string[]; id?: string; playlist?: string; page?: string; done?: boolean; error?: string };
 export type MonitorJob = { projects: MonitorProject[]; channels: MonitorChannel[]; videos: MonitorVideo[]; cursor: number; phase: 'channels' | 'videos' | 'done'; startedAt: number; subtitleRequests: number; subtitleBatch?: string[]; subtitleBatches?: string[][]; completedVideoIds?: string[] };
@@ -27,7 +30,8 @@ export const emptyMonitorState = (): MonitorState => ({ results: [], continueIds
 // for the same video just because that video was selected.
 export function applyMonitorDecision(state: MonitorState, keys: Iterable<string>, status: MonitorResult['status']): MonitorState {
   const selected = new Set(keys);
-  return { ...state, results: state.results.map(result => selected.has(result.key) ? { ...result, status } : result) };
+  return { ...state, results: state.results.map(result => selected.has(result.key) && !result.feishuSyncedAt && !result.writeAttempt
+    ? { ...result, status, writeError: undefined } : result) };
 }
 export type MonitorPendingProgress = { version: 1; revision: string | null; startedAt: number; cursor: number; results: MonitorResult[]; completedVideoIds?: string[] };
 
@@ -61,8 +65,7 @@ export function monitorProjects(records: CachedFeishuRecord[], mapping: FeishuFi
       products: [...new Set(products)], expected: flattenFeishuValue(rawMappedValue(record, mapping, 'expectedPublishDate')).trim(),
       cooperationDate: project.cooperationDate, discount: project.discountCode,
       // Eligibility uses the actual raw cells, not date parsing or the computed stage.
-      eligible: !flattenFeishuValue(rawMappedValue(record, mapping, 'actualPublishDate')).trim()
-        && !flattenFeishuValue(rawMappedValue(record, mapping, 'publishedVideoUrl')).trim(),
+      eligible: !flattenFeishuValue(rawMappedValue(record, mapping, 'publishedVideoUrl')).trim(),
     }];
   });
 }

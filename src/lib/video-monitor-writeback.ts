@@ -11,7 +11,7 @@ export type VideoWritePreview = {
 };
 export type VideoWriteData = { id: string; channelId: string; title: string; publishedAt: string; statistics: Record<string, unknown> };
 
-function linkVideoId(value: unknown) {
+export function linkVideoId(value: unknown): string | null {
   if (value && typeof value === 'object' && !Array.isArray(value)) {
     const object = value as Record<string, unknown>;
     return linkVideoId(object.link ?? object.url ?? object.text);
