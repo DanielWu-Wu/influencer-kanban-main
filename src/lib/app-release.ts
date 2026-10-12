@@ -9,6 +9,18 @@ export const APP_RELEASE_LAST_SEEN_STORAGE_KEY = 'influencer-board-last-seen-rel
 
 export const APP_RELEASES: readonly AppRelease[] = [
   {
+    version: '1.3.2',
+    releasedAt: '2026-10-12',
+    title: '合作视频跟进优化',
+    highlights: [
+      '支持批量审核、返回审核和写回飞书。',
+      '写回成功后移至「已完成」，失败项保留。',
+      '新一轮只检测视频链接为空的合作，保留未完成进度。',
+      '新增存储整理，修复邮箱菜单高亮问题。',
+      '飞书写回仍需核对预览并确认。',
+    ],
+  },
+  {
     version: '1.3.1',
     releasedAt: '2026-10-09',
     title: '红人开发与视频跟进优化',
