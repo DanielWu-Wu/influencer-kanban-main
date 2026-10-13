@@ -261,7 +261,7 @@ export function ProductDatabaseSettings({ expanded, onToggle }: ProductDatabaseS
   return (
     <>
       <Card className="overflow-hidden rounded-lg border-white/65 bg-white/66 shadow-apple backdrop-blur-xl">
-        <button type="button" onClick={onToggle} className="w-full text-left">
+        <button type="button" onClick={onToggle} className="light-control w-full text-left">
           <CardHeader className="pb-3">
             <div className="flex items-center justify-between gap-4">
               <div className="flex min-w-0 items-center gap-3">

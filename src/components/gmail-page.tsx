@@ -16,6 +16,7 @@ import { GmailInbox } from './gmail-inbox';
 import { GmailSignatureSettings } from './gmail-signature-settings';
 import { NewEmailComposer } from './new-email-composer';
 import { getEditableMailDraft, type EditableMailDraft } from '@/lib/mail-draft-edit';
+import { useMobileLayout } from '@/lib/use-mobile-layout';
 import { MailAccountSwitcher } from './mail-account-switcher';
 import {
   clampGmailThreadListWidth,
@@ -68,6 +69,7 @@ export function GmailPage({
   openThreadRequest?: GmailThreadOpenRequest;
   onManageMailAccounts?: () => void;
 }) {
+  const mobile = useMobileLayout();
   const [selectedThread, setSelectedThread] = useState<GmailThread | null>(null);
   const [selection, setSelection] = useState<{ id: number; request?: GmailThreadOpenRequest }>({ id: 0 });
   const [mailbox, setMailbox] = useState<GmailMailbox>('inbox');
@@ -295,7 +297,7 @@ export function GmailPage({
   return (
     <div
       ref={workbenchRef}
-      className="app-workbench flex h-full min-h-0 overflow-hidden rounded-xl [--gmail-thread-list-width:460px]"
+      className="mobile-mail-workbench app-workbench flex h-full min-h-0 overflow-hidden rounded-xl [--gmail-thread-list-width:460px]"
     >
       <aside className={`material-navigation hidden shrink-0 flex-col overflow-hidden py-3 transition-[width,opacity,padding,border-color] duration-[240ms] ease-out motion-reduce:transition-none md:flex ${
         detailExpanded
@@ -317,7 +319,8 @@ export function GmailPage({
             <Button
               key={id}
               variant={!showSettings && mailbox === id ? 'secondary' : 'ghost'}
-              className={`h-10 w-full justify-start gap-3 rounded-lg px-3 font-normal ${
+              data-active={!showSettings && mailbox === id}
+              className={`mailbox-nav-item h-10 w-full justify-start gap-3 rounded-lg px-3 font-normal ${
                 !showSettings && mailbox === id ? 'bg-primary/[0.08] text-primary shadow-[inset_2px_0_0_var(--primary)]' : 'hover:bg-white/72'
               }`}
               onClick={() => handleMailboxChange(id)}
@@ -330,7 +333,8 @@ export function GmailPage({
         <div className="my-3 border-t border-white/60" />
         <Button
           variant={showSettings ? 'secondary' : 'ghost'}
-          className={`h-10 w-full justify-start gap-3 rounded-lg px-3 font-normal ${
+          data-active={showSettings}
+          className={`mailbox-nav-item h-10 w-full justify-start gap-3 rounded-lg px-3 font-normal ${
             showSettings ? 'bg-primary/[0.08] text-primary shadow-[inset_2px_0_0_var(--primary)]' : 'hover:bg-white/72'
           }`}
           onClick={() => {
@@ -350,6 +354,7 @@ export function GmailPage({
         ref={threadListRef}
         data-testid="gmail-thread-list-pane"
         data-avatar-only={detailExpanded && threadListAvatarOnly ? 'true' : 'false'}
+        data-detail-open={detailExpanded}
         className={`material-content flex min-h-0 min-w-0 flex-col overflow-hidden border-r border-border/55 motion-reduce:transition-none ${
           resizingThreadList
             ? 'transition-none'
@@ -373,6 +378,7 @@ export function GmailPage({
             <Button
               key={id}
               variant={mailbox === id ? 'secondary' : 'ghost'}
+              data-active={mailbox === id}
               size="sm"
               className="shrink-0 gap-2 rounded-lg"
               onClick={() => handleMailboxChange(id)}
@@ -383,6 +389,7 @@ export function GmailPage({
           ))}
           <Button
             variant={showSettings ? 'secondary' : 'ghost'}
+          data-active={showSettings}
             size="sm"
             className="shrink-0 gap-2 rounded-lg"
             onClick={() => {
@@ -408,8 +415,8 @@ export function GmailPage({
           category={category}
           refreshKey={mailboxRefreshKey}
           detailRetryKey={detailRetryKey}
-          compact={detailExpanded}
-          avatarOnly={detailExpanded && threadListAvatarOnly}
+          compact={mobile || detailExpanded}
+          avatarOnly={!mobile && detailExpanded && threadListAvatarOnly}
           onCategoryChange={setCategory}
           updatedThread={selectedThread}
           openThreadRequest={mailbox === 'inbox' && category === 'primary' && !showSettings

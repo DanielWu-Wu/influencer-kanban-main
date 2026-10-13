@@ -15,10 +15,11 @@ import { Clock3, Loader2, X } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Progress } from '@/components/ui/progress';
 
-type SendTaskStatus = 'countdown' | 'sending' | 'error';
+type SendTaskStatus = 'countdown' | 'sending' | 'error' | 'sent' | 'editing';
 
 type SendTask = {
   id: string;
+  replyKey?: string;
   recipient: string;
   delaySeconds: number;
   targetAt: number;
@@ -31,6 +32,7 @@ type SendTask = {
 };
 
 type SendRequest = {
+  replyKey?: string;
   accessToken?: string;
   raw?: string;
   threadId?: string;
@@ -45,12 +47,16 @@ type SendRequest = {
 };
 
 type PendingRequest = SendRequest & {
+  status: 'countdown' | 'sending' | 'error';
   timeoutId: number;
   controller?: AbortController;
 };
 
 type DelayedEmailContextValue = {
   scheduleEmail: (request: SendRequest) => string;
+  tasks: SendTask[];
+  cancelEmail: (id: string) => void;
+  startNewReply: (replyKey: string) => void;
 };
 
 const DelayedEmailContext = createContext<DelayedEmailContextValue | null>(null);
@@ -66,6 +72,7 @@ export function useDelayedEmailSender() {
 export function DelayedEmailProvider({ children }: { children: ReactNode }) {
   const [tasks, setTasks] = useState<SendTask[]>([]);
   const pendingRef = useRef(new Map<string, PendingRequest>());
+  const sentRepliesRef = useRef(new Set<string>());
 
   const removeTask = useCallback((id: string) => {
     setTasks((current) => current.filter((task) => task.id !== id));
@@ -74,10 +81,11 @@ export function DelayedEmailProvider({ children }: { children: ReactNode }) {
 
   const executeSend = useCallback(async (id: string) => {
     const pending = pendingRef.current.get(id);
-    if (!pending) return;
+    if (!pending || pending.status !== 'countdown') return;
 
     const controller = new AbortController();
     pending.controller = controller;
+    pending.status = 'sending';
     setTasks((current) => current.map((task) =>
       task.id === id
         ? { ...task, status: 'sending', remainingSeconds: 0 }
@@ -105,28 +113,50 @@ export function DelayedEmailProvider({ children }: { children: ReactNode }) {
           throw new Error(result.error?.message || '邮件发送失败。');
         }
       }
+      if (controller.signal.aborted) return;
+      if (pending.replyKey) sentRepliesRef.current.add(pending.replyKey);
+      pendingRef.current.delete(id);
+      // Keep the result for reopened editors in this signed-in workspace.
+      setTasks((current) => pending.replyKey
+        ? current.map((task) => task.id === id ? { ...task, status: 'sent', hidden: true } : task)
+        : current.filter((task) => task.id !== id));
       pending.onSent?.();
-      removeTask(id);
     } catch (error) {
       if (controller.signal.aborted) return;
+      // A UI callback failure must never turn a completed send into a retry.
+      if (!pendingRef.current.has(id)) return;
+      pending.status = 'error';
       const message = error instanceof Error ? error.message : '邮件发送失败。';
-      pending.onError?.(message);
       setTasks((current) => current.map((task) =>
         task.id === id ? { ...task, status: 'error', error: message } : task));
+      pending.onError?.(message);
     }
-  }, [removeTask]);
+  }, []);
 
   const scheduleEmail = useCallback((request: SendRequest) => {
+    if (request.replyKey) {
+      if (sentRepliesRef.current.has(request.replyKey)) throw new Error('本次回复已发送，请勿重复发送。');
+      for (const [existingId, existing] of pendingRef.current) {
+        if (existing.replyKey !== request.replyKey) continue;
+        if (existing.status !== 'error') {
+          setTasks((current) => current.map((task) =>
+            task.id === existingId ? { ...task, hidden: false } : task));
+          return existingId;
+        }
+        removeTask(existingId);
+      }
+    }
     const delaySeconds = Math.min(60, Math.max(0, Math.round(request.delaySeconds)));
     const id = crypto.randomUUID();
     const targetAt = Date.now() + delaySeconds * 1000;
     const timeoutId = window.setTimeout(() => executeSend(id), delaySeconds * 1000);
 
-    pendingRef.current.set(id, { ...request, delaySeconds, timeoutId });
+    pendingRef.current.set(id, { ...request, delaySeconds, timeoutId, status: 'countdown' });
     setTasks((current) => [
-      ...current,
+      ...current.filter((task) => !request.replyKey || task.replyKey !== request.replyKey || task.status !== 'editing'),
       {
         id,
+        replyKey: request.replyKey,
         recipient: request.recipient,
         delaySeconds,
         targetAt,
@@ -138,16 +168,24 @@ export function DelayedEmailProvider({ children }: { children: ReactNode }) {
       },
     ]);
     return id;
-  }, [executeSend]);
+  }, [executeSend, removeTask]);
 
   const cancelTask = useCallback((id: string) => {
     const pending = pendingRef.current.get(id);
-    if (!pending) return;
+    // Cancelling after submission cannot reliably retract a sent message.
+    if (!pending || pending.status !== 'countdown') return;
     window.clearTimeout(pending.timeoutId);
     pending.controller?.abort();
-    pending.onCancel?.();
     removeTask(id);
+    pending.onCancel?.();
   }, [removeTask]);
+
+  const startNewReply = useCallback((replyKey: string) => {
+    if (!sentRepliesRef.current.has(replyKey)) return;
+    sentRepliesRef.current.delete(replyKey);
+    setTasks((current) => current.map((task) => task.replyKey === replyKey && task.status === 'sent'
+      ? { ...task, status: 'editing', targetAt: Date.now(), hidden: true } : task));
+  }, []);
 
   useEffect(() => {
     const intervalId = window.setInterval(() => {
@@ -185,9 +223,9 @@ export function DelayedEmailProvider({ children }: { children: ReactNode }) {
   }, []);
 
   return (
-    <DelayedEmailContext.Provider value={{ scheduleEmail }}>
+    <DelayedEmailContext.Provider value={{ scheduleEmail, tasks, cancelEmail: cancelTask, startNewReply }}>
       {children}
-      <div className="pointer-events-none fixed bottom-5 right-5 z-[100] flex w-[min(360px,calc(100vw-2rem))] flex-col gap-2">
+      <div className="mobile-send-status pointer-events-none fixed bottom-5 right-5 z-[100] flex w-[min(360px,calc(100vw-2rem))] flex-col gap-2">
         {tasks.filter((task) => !task.hidden).map((task) => {
           const progress = task.delaySeconds === 0
             ? 100

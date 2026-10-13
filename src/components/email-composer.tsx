@@ -61,6 +61,8 @@ import {
 import { GmailThread } from '@/lib/types';
 import { RichEmailEditor } from './rich-email-editor';
 import { useDelayedEmailSender } from './delayed-email-provider';
+import { useLocalReplyText } from '@/lib/use-local-reply-text';
+import { useMobileMailSendReview } from './mobile-mail-send-review';
 import { useEmailGenerationTasks } from './email-generation-task-provider';
 import {
   buildGmailEmailGenerationTaskKey,
@@ -176,7 +178,7 @@ export function EmailComposer({
   const { addDraft } = useEmailDrafts();
   const { auth, connect } = useGmailAuth();
   const { settings, loading: settingsLoading } = useSettings();
-  const { scheduleEmail } = useDelayedEmailSender();
+  const { scheduleEmail, tasks: sendTasks = [], cancelEmail, startNewReply } = useDelayedEmailSender();
   const {
     enqueueTask,
     getTaskById,
@@ -184,7 +186,18 @@ export function EmailComposer({
     setTaskDraftSaved,
     updateTaskAvatarByKey,
   } = useEmailGenerationTasks();
-  const [replyContent, setReplyContent] = useState(initialMessage || '');
+  const isTencent = mailAccount?.provider === 'tencent_exmail';
+  const providerLabel = isTencent ? '腾讯企业邮箱' : 'Gmail';
+  const ownEmail = mailAccount?.email || auth?.email || '';
+  const mailAccountId = mailAccount?.mailAccountId || `gmail:${ownEmail.toLowerCase()}`;
+  const inputIdentity = JSON.stringify([isTencent ? 'tencent_exmail' : 'gmail', mailAccountId, ownEmail.toLowerCase(),
+    thread.id, replyTarget?.messageId, replyTarget?.recipientEmail, replyTarget?.subject, replyTarget?.message?.body]);
+  const [manualReply, setManualReply, inputWarning] = useLocalReplyText(inputIdentity, 'manual', initialMessage || '', mode === 'compose');
+  const [aiReply, setAIReply] = useState(initialMessage || '');
+  const replyContent = mode === 'compose' ? manualReply : aiReply;
+  const setReplyContent = mode === 'compose' ? setManualReply : setAIReply;
+  const replySendKey = JSON.stringify([getAccountCacheScope(), isTencent ? 'tencent_exmail' : 'gmail', mailAccountId, thread.id, replyTarget?.messageId]);
+  const replySendTask = sendTasks.find((task) => task.replyKey === replySendKey);
   const [userIdeas, setUserIdeas] = useState('');
   const [analysis, setAnalysis] = useState<CollaborationAnalysis | null>(null);
   const [analysisLoading, setAnalysisLoading] = useState(mode === 'ai');
@@ -198,6 +211,21 @@ export function EmailComposer({
   const [aiError, setAiError] = useState('');
   const [suggestion, setSuggestion] = useState<AISuggestion | null>(null);
   const [strategyEditing, setStrategyEditing] = useState(false);
+  const [strategyFocusRequest, setStrategyFocusRequest] = useState(0);
+  const strategyInputRef = useRef<HTMLTextAreaElement>(null);
+
+  useEffect(() => {
+    if (!strategyFocusRequest) return;
+    const input = strategyInputRef.current;
+    const section = input?.closest('section');
+    const viewport = input?.closest<HTMLElement>('[data-slot="scroll-area-viewport"]');
+    if (!input || !section || !viewport) return;
+    input.focus({ preventScroll: true });
+    viewport.scrollTo({
+      top: Math.max(0, viewport.scrollTop + section.getBoundingClientRect().top - viewport.getBoundingClientRect().top - 16),
+      behavior: 'instant',
+    });
+  }, [strategyFocusRequest]);
   const bodyEditVersionRef = useRef(0);
   const [generatedIdeas, setGeneratedIdeas] = useState<string | null>(null);
   const [pendingGeneratedReply, setPendingGeneratedReply] = useState<(GmailAIReplyTaskResult & { ideas: string; taskId: string }) | null>(null);
@@ -207,13 +235,17 @@ export function EmailComposer({
   const [smtpReady, setSmtpReady] = useState(
     () => mailAccount?.provider !== 'tencent_exmail' || Boolean(mailAccount.capabilities.send),
   );
-  const [completion, setCompletion] = useState<'draft' | 'scheduled' | 'sent' | null>(null);
+  const [localCompletion, setCompletion] = useState<'draft' | 'scheduled' | 'sent' | null>(null);
+  const completion = replySendTask?.status === 'sent' ? 'sent'
+    : replySendTask?.status === 'countdown' || replySendTask?.status === 'sending' ? 'scheduled'
+      : localCompletion === 'draft' ? 'draft' : null;
+  const sendGuardRef = useRef(false);
   const [tencentDraft, setTencentDraft] = useState<MailDraftLocator | undefined>();
   const [copied, setCopied] = useState(false);
   const [attachments, setAttachments] = useState<File[]>([]);
   const [attachmentError, setAttachmentError] = useState('');
   const [analysisExpanded, setAnalysisExpanded] = useState(false);
-  const [translationExpanded, setTranslationExpanded] = useState(false);
+  const [translationExpanded, setTranslationExpanded] = useState(true);
   const [translationEditing, setTranslationEditing] = useState(false);
   const [editedChineseReply, setEditedChineseReply] = useState('');
   const [translatingEditedReply, setTranslatingEditedReply] = useState(false);
@@ -238,10 +270,6 @@ export function EmailComposer({
   const restoredDraftEditedAtRef = useRef<string | undefined>(undefined);
   const ignoredRestoredTaskIdsRef = useRef(new Set<string>());
   const targetContextKeyRef = useRef('');
-  const isTencent = mailAccount?.provider === 'tencent_exmail';
-  const providerLabel = isTencent ? '腾讯企业邮箱' : 'Gmail';
-  const ownEmail = mailAccount?.email || auth?.email || '';
-  const mailAccountId = mailAccount?.mailAccountId || `gmail:${ownEmail.toLowerCase()}`;
 
   const threadMessages = useMemo(() => buildGmailAIThreadMessages(
     thread,
@@ -397,6 +425,7 @@ export function EmailComposer({
   const sendBlockReason = exportBlockReason || (smtpChecking ? '正在验证发信能力。'
     : isTencent && !smtpReady ? '腾讯邮箱发信验证未通过，请检查邮箱连接。' : '');
   const restoreSystemDraft = (saved: MailReplySystemDraft) => {
+    if (replySendTask?.status === 'editing' && (!saved.editedAt || Date.parse(saved.editedAt) <= replySendTask.targetAt)) return;
     try {
       const restoredAttachments = restoreSystemDraftAttachments(saved);
       manualBodyEditedAtRef.current = saved.manualBodyEditedAt;
@@ -547,6 +576,7 @@ export function EmailComposer({
 
   useEffect(() => {
     if (!systemDraft.ready) return;
+    if (replySendTask?.status === 'editing' && generationTask && generationTask.createdAt <= replySendTask.targetAt) return;
     if (!generationTask) return;
     if (ignoredRestoredTaskIdsRef.current.has(generationTask.id)) return;
     const rollback = generationTask.rollbackResult as {
@@ -562,6 +592,7 @@ export function EmailComposer({
       rollback?.replyContent?.trim() || rollback?.editedChineseReply?.trim(),
     );
     if (generationTask.status === 'queued' || generationTask.status === 'running') {
+      if (appliedGenerationTaskRef.current === generationTask.id) return;
       setAiLoading(true);
       setAiError('');
       setGenerationStage(generationTask.stage);
@@ -576,11 +607,11 @@ export function EmailComposer({
       }
       return;
     }
+    setAiLoading(false);
+    setGenerationStage('');
     if (appliedGenerationTaskRef.current === generationTask.id) return;
     if (localDraftDirtyRef.current && generationTask.status !== 'completed') return;
     appliedGenerationTaskRef.current = generationTask.id;
-    setAiLoading(false);
-    setGenerationStage('');
 
     if (generationTask.status === 'failed' || generationTask.status === 'interrupted') {
       const retryInput = generationTask.retryInput as {
@@ -657,7 +688,7 @@ export function EmailComposer({
     setGeneratedLangName(result.targetLangName);
     setStrategyEditing(false);
     setAiError('');
-  }, [generationTask, systemDraft.ready, replyContent, editedChineseReply]);
+  }, [generationTask, systemDraft.ready, replyContent, editedChineseReply, setReplyContent, replySendTask]);
 
   useEffect(() => {
     if (!requestedGenerationTask || requestedTaskMatchesContext) return;
@@ -672,6 +703,7 @@ export function EmailComposer({
   useEffect(() => {
     if (!systemDraft.ready) return;
     if (!translationTask) return;
+    if (replySendTask?.status === 'editing' && translationTask.createdAt <= replySendTask.targetAt) return;
     if (ignoredRestoredTaskIdsRef.current.has(translationTask.id)) return;
     if (translationTask.status === 'queued' || translationTask.status === 'running') {
       setTranslatingEditedReply(true);
@@ -721,7 +753,7 @@ export function EmailComposer({
       targetLanguage: translationResult.targetLang,
     });
     setAiError('');
-  }, [editedChineseReply, restoringRequestedTranslationTask, settings.emailSignature, suggestion, targetLang, translationTask, systemDraft.ready]);
+  }, [editedChineseReply, restoringRequestedTranslationTask, settings.emailSignature, suggestion, targetLang, translationTask, systemDraft.ready, setReplyContent, replySendTask]);
 
   const translateDraftToChinese = async (
     text: string,
@@ -1506,6 +1538,7 @@ export function EmailComposer({
   };
 
   const sendEmail = async () => {
+    if (sendGuardRef.current || completion === 'scheduled' || completion === 'sent') return;
     if (isTencent && !smtpReady) {
       setAiError(smtpChecking ? '正在验证腾讯企业邮箱发信能力，请稍候。' : '腾讯企业邮箱发信能力尚未通过验证，请检查连接设置。');
       return;
@@ -1521,12 +1554,14 @@ export function EmailComposer({
     }
     const recipient = recipientEmail;
     const delaySeconds = Math.min(60, Math.max(0, settings.emailSendDelaySeconds ?? 0));
+    sendGuardRef.current = true;
     setSending(true);
     setAiError('');
     try {
       const outgoing = await createOutgoingEmail();
       const messageId = isTencent ? createTencentClientMessageId(mailAccount?.email || '') : '';
       scheduleEmail({
+        replyKey: replySendKey,
         accessToken: outgoing.accessToken,
         raw: outgoing.rawEmail ? toBase64Url(outgoing.rawEmail) : undefined,
         threadId: isTencent ? undefined : thread.id,
@@ -1548,6 +1583,7 @@ export function EmailComposer({
             }
           : undefined,
         onSent: () => {
+          if (mode === 'compose') setManualReply('');
           void systemDraft.markSent();
           updateCurrentDraftSavedStatus(false);
           setCompletion('sent');
@@ -1566,9 +1602,21 @@ export function EmailComposer({
     } catch (error) {
       setAiError(error instanceof Error ? error.message : '邮件发送失败');
     } finally {
+      sendGuardRef.current = false;
       setSending(false);
     }
   };
+
+  const { requestSend, reviewDialog } = useMobileMailSendReview({
+    from: ownEmail || providerLabel,
+    to: recipientEmail,
+    subject: replyTarget ? buildGmailReplySubject(replyTarget) : thread.subject,
+    html: appendEmailSignature(replyContent, getEmailSignatureForContext(settings.emailSignature, settings.emailSignatureScope, 'regular')),
+    attachmentNames: attachments.map((file) => file.name),
+    identity: JSON.stringify([mailAccount?.mailAccountId, thread.id, replyTarget?.messageId, targetLang, editedChineseReply, attachments.map((file) => [file.name, file.size, file.lastModified])]),
+    blocked: mode === 'ai' ? Boolean(sendBlockReason) : !recipientEmail || sending || savingDraft || smtpChecking || (isTencent && !smtpReady) || isEmailContentEmpty(replyContent),
+    onSend: sendEmail,
+  });
 
   const handleAttachmentSelection = (files: FileList | null) => {
     if (!files?.length) return;
@@ -1615,6 +1663,17 @@ export function EmailComposer({
                 : `邮件已直接发送给 ${recipientEmail}。`}
           </p>
         </div>
+        {replySendTask?.status === 'countdown' && (
+          <Button variant="outline" className="w-full" onClick={() => cancelEmail(replySendTask.id)}>取消发送</Button>
+        )}
+        {completion === 'sent' && (
+          <Button variant="outline" className="w-full" onClick={() => {
+            startNewReply(replySendKey);
+            setCompletion(null); setReplyContent(''); setEditedChineseReply('');
+            setUserIdeas(''); setAttachments([]); setSuggestion(null);
+            setSynchronizedDraft(null); setConfirmedForeign(null);
+          }}>撰写另一封回复</Button>
+        )}
         {completion !== 'scheduled' && (
           <Button variant="outline" className="w-full" onClick={onClose}>关闭</Button>
         )}
@@ -1707,7 +1766,7 @@ export function EmailComposer({
   );
 
   const generationSettings = (
-    <div className="flex flex-wrap items-center gap-3">
+    <div className="mobile-generation-settings flex flex-wrap items-center gap-3">
       <label className="flex items-center gap-2 text-xs font-medium text-gray-600">
         <span className="shrink-0">回复语言</span>
         <select
@@ -1765,7 +1824,7 @@ export function EmailComposer({
       {attachmentList}
       {attachmentError && <p className="text-xs text-destructive">{attachmentError}</p>}
 
-      {(!suggestion || strategyEditing) && (
+      {(
         <section className="min-w-0 max-w-full overflow-hidden rounded-lg border border-gray-300 bg-white shadow-sm transition focus-within:border-primary focus-within:ring-2 focus-within:ring-primary/15">
           <div className="border-b border-gray-100 px-4 py-3">
             <div className="flex items-center justify-between gap-3">
@@ -1782,6 +1841,7 @@ export function EmailComposer({
           </div>
           <Textarea
             id="ai-reply-strategy"
+            ref={strategyInputRef}
             wrap="soft"
             value={userIdeas}
             onChange={(event) => {
@@ -1791,7 +1851,9 @@ export function EmailComposer({
             placeholder="例如：价格可以接受，但需要确认视频发布时间；请礼貌询问能否在月底前发布..."
             className="field-sizing-fixed min-h-28 min-w-0 max-w-full resize-y overflow-x-hidden break-words rounded-none border-0 bg-white px-4 py-3 shadow-none [overflow-wrap:anywhere] focus-visible:ring-0"
           />
-          <div className="flex flex-wrap gap-1.5 border-t border-gray-100 px-3 py-2">
+          <details className="border-t border-gray-100 px-3 py-2 text-xs text-gray-600">
+            <summary className="cursor-pointer">快捷回复想法</summary>
+            <div className="mt-2 flex flex-wrap gap-1.5">
             {QUICK_REPLY_IDEAS.map(([label, text]) => (
               <Button
                 key={label}
@@ -1807,7 +1869,8 @@ export function EmailComposer({
                 {label}
               </Button>
             ))}
-          </div>
+            </div>
+          </details>
         </section>
       )}
 
@@ -1823,18 +1886,13 @@ export function EmailComposer({
         </div>
       )}
 
-      {analysis && (!suggestion || strategyEditing) && (
+      {analysis && (
         <>
           <section className="overflow-hidden rounded-lg border border-gray-200 bg-white">
             <div className="border-b border-gray-100 px-4 py-3">
               <div className="flex items-start justify-between gap-3">
                 <div className="flex min-w-0 flex-1 flex-wrap items-center gap-2">
                   <h3 className="text-sm font-semibold text-gray-900">核心分析</h3>
-                  {analysis.stage && (
-                    <Badge variant="secondary" className="max-w-full whitespace-normal bg-gray-100 font-normal text-gray-700">
-                      {analysis.stage}
-                    </Badge>
-                  )}
                 </div>
                 <Button
                   type="button"
@@ -1848,16 +1906,12 @@ export function EmailComposer({
                   重新分析
                 </Button>
               </div>
-              <p className="mt-1 line-clamp-2 text-sm leading-6 text-gray-600">
-                {analysis.latestSummary || '暂无明确摘要'}
-              </p>
             </div>
 
             <div className="grid @3xl/email-composer:grid-cols-2">
               <AnalysisSection
                 title="当前合作判断"
                 content={analysis.creatorIntent}
-                secondary={analysis.attitude}
                 className="border-b border-gray-100 @3xl/email-composer:border-b-0 @3xl/email-composer:border-r"
               />
               <AnalysisList
@@ -1871,13 +1925,6 @@ export function EmailComposer({
                 emptyText="当前没有需要额外确认的事项"
                 className="border-b border-gray-100 @3xl/email-composer:border-b-0 @3xl/email-composer:border-r @3xl/email-composer:border-t"
               />
-              <AnalysisList
-                title="风险提醒"
-                items={analysis.risks}
-                emptyText="暂未发现明显风险"
-                tone="warning"
-                className="@3xl/email-composer:border-t"
-              />
             </div>
           </section>
 
@@ -1890,6 +1937,9 @@ export function EmailComposer({
             </CollapsibleTrigger>
             <CollapsibleContent>
               <div className="grid border-t border-gray-100 @2xl/email-composer:grid-cols-2">
+                <AnalysisSection title="当前合作阶段" content={analysis.stage || ''} className="border-b border-gray-100 @2xl/email-composer:border-r" />
+                <AnalysisSection title="来信摘要" content={analysis.latestSummary || ''} className="border-b border-gray-100" />
+                <AnalysisList title="风险提醒" items={analysis.risks} emptyText="暂未发现明显风险" tone="warning" className="border-b border-gray-100 @2xl/email-composer:col-span-2" />
                 <AnalysisSection title="红人的态度" content={analysis.attitude} className="border-b border-gray-100 @2xl/email-composer:border-r" />
                 <AnalysisSection
                   title="沟通风格与当前情绪"
@@ -1941,6 +1991,8 @@ export function EmailComposer({
       {suggestion && (
         <>
           {analysis && (
+            <details className="text-sm text-gray-600">
+              <summary className="cursor-pointer py-2">查看草稿分析与优化</summary>
             <section className={`overflow-hidden rounded-lg border ${draftUsedAnalysis ? 'border-emerald-200 bg-emerald-50/60' : 'border-amber-200 bg-amber-50/60'}`}>
               <div className={`flex flex-wrap items-center justify-between gap-3 border-b px-4 py-2.5 ${draftUsedAnalysis ? 'border-emerald-100' : 'border-amber-100'}`}>
                 <div className="flex flex-wrap items-center gap-2">
@@ -1991,6 +2043,7 @@ export function EmailComposer({
                 />
               </div>
             </section>
+            </details>
           )}
           {optimizationError && (
             <ErrorMessage message={optimizationError}>
@@ -2067,12 +2120,15 @@ export function EmailComposer({
               </Button>
             </div>
             {suggestion.keyPoints.length > 0 && (
+              <details className="border-b border-gray-100 text-sm text-gray-600">
+                <summary className="cursor-pointer px-4 py-2">查看本次回复要点</summary>
               <AnalysisList
                 title="本次回复要点"
                 items={suggestion.keyPoints}
                 className="border-b border-gray-100 bg-gray-50/70"
                 compact
               />
+              </details>
             )}
             <RichEmailEditor
               value={replyContent}
@@ -2187,7 +2243,9 @@ export function EmailComposer({
   if (mode === 'ai') {
     return (
       <div className="@container/email-composer flex h-full min-h-0 min-w-0 max-w-full flex-col overflow-x-hidden bg-white text-gray-900">
+        {reviewDialog}
         {!embedded ? header : null}
+        {replySendTask?.status === 'error' && <p role="alert" className="border-b px-3 py-2 text-xs text-destructive">{replySendTask.error}；正文仍保留。重试前请先核对已发送文件夹，避免重复发送。</p>}
         {(systemDraft.warning || systemDraft.error) && <div className="border-b px-3 py-1.5 text-xs text-muted-foreground">
           {systemDraft.warning && <p className="mt-1 text-amber-700">{systemDraft.warning}</p>}
           {systemDraft.error && <div role="alert" className="mt-1 text-destructive">
@@ -2199,7 +2257,7 @@ export function EmailComposer({
           </div>}
         </div>}
         <ScrollArea disableHorizontalScroll className="min-h-0 min-w-0 max-w-full flex-1 bg-[#F7F8FA]">{aiBody}</ScrollArea>
-        <div className="min-w-0 max-w-full shrink-0 overflow-x-hidden border-t border-gray-200 bg-white px-4 py-3 shadow-[0_-4px_12px_rgba(15,23,42,0.035)]">
+        <div className="mobile-ai-footer min-w-0 max-w-full shrink-0 overflow-x-hidden border-t border-gray-200 bg-white px-4 py-3 shadow-[0_-4px_12px_rgba(15,23,42,0.035)]">
           {generatedIdeas !== null && generatedIdeas !== userIdeas.trim() && suggestion ? <p className="mb-2 text-xs text-amber-700">最新想法尚未用于这版邮件；可保存当前正文，或按最新想法重新生成。</p> : null}
           {!suggestion ? (
             <div className="flex flex-col gap-3 @3xl/email-composer:flex-row @3xl/email-composer:items-center @3xl/email-composer:justify-between">
@@ -2220,12 +2278,10 @@ export function EmailComposer({
               </Button>
             </div>
           ) : suggestion ? (
-            <div className="flex flex-col gap-3 @4xl/email-composer:flex-row @4xl/email-composer:items-center @4xl/email-composer:justify-between">
+            <div className="flex flex-col gap-3">
               {generationSettings}
-              <div className="flex flex-wrap items-center justify-end gap-2">
-                <span className={`mr-1 text-xs ${recipientEmail ? 'text-gray-500' : 'text-red-600'}`}>
-                  收件人：{recipientEmail || '保存草稿前需确认'}
-                </span>
+              <div className="flex flex-wrap items-center gap-2">
+                {!recipientEmail && <span className="text-xs text-red-600">保存草稿前需确认收件人</span>}
                 {sendBlockReason && (
                   <span className="mr-1 text-xs font-medium text-amber-700">
                     {sendBlockReason}
@@ -2236,12 +2292,16 @@ export function EmailComposer({
                     以当前外文为最终稿
                   </Button>
                 )}
+              </div>
+              <div className="grid grid-cols-2 gap-2 @xl/email-composer:grid-cols-4">
                 <Button
                   variant="outline"
+                  className="h-10 w-full min-w-0 whitespace-normal px-2 text-xs leading-tight"
                   disabled={aiLoading || optimizationLoading || translatingEditedReply || translationEditing || sending || savingDraft}
                   onClick={() => {
                     optimizationRunRef.current += 1;
                     setStrategyEditing(true);
+                    setStrategyFocusRequest((current) => current + 1);
                     setOptimizedSuggestion(null);
                     setOptimizationError('');
                     setDraftUsedAnalysis(false);
@@ -2254,6 +2314,7 @@ export function EmailComposer({
                 </Button>
                 <Button
                   variant="outline"
+                  className="h-10 w-full min-w-0 whitespace-normal px-2 text-xs leading-tight"
                   onClick={generateReply}
                   disabled={!userIdeas.trim() || aiLoading || optimizationLoading || Boolean(optimizedSuggestion) || translatingEditedReply || translationEditing || sending || savingDraft}
                 >
@@ -2262,13 +2323,14 @@ export function EmailComposer({
                 </Button>
                 <Button
                   variant="outline"
-                  onClick={sendEmail}
+                  className="h-10 w-full min-w-0 whitespace-normal px-2 text-xs leading-tight"
+                  onClick={requestSend}
                   disabled={Boolean(sendBlockReason)}
                 >
                   {sending || smtpChecking ? <Loader2 className="animate-spin" data-icon="inline-start" /> : <Send data-icon="inline-start" />}
                   {smtpChecking ? '正在验证发信能力' : '直接发送'}
                 </Button>
-                <Button onClick={saveToGmailDrafts} disabled={Boolean(exportBlockReason)}>
+                <Button className="h-10 w-full min-w-0 whitespace-normal px-2 text-xs leading-tight" onClick={saveToGmailDrafts} disabled={Boolean(exportBlockReason)}>
                   {savingDraft ? <Loader2 className="animate-spin" data-icon="inline-start" /> : <Save data-icon="inline-start" />}
                   保存{providerLabel}草稿
                 </Button>
@@ -2285,6 +2347,7 @@ export function EmailComposer({
       '@container/email-composer flex min-w-0 max-w-full flex-col gap-4 overflow-x-hidden',
       embedded && 'h-full min-h-0 overflow-y-auto p-3',
     )}>
+      {reviewDialog}
       {!embedded ? <div className="flex items-center justify-between">
         <Badge variant="secondary" className="gap-1">
           <Globe className="size-3" />
@@ -2320,11 +2383,13 @@ export function EmailComposer({
         className={embedded ? 'min-h-52 flex-1' : undefined}
       />
       {aiError && <ErrorMessage message={aiError} />}
+      {inputWarning && <p role="status" className="text-xs text-amber-700">{inputWarning}</p>}
+      {replySendTask?.status === 'error' && <p role="alert" className="text-xs text-destructive">{replySendTask.error}；正文仍保留。重试前请先核对已发送文件夹，避免重复发送。</p>}
       <p className={`text-xs ${recipientEmail ? 'text-muted-foreground' : 'text-destructive'}`}>
         回复收件人：{recipientEmail || '尚未确认；AI 仍可正常生成内容'}
       </p>
       <div className="grid grid-cols-2 gap-2">
-        <Button variant="outline" onClick={sendEmail} disabled={!recipientEmail || sending || savingDraft || smtpChecking || (isTencent && !smtpReady) || isEmailContentEmpty(replyContent)}>
+        <Button variant="outline" onClick={requestSend} disabled={!recipientEmail || sending || savingDraft || smtpChecking || (isTencent && !smtpReady) || isEmailContentEmpty(replyContent)}>
           {sending || smtpChecking ? <Loader2 className="animate-spin" data-icon="inline-start" /> : <Send data-icon="inline-start" />}
           {smtpChecking ? '正在验证发信能力' : '直接发送'}
         </Button>

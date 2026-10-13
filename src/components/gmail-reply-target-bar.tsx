@@ -68,7 +68,7 @@ export function GmailReplyTargetBar({
 
   return (
     <div className={cn(
-      'flex shrink-0 flex-wrap items-center gap-3 border-b border-border/55 bg-primary/[0.035] px-4 py-2.5',
+      'mobile-reply-target flex shrink-0 flex-wrap items-center gap-3 border-b border-border/55 bg-primary/[0.035] px-4 py-2.5',
       compact && 'items-start gap-2 px-3 py-2',
     )}>
       <span className="flex size-8 shrink-0 items-center justify-center rounded-lg bg-primary/10 text-primary">
@@ -101,7 +101,7 @@ export function GmailReplyTargetBar({
               {target.recipientEmail ? '更换收件人' : '选择收件人'}
             </Button>
           </PopoverTrigger>
-          <PopoverContent align="end" className="flex w-80 flex-col gap-3">
+          <PopoverContent align="end" className="flex w-80 max-w-[calc(100vw-1rem)] flex-col gap-3">
             <div>
               <p className="text-sm font-medium">确认最终回复对象</p>
               <p className="text-xs text-muted-foreground">AI 可以先生成；只有保存草稿或发送时必须确认。</p>

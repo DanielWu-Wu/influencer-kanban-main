@@ -51,6 +51,7 @@ import { Button } from '@/components/ui/button';
 import { Calendar } from '@/components/ui/calendar';
 import { Checkbox } from '@/components/ui/checkbox';
 import { Input } from '@/components/ui/input';
+import { Dialog, DialogContent, DialogTitle } from '@/components/ui/dialog';
 import { ProjectReminderButton, type ProjectReminderOptions } from '@/components/project-reminder-button';
 import {
   CooperationEmailActions,
@@ -74,6 +75,7 @@ import {
   TableRow,
 } from '@/components/ui/table';
 import { useSettings } from '@/lib/data';
+import { useMobileLayout } from '@/lib/use-mobile-layout';
 import { VideoMonitorPanel } from '@/components/video-monitor-panel';
 import {
   fetchFeishuRecordSnapshot,
@@ -300,8 +302,9 @@ function ViewSwitcher({ value, onChange }: {
           <button
             key={item.value}
             type="button"
+            aria-pressed={value === item.value}
             onClick={() => onChange(item.value)}
-            className={`inline-flex h-8 items-center gap-1.5 rounded px-3 text-xs font-medium transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-500 ${
+            className={`${value === item.value ? '': 'light-control'} inline-flex h-8 items-center gap-1.5 rounded px-3 text-xs font-medium transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-500 ${
               value === item.value ? 'bg-blue-600 text-white' : 'text-slate-600 hover:bg-slate-100'
             }`}
           >
@@ -411,6 +414,33 @@ function ProjectsTable({ projects, selectedId, onSelect, reminders }: {
           ))}
         </TableBody>
       </Table>
+    </div>
+  );
+}
+
+function MobileProjectsList({ projects, onSelect }: {
+  projects: CooperationProject[];
+  onSelect: (project: CooperationProject) => void;
+}) {
+  return (
+    <div className="h-full overflow-y-auto bg-white p-3" data-testid="mobile-project-list">
+      <div className="space-y-3">
+        {projects.map((project) => (
+          <button key={project.id} type="button" onClick={() => onSelect(project)} className="light-control w-full rounded-xl border border-border/60 bg-white p-4 text-left" aria-label={`查看合作：${project.channelName} · ${project.product}`}>
+            <div className="flex items-center gap-3">
+              <ProjectAvatar project={project} />
+              <div className="min-w-0 flex-1">
+                <p className="truncate text-base font-semibold">{project.channelName}</p>
+                <p className="mt-1 break-words text-sm text-muted-foreground">{project.product || '未填写产品'} · {project.site}</p>
+              </div>
+              <ChevronRight className="h-5 w-5 shrink-0 text-muted-foreground" />
+            </div>
+            <div className="mt-3 flex flex-wrap items-center gap-2"><StageBadge stage={project.stage} /><RiskSummary project={project} /></div>
+            <p className="mt-3 text-sm leading-6 text-slate-700">下一步：{project.nextAction}</p>
+            <p className="mt-2 text-xs text-muted-foreground">合作：{formatCooperationDate(project.cooperationDate)} · 预计上线：{formatCooperationDate(project.expectedPublishDate)}</p>
+          </button>
+        ))}
+      </div>
     </div>
   );
 }
@@ -663,6 +693,7 @@ function ProjectDetail({
   onFieldUpdated,
   onProjectUpdated,
   onClose,
+  readOnly = false,
 }: {
   project: CooperationProject;
   settings: ReturnType<typeof useSettings>['settings'];
@@ -672,6 +703,7 @@ function ProjectDetail({
   onFieldUpdated: (recordId: string, fieldName: string, value: boolean | number) => void;
   onProjectUpdated: () => Promise<void>;
   onClose: () => void;
+  readOnly?: boolean;
 }) {
   const [pendingValues, setPendingValues] = useState<Partial<Record<NotificationFieldKey, boolean>>>({});
   const [updatingFields, setUpdatingFields] = useState<Set<NotificationFieldKey>>(() => new Set());
@@ -799,12 +831,12 @@ function ProjectDetail({
   const actualPublishDate = pendingDateValues.actualPublishDate ?? project.actualPublishDate;
 
   return (
-    <div className="flex h-full flex-col bg-white">
+    <div className="mobile-project-detail flex h-full min-h-0 flex-col bg-white" data-readonly={readOnly}>
       <header className="flex shrink-0 items-start justify-between border-b border-slate-200 px-4 py-4">
         <ProjectIdentity project={project} />
         <div className="ml-3 flex items-center gap-2">
           <StageBadge stage={project.stage} />
-          <Button variant="ghost" size="icon" className="h-8 w-8" title="关闭详情" onClick={onClose}>
+          <Button variant="ghost" size="icon" className="h-8 w-8" aria-label="返回合作列表" title="关闭详情" onClick={onClose}>
             <X className="h-4 w-4" />
           </Button>
         </div>
@@ -859,6 +891,14 @@ function ProjectDetail({
 
         <section className="border-b border-slate-200 py-4">
           <h3 className="mb-2 text-sm font-semibold text-slate-900">关键事项</h3>
+          {readOnly ? <dl>
+            <DetailValue label="物流已告知" value={logisticsNotified ? '是' : '否'} />
+            <DetailValue label="折扣已告知" value={discountNotified ? '是' : '否'} />
+            <DetailValue label={EDITABLE_DATE_LABELS.shippingDate} value={formatCooperationFullDate(shippingDate)} />
+            <DetailValue label={EDITABLE_DATE_LABELS.arrivalDate} value={formatCooperationFullDate(arrivalDate)} />
+            <DetailValue label={EDITABLE_DATE_LABELS.filmingCompleteDate} value={formatCooperationFullDate(filmingCompleteDate)} />
+            <DetailValue label={EDITABLE_DATE_LABELS.actualPublishDate} value={formatCooperationFullDate(actualPublishDate)} />
+          </dl> : <>
           <NotificationCheck
             checked={logisticsNotified}
             disabled={updatingFields.has('logisticsNotified')}
@@ -897,6 +937,7 @@ function ProjectDetail({
               onSelect={(value) => void updateDate('actualPublishDate', value)}
             />
           </dl>
+          </>}
         </section>
 
         <section className="border-b border-slate-200 py-4">
@@ -910,13 +951,13 @@ function ProjectDetail({
           </dl>
         </section>
 
-        <CooperationEmailActions
+        {!readOnly && <CooperationEmailActions
           project={project}
           settings={settings}
           onProjectUpdated={onProjectUpdated}
           draft={noticeDraft}
           setDraft={setNoticeDraft}
-        />
+        />}
 
         <section className="py-4">
           <h3 className="mb-2 text-sm font-semibold text-slate-900">下一步与风险</h3>
@@ -980,6 +1021,7 @@ export function CooperationProjectsPage({
   reminders?: ProjectReminderOptions;
 }) {
   const { settings, loading: settingsLoading } = useSettings();
+  const mobile = useMobileLayout();
   const url = settings.feishuCooperationUrl?.trim() || '';
   const mapping = settings.feishuCooperationFieldMapping || EMPTY_FEISHU_MAPPING;
   const [records, setRecords] = useState<CachedFeishuRecord[]>([]);
@@ -990,6 +1032,7 @@ export function CooperationProjectsPage({
   const [view, setView] = useState<ProjectsView>('list');
   const [selectedProject, setSelectedProject] = useState<CooperationProject>();
   const [search, setSearch] = useState('');
+  const [mobileFiltersExpanded, setMobileFiltersExpanded] = useState(false);
   const deferredSearch = useDeferredValue(search);
   const [stageFilters, setStageFilters] = useState<CooperationStage[]>([]);
   const [productFilter, setProductFilter] = useState('all');
@@ -1196,7 +1239,7 @@ export function CooperationProjectsPage({
     .filter((key) => !mapping[key as keyof typeof mapping]).length;
 
   return (
-    <div className="app-workbench flex h-full min-h-0 overflow-hidden rounded-xl">
+    <div className="mobile-projects app-workbench flex h-full min-h-0 overflow-hidden rounded-xl">
       <Toaster richColors position="top-center" />
       <div className="flex min-w-0 flex-1 flex-col overflow-hidden">
         <header className="material-toolbar flex shrink-0 flex-col items-stretch gap-3 border-b border-border/45 px-4 py-4 sm:flex-row sm:items-center sm:justify-between sm:gap-4 sm:px-5">
@@ -1211,7 +1254,7 @@ export function CooperationProjectsPage({
             </p>
           </div>
           <div className="flex shrink-0 items-center gap-2">
-            {highlightedNoticeProject ? (
+            {!mobile && highlightedNoticeProject ? (
               <Button
                 variant="outline"
                 size="sm"
@@ -1228,17 +1271,17 @@ export function CooperationProjectsPage({
                     : `邮件待检查 ${readyNoticeTasks.length}`}
               </Button>
             ) : null}
-            <VideoMonitorPanel key={url} url={url} mapping={mapping} onProjectUpdated={refreshProjects} />
+            {!mobile && <VideoMonitorPanel key={url} url={url} mapping={mapping} onProjectUpdated={refreshProjects} />}
             <Button variant="outline" size="sm" className="h-9" disabled={refreshing} onClick={() => void loadRecords(true)}>
               <RefreshCw className={`mr-1.5 h-3.5 w-3.5 ${refreshing ? 'animate-spin' : ''}`} />刷新数据
             </Button>
-            <Button variant="outline" size="sm" className="h-9" onClick={() => openExternal(url)}>
+            <Button variant="outline" size="sm" className="hidden h-9 md:inline-flex" onClick={() => openExternal(url)}>
               <FileSpreadsheet className="mr-1.5 h-3.5 w-3.5" />打开飞书
             </Button>
           </div>
         </header>
 
-        <StatStrip projects={projects} />
+        {mobile ? <p className="shrink-0 border-b bg-slate-50 px-4 py-2 text-sm text-slate-600">全部 {projects.length} · 异常/逾期 {projects.filter((project) => project.risks.length > 0).length}</p> : <StatStrip projects={projects} />}
 
         {(error || missingNewMappings > 0) ? (
           <div className="flex shrink-0 items-center justify-between gap-3 border-b border-slate-200 bg-amber-50 px-4 py-2 text-xs text-amber-800">
@@ -1250,13 +1293,14 @@ export function CooperationProjectsPage({
           </div>
         ) : null}
 
-        <div className="material-toolbar shrink-0 border-b border-border/55 px-4 py-3">
+        <div className="mobile-project-filters material-toolbar shrink-0 border-b border-border/55 px-4 py-3" data-expanded={mobileFiltersExpanded}>
           <div className="flex flex-wrap items-center gap-2">
-            <div className="relative min-w-[220px] flex-1 xl:max-w-[310px]">
+            <div className="mobile-project-search relative min-w-[220px] flex-1 xl:max-w-[310px]">
               <Search className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-slate-400" />
               <Input value={search} onChange={(event) => setSearch(event.target.value)} placeholder="搜索红人或产品" className="h-9 border-slate-200 pl-9 text-xs" />
             </div>
             <StageMultiSelect value={stageFilters} onChange={setStageFilters} />
+            <div className="mobile-extended-filter contents">
             <Select value={productFilter} onValueChange={setProductFilter}>
               <SelectTrigger className="h-9 w-[140px] border-slate-200 text-xs"><SelectValue placeholder="合作产品" /></SelectTrigger>
               <SelectContent><SelectItem value="all">全部产品</SelectItem>{products.map((product) => <SelectItem key={product} value={product}>{product}</SelectItem>)}</SelectContent>
@@ -1265,6 +1309,7 @@ export function CooperationProjectsPage({
               <SelectTrigger className="h-9 w-[120px] border-slate-200 text-xs"><SelectValue placeholder="合作站点" /></SelectTrigger>
               <SelectContent><SelectItem value="all">全部站点</SelectItem>{sites.map((site) => <SelectItem key={site} value={site}>{site}</SelectItem>)}</SelectContent>
             </Select>
+            </div>
             <Select value={riskFilter} onValueChange={(value) => setRiskFilter(value as RiskFilter)}>
               <SelectTrigger className="h-9 w-[120px] border-slate-200 text-xs"><SelectValue placeholder="风险" /></SelectTrigger>
               <SelectContent>
@@ -1274,10 +1319,11 @@ export function CooperationProjectsPage({
                 <SelectItem value="normal">仅正常</SelectItem>
               </SelectContent>
             </Select>
-            <ViewSwitcher value={view} onChange={setView} />
+            {!mobile && <ViewSwitcher value={view} onChange={setView} />}
+            {mobile && <Button variant="ghost" aria-expanded={mobileFiltersExpanded} onClick={() => setMobileFiltersExpanded((value) => !value)}>{mobileFiltersExpanded ? '收起筛选' : '更多筛选'}{[productFilter !== 'all', siteFilter !== 'all', Boolean(dateFrom), Boolean(dateTo)].filter(Boolean).length > 0 ? ' · 已设置' : ''}</Button>}
           </div>
           <div className="mt-2 flex flex-wrap items-center justify-between gap-2">
-            <div className="flex items-center gap-2 text-[11px] text-slate-500">
+            <div className="mobile-extended-filter flex items-center gap-2 text-[11px] text-slate-500">
               <span>合作日期</span>
               <Input type="date" value={dateFrom} onChange={(event) => setDateFrom(event.target.value)} className="h-8 w-[135px] border-slate-200 text-[11px]" aria-label="合作日期开始" />
               <span>至</span>
@@ -1305,6 +1351,8 @@ export function CooperationProjectsPage({
                 ) : null}
               </div>
             </div>
+          ) : mobile ? (
+            <MobileProjectsList projects={filteredProjects} onSelect={setSelectedProject} />
           ) : view === 'list' ? (
             <ProjectsTable projects={filteredProjects} selectedId={selectedProject?.id} onSelect={setSelectedProject} reminders={reminders} />
           ) : view === 'board' ? (
@@ -1317,7 +1365,7 @@ export function CooperationProjectsPage({
         </div>
       </div>
 
-      {selectedProject ? (
+      {selectedProject && !mobile ? (
         <aside className="hidden h-full w-[390px] shrink-0 border-l border-slate-200 xl:block">
           <ProjectDetail
             key={selectedProject.id}
@@ -1333,7 +1381,7 @@ export function CooperationProjectsPage({
         </aside>
       ) : null}
 
-      {selectedProject ? (
+      {selectedProject && !mobile ? (
         <div className="fixed inset-0 z-[70] bg-slate-950/20 xl:hidden" onMouseDown={() => setSelectedProject(undefined)}>
           <aside className="ml-auto h-full w-full max-w-[420px] shadow-xl" onMouseDown={(event) => event.stopPropagation()}>
             <ProjectDetail
@@ -1350,6 +1398,23 @@ export function CooperationProjectsPage({
           </aside>
         </div>
       ) : null}
+      <Dialog open={mobile && Boolean(selectedProject)} onOpenChange={(open) => { if (!open) setSelectedProject(undefined); }}>
+        {mobile && selectedProject && <DialogContent className="mobile-project-dialog" showCloseButton={false} aria-describedby={undefined}>
+          <DialogTitle className="sr-only">合作详情：{selectedProject.channelName}</DialogTitle>
+          <ProjectDetail
+            key={selectedProject.id}
+            project={selectedProject}
+            settings={settings}
+            feishuUrl={url}
+            noticeDraft={null}
+            setNoticeDraft={(update) => updateNoticeDraft(selectedProject.id, update)}
+            onFieldUpdated={updateProjectRecordField}
+            onProjectUpdated={refreshProjects}
+            onClose={() => setSelectedProject(undefined)}
+            readOnly
+          />
+        </DialogContent>}
+      </Dialog>
     </div>
   );
 }

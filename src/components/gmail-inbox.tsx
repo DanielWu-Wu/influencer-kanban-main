@@ -2046,7 +2046,9 @@ export function GmailInbox({
             <button
               key={id}
               type="button"
-              className={`flex h-11 cursor-pointer items-center justify-center gap-2 border-b-2 text-sm transition-[color,background-color,border-color] duration-200 ease-out active:bg-white/75 motion-reduce:transition-none ${
+              data-active={category === id}
+              aria-pressed={category === id}
+              className={`light-control flex h-11 cursor-pointer items-center justify-center gap-2 border-b-2 text-sm ${
                 category === id
                   ? 'border-primary bg-white/55 font-medium text-primary shadow-[inset_0_-1px_0_var(--primary)] hover:bg-white/70'
                   : 'border-transparent text-muted-foreground hover:bg-white/65 hover:text-foreground'

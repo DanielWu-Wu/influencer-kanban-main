@@ -3,7 +3,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useRouter } from 'next/navigation';
 import { Button } from '@/components/ui/button';
-import { Sheet, SheetContent } from '@/components/ui/sheet';
+import { Sheet, SheetContent, SheetTitle } from '@/components/ui/sheet';
 import { useSettings } from '@/lib/data';
 import {
   LayoutDashboard,
@@ -496,7 +496,7 @@ export default function DashboardPage() {
                   changeView(item.id as View);
                   setMobileMenuOpen(false);
                 }}
-                className={`app-nav-item flex h-10 w-full cursor-pointer items-center rounded-lg text-sm font-medium active:scale-[0.985] focus-visible:ring-2 focus-visible:ring-ring/40 motion-reduce:transition-none motion-reduce:active:scale-100 ${compact ? 'justify-center px-0' : 'gap-3 px-3'}`}
+                className={`app-nav-item flex h-10 w-full cursor-pointer items-center rounded-lg text-sm font-medium focus-visible:ring-2 focus-visible:ring-ring/40 motion-reduce:transition-none ${compact ? 'justify-center px-0' : 'gap-3 px-3'}`}
               >
                 <Icon className="h-4 w-4 flex-shrink-0" />
                 {!compact && <span className="flex-1 truncate text-left">{item.label}</span>}
@@ -519,7 +519,7 @@ export default function DashboardPage() {
   );
 
   return (
-    <div className="workspace-shell h-dvh overflow-hidden">
+    <div className="workspace-shell mobile-workspace h-dvh overflow-hidden">
       {account?.status === 'active' && !account.mustChangePassword && !accountIssue && (
         <AppUpdateNotice accountUserId={account.userId} />
       )}
@@ -545,7 +545,7 @@ export default function DashboardPage() {
       <header className="app-topbar sticky top-0 z-50">
         <div className="flex h-15 items-center justify-between px-4 md:px-5">
           <div className="flex items-center gap-3">
-            <Button variant="ghost" size="icon" className="md:hidden" onClick={() => setMobileMenuOpen(true)}>
+            <Button variant="ghost" size="icon" className="md:hidden" aria-label="打开手机菜单" onClick={() => setMobileMenuOpen(true)}>
               <Menu className="w-5 h-5" />
             </Button>
 
@@ -568,7 +568,7 @@ export default function DashboardPage() {
             {stats.todayTodos > 0 && (
               <button
                 onClick={() => changeView('todo')}
-                className="glass-control hidden h-9 cursor-pointer items-center gap-2 rounded-lg px-3 text-sm font-medium text-primary transition-[background-color,box-shadow,transform] duration-200 ease-out hover:bg-white/88 hover:shadow-sm active:scale-[0.985] motion-reduce:transition-none motion-reduce:active:scale-100 md:flex"
+                className="light-control glass-control hidden h-9 cursor-pointer items-center gap-2 rounded-lg px-3 text-sm font-medium text-primary motion-reduce:transition-none md:flex"
               >
                 <CheckSquare className="w-4 h-4" />
                 {stats.todayTodos} {label.todo}
@@ -577,7 +577,7 @@ export default function DashboardPage() {
             {stats.upcoming > 0 && (
               <button
                 onClick={() => changeView('reminders')}
-                className="glass-control hidden h-9 cursor-pointer items-center gap-2 rounded-lg px-3 text-sm font-medium text-amber-700 transition-[background-color,box-shadow,transform] duration-200 ease-out hover:bg-white/88 hover:shadow-sm active:scale-[0.985] motion-reduce:transition-none motion-reduce:active:scale-100 md:flex"
+                className="light-control glass-control hidden h-9 cursor-pointer items-center gap-2 rounded-lg px-3 text-sm font-medium text-amber-700 motion-reduce:transition-none md:flex"
               >
                 <Bell className="w-4 h-4" />
                 {stats.upcoming} {label.followUps}
@@ -603,7 +603,7 @@ export default function DashboardPage() {
         </div>
       </header>
 
-      <div className="flex h-[calc(100dvh-3.75rem)] p-2.5 pt-3 md:p-3">
+      <div className="mobile-workspace-body flex h-[calc(100dvh-3.75rem)] p-2.5 pt-3 md:p-3">
         <aside
           id="desktop-sidebar"
           className={`app-sidebar hidden h-full shrink-0 flex-col overflow-hidden rounded-xl transition-[width,padding] duration-200 ease-out motion-reduce:transition-none md:flex ${
@@ -668,19 +668,30 @@ export default function DashboardPage() {
         </aside>
 
         <Sheet open={mobileMenuOpen} onOpenChange={setMobileMenuOpen}>
-          <SheetContent side="left" className="w-72 p-4">
+          <SheetContent side="left" className="w-72 overflow-y-auto p-4" aria-describedby={undefined}>
             <div className="flex items-center gap-2 mb-6">
               <div className="flex h-9 w-9 items-center justify-center rounded-lg bg-primary">
                 <Sparkles className="h-4 w-4 text-primary-foreground" />
               </div>
-              <span className="text-lg font-semibold">{label.appFull}</span>
+              <SheetTitle className="text-lg font-semibold">{label.appFull}</SheetTitle>
             </div>
-            {renderNav()}
+            <nav aria-label="手机菜单" className="space-y-2">
+              {NAV_ITEMS.filter((item) => ['todo', 'gmail', 'kanban'].includes(item.id)).map((item) => (
+                <button key={item.id} type="button" className="app-nav-item flex h-12 w-full items-center gap-3 rounded-lg px-3 text-sm" data-active={currentView === item.id} onClick={() => { changeView(item.id); setMobileMenuOpen(false); }}>
+                  <item.icon className="h-5 w-5" />{item.label}
+                </button>
+              ))}
+            </nav>
+            <p className="mt-5 text-xs leading-6 text-muted-foreground">其他工作模块请在电脑端使用。</p>
+            <div className="mt-auto border-t pt-4">
+              <p className="mb-2 break-all text-xs text-muted-foreground">{user?.email}</p>
+              <Button variant="outline" className="w-full" onClick={async () => { await signOut(); router.replace('/login'); }}><LogOut />退出登录</Button>
+            </div>
           </SheetContent>
         </Sheet>
 
         <main
-          className={`ml-0 flex h-full min-h-0 flex-1 flex-col overflow-hidden transition-[margin] duration-200 ease-out motion-reduce:transition-none ${
+          className={`ml-0 flex h-full min-h-0 min-w-0 flex-1 flex-col overflow-hidden transition-[margin] duration-200 ease-out motion-reduce:transition-none ${
             sidebarCollapsed ? 'md:ml-2.5' : 'md:ml-3'
           }`}
         >

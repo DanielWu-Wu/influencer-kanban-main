@@ -65,7 +65,7 @@ export function TodoTimePicker({ value, onChange }: { value: string; onChange: (
                     role="option"
                     aria-selected={column.selected === option}
                     tabIndex={column.selected === option ? 0 : -1}
-                    className="flex h-8 w-full shrink-0 items-center justify-center rounded text-sm tabular-nums hover:bg-accent focus-visible:outline focus-visible:outline-2 focus-visible:outline-ring aria-selected:bg-primary/10 aria-selected:font-semibold aria-selected:text-primary"
+                    className="light-control flex h-8 w-full shrink-0 items-center justify-center rounded text-sm tabular-nums hover:bg-accent focus-visible:outline focus-visible:outline-2 focus-visible:outline-ring aria-selected:bg-primary/10 aria-selected:font-semibold aria-selected:text-primary"
                     onClick={() => select(columnIndex, option)}
                     onKeyDown={(event) => {
                       const nextIndex = event.key === 'ArrowDown' ? Math.min(index + 1, column.options.length - 1)

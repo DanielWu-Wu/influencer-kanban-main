@@ -259,14 +259,13 @@
     position: relative;
     color: var(--muted-foreground);
     transition:
-      color 180ms ease,
-      background-color 180ms ease,
-      box-shadow 180ms ease,
-      transform 100ms ease-out;
+      color 100ms ease-out,
+      background-color 100ms ease-out,
+      border-color 100ms ease-out;
   }
 
   .app-nav-item:hover {
-    background: rgba(255, 255, 255, 0.72);
+    background: var(--control-hover-surface);
     color: var(--foreground);
   }
 
@@ -274,6 +273,18 @@
     background: var(--selection-surface);
     color: var(--primary);
     box-shadow: inset 2px 0 0 var(--primary);
+  }
+
+  .app-nav-item[data-active='true']:hover {
+    background: var(--control-selected-hover-surface);
+  }
+
+  .app-nav-item:active {
+    background: var(--control-pressed-surface);
+  }
+
+  .app-nav-item[data-active='true']:active {
+    background: var(--control-selected-pressed-surface);
   }
 
   .app-workbench {
@@ -497,6 +508,55 @@
   }
 }
 
+/* Control feedback is outside utility layers so local hover/scale utilities
+   cannot restore the previous animation. Primary/destructive buttons and
+   list rows are deliberately not targeted. Focus rings stay independent. */
+:root {
+  --control-hover-surface: color-mix(in oklab, var(--primary) 9%, var(--background));
+  --control-pressed-surface: color-mix(in oklab, var(--primary) 16%, var(--background));
+  --control-selected-hover-surface: color-mix(in oklab, var(--primary) 15%, var(--background));
+  --control-selected-pressed-surface: color-mix(in oklab, var(--primary) 23%, var(--background));
+}
+
+.light-control,
+.app-nav-item,
+[data-slot='tabs-trigger'],
+[data-slot='select-trigger'] {
+  transition-property: color, background-color, border-color;
+  transition-duration: 100ms;
+  transition-timing-function: ease-out;
+  scale: none;
+  translate: none;
+}
+
+:is(.light-control, [data-slot='tabs-trigger'], [data-slot='select-trigger']):not(:disabled):not([aria-disabled='true']):not([data-disabled]):hover {
+  background-color: var(--control-hover-surface);
+  border-color: color-mix(in oklab, var(--primary) 28%, var(--border));
+  --tw-shadow: 0 0 #0000;
+}
+
+:is(.light-control, [data-slot='tabs-trigger'], [data-slot='select-trigger']):not(:disabled):not([aria-disabled='true']):not([data-disabled]):active {
+  background-color: var(--control-pressed-surface);
+  border-color: color-mix(in oklab, var(--primary) 42%, var(--border));
+}
+
+:is(.light-control[data-active='true'], .light-control[aria-pressed='true'], .light-control[aria-selected='true'], .light-control[data-state='on'], [data-slot='tabs-trigger'][data-state='active']):not(:disabled):not([aria-disabled='true']):not([data-disabled]):hover {
+  background-color: var(--control-selected-hover-surface);
+}
+
+:is(.light-control[data-active='true'], .light-control[aria-pressed='true'], .light-control[aria-selected='true'], .light-control[data-state='on'], [data-slot='tabs-trigger'][data-state='active']):not(:disabled):not([aria-disabled='true']):not([data-disabled]):active {
+  background-color: var(--control-selected-pressed-surface);
+}
+
+/* Mailbox navigation keeps its selected marker; hover must not remove it. */
+.mailbox-nav-item[data-active='true'] {
+  box-shadow: inset 2px 0 0 var(--primary);
+}
+
+:is(.light-control, [data-slot='tabs-trigger'], [data-slot='select-trigger']):is(:disabled, [aria-disabled='true'], [data-disabled]) {
+  pointer-events: none;
+}
+
 @media (prefers-reduced-motion: reduce) {
   *,
   *::before,
@@ -539,5 +599,151 @@
   .app-sidebar,
   .app-workbench {
     background: #ffffff !important;
+  }
+}
+
+/* Mobile phase one: presentation only; desktop and business rules stay shared. */
+@media (max-width: 767px) {
+  .mobile-workspace {
+    height: var(--mobile-visible-height, 100dvh);
+    min-height: 0;
+    display: flex;
+    flex-direction: column;
+  }
+  .mobile-workspace > .app-topbar { flex-shrink: 0; }
+  .mobile-workspace .app-topbar > div { padding-inline: 0.5rem; gap: 0.25rem; }
+  .mobile-workspace-body { height: auto; flex: 1; min-height: 0; padding: 0.5rem; padding-bottom: calc(0.5rem + env(safe-area-inset-bottom, 0px)); }
+  .mobile-workspace-body .app-workbench { min-width: 0; }
+  .mobile-workspace-body main > .app-workbench { padding: 0.75rem; }
+  .mobile-workspace button, .mobile-workspace [role="tab"],
+  .mobile-project-detail button, .mobile-send-status button,
+  [data-slot="dialog-content"] button, [data-slot="alert-dialog-content"] button {
+    min-height: 44px;
+    touch-action: manipulation;
+  }
+  .mobile-workspace button:has(> svg:only-child), .mobile-project-detail button:has(> svg:only-child) { min-width: 44px; }
+  .mobile-workspace input, .mobile-workspace textarea, .mobile-workspace select,
+  [data-slot="dialog-content"] input, [data-slot="dialog-content"] textarea,
+  [data-slot="popover-content"] input, [contenteditable="true"] { font-size: 16px; }
+  .mobile-workspace input, .mobile-workspace select { min-height: 44px; min-width: 0; }
+  [data-slot="dialog-content"], [data-slot="alert-dialog-content"] {
+    top: calc(var(--mobile-visible-top, 0px) + var(--mobile-visible-height, 100dvh) / 2);
+    max-height: calc(var(--mobile-visible-height, 100dvh) - 1rem);
+    overflow-y: auto;
+    overscroll-behavior: contain;
+  }
+  .mobile-todo-dialog > [data-slot="dialog-footer"] { position: sticky; bottom: -1.25rem; background: #fff; padding-block: 0.5rem; }
+  [data-slot="dialog-close"] { min-width: 44px; min-height: 44px; top: 0.25rem; right: 0.25rem; display: flex; align-items: center; justify-content: center; }
+  [data-slot="popover-content"], [data-slot="dropdown-menu-content"], [data-slot="select-content"] {
+    max-width: calc(100vw - 1rem);
+    max-height: min(var(--radix-popper-available-height, 80dvh), calc(var(--mobile-visible-height, 100dvh) - 1rem));
+    overflow-y: auto;
+  }
+  [data-slot="dropdown-menu-item"], [data-slot="select-item"] { min-height: 44px; }
+  .mobile-todo-board article { display: flex; flex-wrap: wrap; gap: 0.5rem; padding-block: 0.75rem; }
+  .mobile-todo-board article > div.min-w-0 { flex-basis: calc(100% - 100px); }
+  .mobile-todo-board article > div.min-w-0 > div { flex-wrap: wrap; }
+  .mobile-todo-board article p { font-size: 14px; }
+  .mobile-todo-board article > div.min-w-0 p { white-space: normal; overflow-wrap: anywhere; }
+  .mobile-todo-board article > div:last-child, .mobile-todo-board article > button { opacity: 1; }
+  .mobile-todo-board article > div:last-child { margin-left: auto; }
+  .mobile-todo-board article > button, .mobile-todo-board article button { min-width: 44px; }
+  .mobile-todo-board article .max-w-\[320px\], .mobile-todo-board article .max-w-\[300px\] { max-width: 100%; }
+  .mobile-todo-board article .opacity-45 { opacity: 1; }
+  .mobile-todo-dialog { padding: 1rem; }
+  .mobile-mail-workbench [data-detail-open="true"] { display: none; }
+  .mobile-mail-workbench [data-detail-open="false"] { border-right: 0; }
+  .email-detail-container > .material-toolbar { flex-shrink: 0; }
+  .email-detail-container > .material-toolbar:first-child { padding: 0.5rem; }
+  .email-detail-container > .material-toolbar:nth-child(2) { max-height: 24%; overflow-y: auto; overflow-wrap: anywhere; }
+  .email-detail-container[data-composer-open="true"] > .material-toolbar:nth-child(2) { display: none; }
+  .email-reply-workspace[data-expanded="true"] { grid-template-rows: minmax(0, 1fr); }
+  .email-reply-workspace[data-expanded="true"] > div:first-child { display: none; }
+  .email-reply-workspace[data-expanded="true"] .email-reply-composer { border-top: 0; box-shadow: none; }
+  .mail-reply-mode-tabs {
+    height: 50px;
+    min-width: 0;
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+    border: 1px solid var(--border);
+    padding: 2px;
+  }
+  .mail-reply-mode-tabs [data-slot="tabs-trigger"] {
+    height: 44px;
+    min-height: 44px;
+    min-width: 0;
+    padding-inline: 4px;
+    box-shadow: none;
+  }
+  .mail-reply-mode-tabs [data-slot="tabs-trigger"][data-state="active"] {
+    background-color: color-mix(in oklab, var(--primary) 12%, var(--background));
+    border-color: color-mix(in oklab, var(--primary) 25%, var(--border));
+    color: var(--primary);
+  }
+  .mail-reply-mode-tabs [data-slot="tabs-trigger"]:focus-visible {
+    outline: 2px solid var(--ring);
+    outline-offset: -2px;
+    box-shadow: none;
+  }
+  .mobile-reply-entry { gap: 0.5rem; padding: 0.5rem; }
+  .mobile-reply-entry button { flex-direction: column; gap: 0.25rem; min-height: 64px; padding-inline: 0.25rem; font-size: 12px; white-space: normal; }
+  .mobile-template-footer { gap: 0.5rem; padding: 0.5rem 0.75rem; }
+  .mobile-template-footer > div { width: 100%; }
+  .mobile-template-footer > div:last-child { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .mobile-template-footer button { white-space: normal; font-size: 12px; padding-inline: 0.5rem; }
+  .mobile-projects > div > header { flex-direction: row; align-items: center; padding: 0.75rem; gap: 0.5rem; }
+  .mobile-projects > div > header h1 { font-size: 18px; }
+  .mobile-project-filters { padding: 0.75rem; max-height: 45%; overflow-y: auto; }
+  .mobile-project-search { min-width: 0; flex-basis: 100%; }
+  .mobile-project-filters [data-slot="select-trigger"] { flex: 1; min-width: 0; }
+  .mobile-project-filters[data-expanded="false"] .mobile-extended-filter { display: none; }
+  .mobile-project-filters .mobile-extended-filter.flex { flex-wrap: wrap; }
+  .mobile-project-detail { height: var(--mobile-visible-height, 100dvh); padding-bottom: env(safe-area-inset-bottom, 0px); }
+  .mobile-project-detail dd { overflow-wrap: anywhere; }
+  .mobile-project-dialog {
+    inset: 0;
+    width: 100%;
+    max-width: none;
+    height: var(--mobile-visible-height, 100dvh);
+    max-height: var(--mobile-visible-height, 100dvh);
+    transform: none;
+    translate: none;
+    padding: 0;
+    gap: 0;
+    border: 0;
+    border-radius: 0;
+    display: flex;
+    flex-direction: column;
+    overflow: hidden;
+  }
+  .mobile-project-detail header { padding: 0.75rem; }
+  .mobile-todo-board .group button.opacity-0 { opacity: 1; min-width: 44px; }
+  .mobile-send-status { bottom: calc(0.5rem + env(safe-area-inset-bottom, 0px)); right: 0.5rem; width: calc(100vw - 1rem); }
+  html[data-mobile-keyboard="true"] .mobile-send-status { bottom: 0.5rem; }
+  html[data-mobile-keyboard="true"] .email-detail-container[data-composer-open="true"] > .material-toolbar:first-child { display: none; }
+  html[data-mobile-keyboard="true"] .mobile-reply-target > span,
+  html[data-mobile-keyboard="true"] .mobile-reply-target > div:first-of-type { display: none; }
+  html[data-mobile-keyboard="true"] .mobile-reply-target > div:last-child { padding-left: 0; }
+  html[data-mobile-keyboard="true"] .email-reply-composer > [aria-hidden="false"] > [data-slot="tabs"] { display: none; }
+  html[data-mobile-keyboard="true"] .mobile-generation-settings { display: none; }
+  html[data-mobile-keyboard="true"] .mobile-ai-footer,
+  html[data-mobile-keyboard="true"] .mobile-template-footer { max-height: 110px; overflow-y: auto; padding-block: 0.5rem; }
+}
+
+/* Touch hover can persist after tapping; selection remains the primary cue. */
+@media (max-width: 767px) and (hover: none) {
+  .email-detail-container .mail-reply-mode-tabs [data-slot="tabs-trigger"]:not(:disabled):not([aria-disabled="true"]):not([data-disabled]):hover {
+    background-color: transparent;
+    border-color: transparent;
+  }
+  .email-detail-container .mail-reply-mode-tabs [data-slot="tabs-trigger"][data-state="active"]:not(:disabled):not([aria-disabled="true"]):not([data-disabled]):hover {
+    background-color: color-mix(in oklab, var(--primary) 12%, var(--background));
+    border-color: color-mix(in oklab, var(--primary) 25%, var(--border));
+  }
+  .email-detail-container .mail-reply-mode-tabs [data-slot="tabs-trigger"]:not(:disabled):not([aria-disabled="true"]):not([data-disabled]):active {
+    background-color: var(--control-pressed-surface);
+    border-color: color-mix(in oklab, var(--primary) 42%, var(--border));
+  }
+  .email-detail-container .mail-reply-mode-tabs [data-slot="tabs-trigger"][data-state="active"]:not(:disabled):not([aria-disabled="true"]):not([data-disabled]):active {
+    background-color: var(--control-selected-pressed-surface);
   }
 }

@@ -127,7 +127,7 @@ function RecipientField({
             <span className="max-w-56 truncate">{recipient.name ? `${recipient.name} <${recipient.email}>` : recipient.email}</span>
             <button
               type="button"
-              className="rounded p-0.5 hover:bg-black/10"
+              className="light-control rounded p-0.5"
               aria-label={`删除 ${recipient.email}`}
               onClick={() => onRecipientsChange(recipients.filter((_, itemIndex) => itemIndex !== index))}
             >

@@ -195,7 +195,7 @@ export function EmailGenerationProgress() {
       <PopoverTrigger asChild>
         <button
           type="button"
-          className="glass-control relative flex h-9 cursor-pointer items-center gap-2 rounded-lg px-2.5 text-sm font-medium text-foreground transition-[background-color,box-shadow,transform] duration-200 ease-out hover:bg-white/88 hover:shadow-sm active:scale-[0.985] motion-reduce:transition-none motion-reduce:active:scale-100"
+          className="light-control glass-control relative flex h-9 cursor-pointer items-center gap-2 rounded-lg px-2.5 text-sm font-medium text-foreground motion-reduce:transition-none motion-reduce:active:scale-100"
           aria-label={`邮件生成进度，${activeCount} 个进行中`}
         >
           <Bot className="h-4 w-4 text-primary" />

@@ -141,7 +141,7 @@ export function YouTubeApiSettings({ expanded, onToggle }: YouTubeApiSettingsPro
 
   return (
     <Card className="overflow-hidden rounded-lg border-white/65 bg-white/66 shadow-apple backdrop-blur-xl">
-      <button type="button" onClick={onToggle} className="w-full text-left">
+      <button type="button" onClick={onToggle} className="light-control w-full text-left">
         <CardHeader className="pb-3 transition-colors hover:bg-white/45">
           <div className="flex items-center justify-between">
             <div className="flex items-center gap-3">

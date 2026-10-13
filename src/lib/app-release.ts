@@ -9,6 +9,18 @@ export const APP_RELEASE_LAST_SEEN_STORAGE_KEY = 'influencer-board-last-seen-rel
 
 export const APP_RELEASES: readonly AppRelease[] = [
   {
+    version: '1.4.0',
+    releasedAt: '2026-10-13',
+    title: '手机网页与邮件体验优化',
+    highlights: [
+      '手机浏览器现支持每日待办、邮件与 AI 回复、合作项目查询，点击左上角菜单即可切换。',
+      '手机发送邮件前可核对最终内容，确认后进入发送流程。',
+      'AI 回复界面更清楚：重点信息直接显示，详细分析按需展开。',
+      '手动回复和模板补充内容支持本机暂存，返回邮件目录后可继续编辑。',
+      '加强重复发送保护，优化键盘弹窗、操作按钮和开发台提示。',
+    ],
+  },
+  {
     version: '1.3.2',
     releasedAt: '2026-10-12',
     title: '合作视频跟进优化',

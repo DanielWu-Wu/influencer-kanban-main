@@ -1388,10 +1388,10 @@ export function EmailDetail({
   };
 
   return (
-    <div className="email-detail-container material-reading flex h-full min-h-0 flex-col overflow-hidden">
+    <div className="email-detail-container material-reading flex h-full min-h-0 flex-col overflow-hidden" data-composer-open={composerState === 'expanded'}>
       {/* 头部 */}
       <div className="material-toolbar flex items-center justify-between border-b border-border/55 px-4 py-3">
-        <div className="flex items-center gap-3">
+        <div className="flex min-w-0 flex-1 items-center gap-3">
           <Button
             variant="ghost"
             size="icon"
@@ -1411,7 +1411,7 @@ export function EmailDetail({
                   {thread.messages.length} 封邮件 · 查看参与者（{threadParticipants.length}）
                 </Button>
               </PopoverTrigger>
-              <PopoverContent align="start" className="flex w-96 flex-col gap-3">
+              <PopoverContent align="start" className="flex w-96 max-w-[calc(100vw-1rem)] flex-col gap-3">
                 <div>
                   <p className="text-sm font-medium">邮件线程参与者</p>
                   <p className="text-xs text-muted-foreground">根据{providerLabel}的发件人、收件人和抄送信息汇总。</p>
@@ -1992,7 +1992,7 @@ export function EmailDetail({
         {/* 回复区域：关闭时为底部入口，展开时为右侧或下方独立工作区。 */}
         <div className="email-reply-composer min-h-0 min-w-0 overflow-hidden bg-white">
           {composerState === 'closed' ? (
-            <div className="material-toolbar flex items-center justify-center gap-3 border-t border-border/55 p-4">
+            <div className="mobile-reply-entry material-toolbar flex items-center justify-center gap-3 border-t border-border/55 p-4">
               <Button
                 variant="outline"
                 className="h-10 flex-1 rounded-lg bg-white/80"
@@ -2051,7 +2051,7 @@ export function EmailDetail({
               onValueChange={(value) => openReplyComposer(value as ReplyMode)}
               className="shrink-0 gap-0 border-b border-border/55 bg-muted/20 p-2"
             >
-              <TabsList className="grid h-10 w-full grid-cols-3">
+              <TabsList className="mail-reply-mode-tabs grid h-10 w-full grid-cols-3">
                 <TabsTrigger value="compose">手动回复</TabsTrigger>
                 <TabsTrigger value="template">AI 模板起草</TabsTrigger>
                 <TabsTrigger value="ai">AI 辅助回复</TabsTrigger>

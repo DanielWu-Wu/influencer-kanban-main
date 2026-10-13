@@ -52,6 +52,7 @@ import { GmailSignatureSettings } from '@/components/gmail-signature-settings';
 import { MailAccountSwitcher } from '@/components/mail-account-switcher';
 import { NewEmailComposer } from '@/components/new-email-composer';
 import { getEditableMailDraft, type EditableMailDraft } from '@/lib/mail-draft-edit';
+import { useMobileLayout } from '@/lib/use-mobile-layout';
 import {
   collectUnreadMailTargets,
   copyMailThreadReadState,
@@ -799,9 +800,11 @@ export function TencentExmailPage({
   }, [selection.request, selectedThread]);
 
   const unreadCount = threads.filter((thread) => thread.hasUnread).length;
+  const mobile = useMobileLayout();
+  const displayAvatarOnly = !mobile && threadListAvatarOnly;
 
   return (
-    <div ref={workbenchRef} className="app-workbench flex h-full min-h-0 overflow-hidden rounded-xl [--gmail-thread-list-width:460px]">
+    <div ref={workbenchRef} className="mobile-mail-workbench app-workbench flex h-full min-h-0 overflow-hidden rounded-xl [--gmail-thread-list-width:460px]">
       <aside className={`material-navigation hidden shrink-0 flex-col overflow-hidden py-3 transition-[width,opacity,padding,border-color] duration-[240ms] ease-out motion-reduce:transition-none md:flex ${detailExpanded ? 'w-0 border-r-0 border-transparent px-0 opacity-0 xl:w-44 xl:border-r xl:border-white/55 xl:px-3 xl:opacity-100' : 'w-44 border-r border-white/55 px-3 opacity-100'}`}>
         <div className="mb-3"><MailAccountSwitcher placement="mailbox-sidebar" onManage={onManageMailAccounts} /></div>
         <Button className="mb-3 h-11 w-full justify-start gap-3 rounded-lg px-3 shadow-apple" onClick={() => { setEditDraft(null); setShowNewEmail(true); }}>
@@ -809,26 +812,26 @@ export function TencentExmailPage({
         </Button>
         <nav className="space-y-1">
           {MAILBOXES.map(({ id, label, icon: Icon }) => (
-            <Button key={id} variant={!showSettings && mailbox === id ? 'secondary' : 'ghost'} className={`h-10 w-full justify-start gap-3 rounded-lg px-3 font-normal ${!showSettings && mailbox === id ? 'bg-primary/[0.08] text-primary shadow-[inset_2px_0_0_var(--primary)]' : 'hover:bg-white/72'}`} onClick={() => handleMailboxChange(id)}>
+            <Button key={id} variant={!showSettings && mailbox === id ? 'secondary' : 'ghost'} data-active={!showSettings && mailbox === id} className={`mailbox-nav-item h-10 w-full justify-start gap-3 rounded-lg px-3 font-normal ${!showSettings && mailbox === id ? 'bg-primary/[0.08] text-primary shadow-[inset_2px_0_0_var(--primary)]' : 'hover:bg-white/72'}`} onClick={() => handleMailboxChange(id)}>
               <Icon className="h-4 w-4" />{label}
             </Button>
           ))}
         </nav>
         <div className="my-3 border-t border-white/60" />
-        <Button variant={showSettings ? 'secondary' : 'ghost'} className={`h-10 w-full justify-start gap-3 rounded-lg px-3 font-normal ${showSettings ? 'bg-primary/[0.08] text-primary shadow-[inset_2px_0_0_var(--primary)]' : 'hover:bg-white/72'}`} onClick={() => { setShowSettings(true); setDetailExpanded(false); setSelectedThread(null); }}>
+        <Button variant={showSettings ? 'secondary' : 'ghost'} data-active={showSettings} className={`mailbox-nav-item h-10 w-full justify-start gap-3 rounded-lg px-3 font-normal ${showSettings ? 'bg-primary/[0.08] text-primary shadow-[inset_2px_0_0_var(--primary)]' : 'hover:bg-white/72'}`} onClick={() => { setShowSettings(true); setDetailExpanded(false); setSelectedThread(null); }}>
           <Settings className="h-4 w-4" />设置
         </Button>
       </aside>
 
       {!showSettings && (
-        <div ref={threadListRef} data-testid="tencent-thread-list-pane" data-avatar-only={detailExpanded && threadListAvatarOnly ? 'true' : 'false'} className={`material-content flex min-h-0 min-w-0 flex-col overflow-hidden border-r border-border/55 motion-reduce:transition-none ${resizingThreadList ? 'transition-none' : 'transition-[flex-grow,flex-basis,opacity] duration-[240ms] ease-out'} ${detailExpanded ? 'pointer-events-none flex-[0_1_0%] opacity-0 lg:pointer-events-auto lg:flex-[0_0_var(--gmail-thread-list-width)] lg:opacity-100' : 'flex-[1_1_0%] opacity-100'}`}>
+        <div ref={threadListRef} data-testid="tencent-thread-list-pane" data-detail-open={detailExpanded} data-avatar-only={detailExpanded && threadListAvatarOnly ? 'true' : 'false'} className={`material-content flex min-h-0 min-w-0 flex-col overflow-hidden border-r border-border/55 motion-reduce:transition-none ${resizingThreadList ? 'transition-none' : 'transition-[flex-grow,flex-basis,opacity] duration-[240ms] ease-out'} ${detailExpanded ? 'pointer-events-none flex-[0_1_0%] opacity-0 lg:pointer-events-auto lg:flex-[0_0_var(--gmail-thread-list-width)] lg:opacity-100' : 'flex-[1_1_0%] opacity-100'}`}>
           <div className="material-toolbar flex shrink-0 gap-1 overflow-x-auto border-b border-border/55 p-2 md:hidden">
             <Button size="sm" className="shrink-0 gap-2 rounded-lg" onClick={() => { setEditDraft(null); setShowNewEmail(true); }}><FilePenLine className="h-4 w-4" />写信</Button>
-            {MAILBOXES.map(({ id, label, icon: Icon }) => <Button key={id} variant={mailbox === id ? 'secondary' : 'ghost'} size="sm" className="shrink-0 gap-2 rounded-lg" onClick={() => handleMailboxChange(id)}><Icon className="h-4 w-4" />{label}</Button>)}
+            {MAILBOXES.map(({ id, label, icon: Icon }) => <Button key={id} variant={mailbox === id ? 'secondary' : 'ghost'} data-active={mailbox === id} size="sm" className="shrink-0 gap-2 rounded-lg" onClick={() => handleMailboxChange(id)}><Icon className="h-4 w-4" />{label}</Button>)}
             <Button variant="ghost" size="sm" className="shrink-0 gap-2 rounded-lg" onClick={() => { setShowSettings(true); setDetailExpanded(false); setSelectedThread(null); }}><Settings className="h-4 w-4" />设置</Button>
           </div>
 
-          {!threadListAvatarOnly && (
+          {!displayAvatarOnly && (
             <>
               <div className="material-toolbar flex shrink-0 items-center justify-between border-b border-border/55 px-4 py-3">
                 <div className="min-w-0">
@@ -844,7 +847,7 @@ export function TencentExmailPage({
                 <div className="relative">
                   <Search className="absolute left-3 top-2.5 h-4 w-4 text-muted-foreground" />
                   <Input placeholder="搜索全部邮件（发件人、收件人、主题或正文）" value={query} onChange={(event) => setQuery(event.target.value)} className="glass-control h-10 border-0 pl-9 pr-20" />
-                  {query && <button type="button" onClick={() => { setQuery(''); setSearch(''); setPage(0); }} className="absolute right-2 top-2 h-6 rounded px-2 text-xs text-muted-foreground hover:bg-white/80">清空</button>}
+                  {query && <button type="button" onClick={() => { setQuery(''); setSearch(''); setPage(0); }} className="light-control absolute right-2 top-2 h-6 rounded px-2 text-xs text-muted-foreground hover:bg-white/80">清空</button>}
                 </div>
                 <div className="mt-1.5 flex items-center justify-between px-1 text-[10px] text-muted-foreground">
                   <span>{search ? `正在搜索“${search}”` : '搜索覆盖收件箱、已发送和草稿'}</span>
@@ -875,7 +878,7 @@ export function TencentExmailPage({
               const rowBackgroundClass = visuallyUnread
                 ? 'bg-primary/[0.055] hover:bg-primary/[0.075]'
                 : `${showSelectedReadBackground ? '!bg-white ' : ''}hover:bg-white/82`;
-              if (threadListAvatarOnly) {
+              if (displayAvatarOnly) {
                 return <button key={thread.id} type="button" title={`${sender} · ${thread.subject || '(无主题)'}`} onClick={() => void openThread(thread)} className={`flex w-full items-center justify-center border-b border-border/45 py-3 outline-none ${showSelectedIndicator ? 'shadow-[inset_2px_0_0_var(--primary)]' : ''} ${rowBackgroundClass}`}><span className={`flex h-9 w-9 items-center justify-center rounded-full text-xs font-semibold ${visuallyUnread ? 'bg-primary text-primary-foreground' : 'bg-muted text-muted-foreground'}`}>{sender.slice(0, 1).toUpperCase()}</span></button>;
               }
               return (
@@ -894,7 +897,7 @@ export function TencentExmailPage({
             })}
           </div>
 
-          {!threadListAvatarOnly && <div className="flex shrink-0 items-center justify-between border-t border-white/55 bg-white/55 px-3 py-2 text-xs text-muted-foreground"><Button variant="outline" size="sm" className="h-8 gap-1 rounded-lg px-2 text-xs" disabled={loading || page === 0} onClick={() => setPage((current) => Math.max(0, current - 1))}><ChevronLeft className="h-3.5 w-3.5" />上一页</Button><span>第 {page + 1} 页 · 共 {total} 封</span><Button variant="outline" size="sm" className="h-8 gap-1 rounded-lg px-2 text-xs" disabled={loading || !hasNextPage} onClick={() => setPage((current) => current + 1)}>下一页<ChevronRight className="h-3.5 w-3.5" /></Button></div>}
+          {!displayAvatarOnly && <div className="flex shrink-0 items-center justify-between border-t border-white/55 bg-white/55 px-3 py-2 text-xs text-muted-foreground"><Button variant="outline" size="sm" className="h-8 gap-1 rounded-lg px-2 text-xs" disabled={loading || page === 0} onClick={() => setPage((current) => Math.max(0, current - 1))}><ChevronLeft className="h-3.5 w-3.5" />上一页</Button><span>第 {page + 1} 页 · 共 {total} 封</span><Button variant="outline" size="sm" className="h-8 gap-1 rounded-lg px-2 text-xs" disabled={loading || !hasNextPage} onClick={() => setPage((current) => current + 1)}>下一页<ChevronRight className="h-3.5 w-3.5" /></Button></div>}
         </div>
       )}
 

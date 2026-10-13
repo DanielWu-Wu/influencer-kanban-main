@@ -112,7 +112,7 @@ export function GmailSettings() {
           )}
 
           <div className="rounded-xl bg-muted/50 p-4 space-y-3">
-            <button className="w-full flex items-center justify-between" onClick={() => setShowGuide(!showGuide)}>
+            <button className="light-control w-full flex items-center justify-between" onClick={() => setShowGuide(!showGuide)}>
               <div className="flex items-center gap-2">
                 <HelpCircle className="w-4 h-4 text-muted-foreground" />
                 <span className="font-medium">{text.guide}</span>

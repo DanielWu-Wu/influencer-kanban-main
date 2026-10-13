@@ -384,7 +384,7 @@ export function InfluencerImportTab({
         <Button
           onClick={() => onQuickOnboard(selected)}
           disabled={!canQuickOnboard || preparingQuickPreview || checkingDedupe || writingFeishu}
-          title="每次主动点击发起新一轮；已有资源档案复用，历史开发记录保留。未完成任务使用行内重试。"
+          title="未建档的红人：新建红人档案和本轮开发记录；已建档的红人：复用档案，只新建本轮开发记录。"
         >
           {writingFeishu ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <UserCheck className="mr-2 h-4 w-4" />}
           {writingFeishu ? '正在建档…' : `建档并进入邀约（${selected.filter(canStartProspectRound).length}）`}
@@ -466,7 +466,7 @@ export function InfluencerImportTab({
 
       <label className="flex items-center gap-2 text-xs text-muted-foreground">
         <Checkbox checked={showHistory} onCheckedChange={(checked) => setShowHistory(checked === true)} />
-        显示历史轮次（{historyProspects.length}），选择后可发起新一轮，原邮件和草稿保留
+        历史开发记录（{historyProspects.length}）
       </label>
 
       <div className="min-h-0 flex-1 overflow-auto rounded-lg border border-border/70 bg-white/70">
@@ -688,7 +688,7 @@ export function InfluencerImportTab({
               );
             })}
             {visibleProspects.length === 0 && (
-              <TableRow>
+              <TableRow className="hover:bg-transparent">
                 <TableCell colSpan={10} className="h-44 text-center">
                   <Youtube className="mx-auto mb-2 h-8 w-8 text-muted-foreground" />
                   <p className="font-medium">{prospects.length ? '没有符合筛选条件的线索' : '还没有录入红人'}</p>

@@ -49,7 +49,7 @@ function AccountTranscriptSettings({ expanded, onToggle, account }: TranscriptSe
     finally { setBusy(false); }
   }
   return <Card>
-    <button type="button" onClick={onToggle} className="w-full text-left"><CardHeader>
+    <button type="button" onClick={onToggle} className="light-control w-full text-left"><CardHeader>
       <CardTitle className="text-base">YouTube 字幕服务 · Apify</CardTitle>
       <CardDescription>用于合作视频检测，按需读取公开字幕</CardDescription>
     </CardHeader></button>

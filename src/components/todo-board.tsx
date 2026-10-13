@@ -326,16 +326,16 @@ export function TodoBoard({
           >
             <RotateCcw />
           </Button>
-          <button type="button" onClick={() => onOpenGmail(entry.item)} className="flex h-7 w-7 shrink-0 items-center justify-center rounded-md text-blue-600 hover:bg-blue-50" aria-label={`查看“${entry.item.channelName}”的邮件线程`} title="打开该邮件线程"><ArrowRight className="h-3.5 w-3.5" /></button>
+          <button type="button" onClick={() => onOpenGmail(entry.item)} className="light-control flex h-7 w-7 shrink-0 items-center justify-center rounded-md text-blue-600 hover:bg-blue-50" aria-label={`查看“${entry.item.channelName}”的邮件线程`} title="打开该邮件线程"><ArrowRight className="h-3.5 w-3.5" /></button>
         </div>
       ))}
     </div>
   );
 
   return (
-    <div className="h-full flex flex-col">
+    <div className="mobile-todo-board h-full min-h-0 flex flex-col">
       {/* 头部 */}
-      <div className="material-toolbar -mx-1 mb-4 flex items-center justify-between rounded-xl border border-border/50 px-4 py-3 shadow-[var(--glass-shadow-soft)]">
+      <div className="material-toolbar -mx-1 mb-4 flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between rounded-xl border border-border/50 px-4 py-3 shadow-[var(--glass-shadow-soft)]">
         <div className="flex items-center gap-3">
           <div className="flex h-10 w-10 items-center justify-center rounded-[10px] border border-primary/15 bg-primary shadow-[0_6px_16px_rgba(24,119,242,0.18)]">
             <Sparkles className="w-5 h-5 text-white" />
@@ -463,7 +463,7 @@ export function TodoBoard({
                 </div>
                 <div className="flex shrink-0 items-center opacity-45 transition-opacity duration-150 ease-out group-hover:opacity-100 group-focus-within:opacity-100 motion-reduce:transition-none">
                   <ProjectReminderLink todo={entry.todo} onOpen={onOpenProjectReminder} />
-                  <button type="button" onClick={() => openEditDialog(entry.todo)} className="flex h-7 w-7 items-center justify-center rounded-md text-blue-600 hover:bg-blue-50" aria-label={`编辑“${entry.todo.title}”`} title="编辑任务">
+                  <button type="button" onClick={() => openEditDialog(entry.todo)} className="light-control flex h-7 w-7 items-center justify-center rounded-md text-blue-600 hover:bg-blue-50" aria-label={`编辑“${entry.todo.title}”`} title="编辑任务">
                     <Pencil className="h-3.5 w-3.5" />
                   </button>
                   <button type="button" onClick={() => onDelete(entry.todo.id)} className="flex h-7 w-7 items-center justify-center rounded-md text-slate-400 hover:bg-red-50 hover:text-red-500" aria-label={`删除“${entry.todo.title}”`} title="删除任务">
@@ -495,7 +495,7 @@ export function TodoBoard({
                 >
                   <Check />
                 </Button>
-                <button type="button" onClick={() => onOpenGmail(entry.item)} className="flex h-7 w-7 shrink-0 items-center justify-center rounded-md text-blue-600 opacity-45 transition-[opacity,background-color] duration-150 ease-out hover:bg-blue-50 group-hover:opacity-100 group-focus-within:opacity-100 motion-reduce:transition-none" aria-label={`查看“${entry.item.channelName}”的邮件线程`} title="打开该邮件线程">
+                <button type="button" onClick={() => onOpenGmail(entry.item)} className="light-control flex h-7 w-7 shrink-0 items-center justify-center rounded-md text-blue-600 opacity-45 transition-[opacity,background-color] duration-150 ease-out hover:bg-blue-50 group-hover:opacity-100 group-focus-within:opacity-100 motion-reduce:transition-none" aria-label={`查看“${entry.item.channelName}”的邮件线程`} title="打开该邮件线程">
                   <ArrowRight className="h-3.5 w-3.5" />
                 </button>
               </article>
@@ -539,7 +539,7 @@ export function TodoBoard({
 
       {/* 添加/编辑弹窗 */}
       <Dialog open={dialogMode !== null} onOpenChange={(open) => { if (!open) setDialogMode(null); }}>
-        <DialogContent className="sm:max-w-md">
+        <DialogContent className="mobile-todo-dialog sm:max-w-md" aria-describedby={undefined}>
           <DialogHeader>
             <DialogTitle className="flex items-center gap-2">
               {dialogMode === 'edit' ? <Pencil className="w-5 h-5" /> : <Plus className="w-5 h-5" />}
@@ -566,7 +566,7 @@ export function TodoBoard({
                 className="min-h-[120px] resize-y"
               />
             </div>
-            <div className="grid grid-cols-[90px_1fr_1fr] gap-3">
+            <div className="grid grid-cols-2 sm:grid-cols-[90px_1fr_1fr] gap-3">
               <div className="space-y-2">
                 <label className="text-sm font-medium">优先级</label>
                 <Select

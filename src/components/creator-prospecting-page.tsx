@@ -3550,10 +3550,6 @@ export function CreatorProspectingPage({
             <p className="text-sm text-muted-foreground">从频道录入到 Gmail 草稿的人工确认式线索流程</p>
           </div>
         </div>
-        <div className="flex items-center gap-2 text-xs text-muted-foreground">
-          <CheckCircle2 className="h-4 w-4 text-emerald-600" />
-          只创建 Gmail 草稿，不会自动发送邮件
-        </div>
       </header>
 
       {writeReviewId && (() => {
@@ -3595,8 +3591,10 @@ export function CreatorProspectingPage({
             <button
               key={tab.id}
               type="button"
+              data-active={active}
+              aria-pressed={active}
               onClick={() => setActiveTab(tab.id)}
-              className={`relative flex min-h-12 items-center gap-2 px-4 text-sm font-medium transition-colors ${
+              className={`light-control relative flex min-h-12 items-center gap-2 px-4 text-sm font-medium transition-colors ${
                 active ? 'text-primary' : 'text-muted-foreground hover:text-foreground'
               }`}
             >

@@ -147,7 +147,7 @@ function ConfidenceIcon({ confidence, label }: { confidence: number; label: stri
       <TooltipTrigger asChild>
         <button
           type="button"
-          className={`inline-flex h-8 w-8 items-center justify-center rounded-md focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring ${className}`}
+          className={`light-control inline-flex h-8 w-8 items-center justify-center rounded-md focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring ${className}`}
           aria-label={`${label} ${confidence}%`}
         >
           <Icon className="h-4 w-4" />

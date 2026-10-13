@@ -88,6 +88,8 @@ import {
 import type { MailAccount, MailDraftLocator } from '@/lib/mail-accounts';
 import { createTencentClientMessageId, saveTencentMailDraft, sendTencentMailNow } from '@/lib/tencent-mail-transport';
 import { useDelayedEmailSender } from './delayed-email-provider';
+import { useLocalReplyText } from '@/lib/use-local-reply-text';
+import { useMobileMailSendReview } from './mobile-mail-send-review';
 import { getMailReplyApproval } from '@/lib/mail-reply-draft';
 import {
   EMAIL_TRANSLATION_RETRY_OPERATION,
@@ -163,7 +165,7 @@ export function AITemplateReplyComposer({
   const { addDraft } = useEmailDrafts();
   const { auth, connect } = useGmailAuth();
   const { settings, loading: settingsLoading } = useSettings();
-  const { scheduleEmail } = useDelayedEmailSender();
+  const { scheduleEmail, tasks: sendTasks = [], cancelEmail, startNewReply } = useDelayedEmailSender();
   const {
     enqueueTask,
     getTaskById,
@@ -172,12 +174,20 @@ export function AITemplateReplyComposer({
     updateTaskAvatarByKey,
   } = useEmailGenerationTasks();
   const aiTemplates = useMemo(() => getAIReplyTemplates(templates), [templates]);
-  const [selectedTemplateId, setSelectedTemplateId] = useState('ai-reply-logistics');
+  const isTencent = mailAccount?.provider === 'tencent_exmail';
+  const providerLabel = isTencent ? '腾讯企业邮箱' : 'Gmail';
+  const ownEmail = mailAccount?.email || auth?.email || '';
+  const mailAccountId = mailAccount?.mailAccountId || `gmail:${ownEmail.toLowerCase()}`;
+  const inputIdentity = JSON.stringify([isTencent ? 'tencent_exmail' : 'gmail', mailAccountId, ownEmail.toLowerCase(),
+    thread.id, replyTarget?.messageId, replyTarget?.recipientEmail, replyTarget?.subject, replyTarget?.message?.body]);
+  const [selectedTemplateId, setSelectedTemplateId, , templateInputReady, hasSavedTemplate] = useLocalReplyText(inputIdentity, 'template-selection', 'ai-reply-logistics');
   const selectedTemplate = useMemo(
     () => aiTemplates.find((template) => template.id === selectedTemplateId) || aiTemplates[0],
     [aiTemplates, selectedTemplateId],
   );
-  const [userIdeas, setUserIdeas] = useState('');
+  const [userIdeas, setUserIdeas, inputWarning, factsInputReady, hasSavedFacts] = useLocalReplyText(inputIdentity, 'template-facts');
+  const replySendKey = JSON.stringify([getAccountCacheScope(), isTencent ? 'tencent_exmail' : 'gmail', mailAccountId, thread.id, replyTarget?.messageId]);
+  const replySendTask = sendTasks.find((task) => task.replyKey === replySendKey);
   const [targetLang, setTargetLang] = useState('en');
   const [targetLangNeedsConfirmation, setTargetLangNeedsConfirmation] = useState(false);
   const [replyTone, setReplyTone] = useState<ReplyTone>('friendly');
@@ -194,7 +204,10 @@ export function AITemplateReplyComposer({
   const [error, setError] = useState('');
   const [savingDraft, setSavingDraft] = useState(false);
   const [draftSaved, setDraftSaved] = useState(false);
-  const [sendState, setSendState] = useState<'idle' | 'preparing' | 'scheduled' | 'sent'>('idle');
+  const [localSendState, setSendState] = useState<'idle' | 'preparing' | 'scheduled' | 'sent'>('idle');
+  const sendState = replySendTask?.status === 'sent' ? 'sent'
+    : replySendTask?.status === 'countdown' || replySendTask?.status === 'sending' ? 'scheduled'
+      : localSendState === 'preparing' ? 'preparing' : 'idle';
   const sendGuardRef = useRef(false);
   const [sendWarning, setSendWarning] = useState('');
   const [confirmedForeign, setConfirmedForeign] = useState<GmailBilingualDraftSnapshot | null>(null);
@@ -209,10 +222,6 @@ export function AITemplateReplyComposer({
   const handledAutoRetryTaskRef = useRef('');
   const localDraftDirtyRef = useRef(false);
   const targetLangLockedRef = useRef(false);
-  const isTencent = mailAccount?.provider === 'tencent_exmail';
-  const providerLabel = isTencent ? '腾讯企业邮箱' : 'Gmail';
-  const ownEmail = mailAccount?.email || auth?.email || '';
-  const mailAccountId = mailAccount?.mailAccountId || `gmail:${ownEmail.toLowerCase()}`;
 
   const threadMessages = useMemo(() => buildThreadMessages(thread, replyTarget).map((message) => ({
     ...message,
@@ -340,6 +349,13 @@ export function AITemplateReplyComposer({
 
   useEffect(() => {
     if (!generationTask) return;
+    if (!factsInputReady || !templateInputReady) return;
+    const savedInput = generationTask.retryInput as { userIdeas?: string; selectedTemplateId?: string } | undefined;
+    // A previous generated task must not overwrite newer ungenerated facts or
+    // a different locally selected template after returning to the directory.
+    if (!restoreTaskId && ((hasSavedFacts && typeof savedInput?.userIdeas === 'string' && savedInput.userIdeas.trim() !== userIdeas.trim())
+      || (hasSavedTemplate && savedInput?.selectedTemplateId && savedInput.selectedTemplateId !== selectedTemplateId))) return;
+    if (replySendTask?.status === 'editing' && generationTask.createdAt <= replySendTask.targetAt) return;
     const rollback = generationTask.rollbackResult as {
       replyContent?: string;
       suggestion?: TemplateSuggestion | null;
@@ -353,6 +369,7 @@ export function AITemplateReplyComposer({
       rollback?.replyContent?.trim() || rollback?.editedChineseReply?.trim(),
     );
     if (generationTask.status === 'queued' || generationTask.status === 'running') {
+      if (appliedGenerationTaskRef.current === generationTask.id) return;
       setLoading(true);
       setError('');
       setStage(generationTask.stage);
@@ -360,11 +377,11 @@ export function AITemplateReplyComposer({
       if (!replacingExistingDraft && partial?.suggestedReply) setReplyContent(partial.suggestedReply);
       return;
     }
+    setLoading(false);
+    setStage('');
     if (appliedGenerationTaskRef.current === generationTask.id) return;
     if (localDraftDirtyRef.current) return;
     appliedGenerationTaskRef.current = generationTask.id;
-    setLoading(false);
-    setStage('');
 
     if (generationTask.status === 'failed' || generationTask.status === 'interrupted') {
       const retryInput = generationTask.retryInput as {
@@ -403,7 +420,7 @@ export function AITemplateReplyComposer({
       targetLang?: string;
       replyTone?: ReplyTone;
     } | undefined;
-    setUserIdeas(retryInput?.userIdeas || '');
+    setUserIdeas((current) => restoreTaskId ? retryInput?.userIdeas || '' : current || retryInput?.userIdeas || '');
     if (retryInput?.selectedTemplateId && retryInput.selectedTemplateId !== selectedTemplateId) {
       restoringTaskSettingsRef.current = true;
       setSelectedTemplateId(retryInput.selectedTemplateId);
@@ -423,7 +440,8 @@ export function AITemplateReplyComposer({
     setSyncedTargetLang(result.targetLang);
     setTranslationOpen(true);
     setError('');
-  }, [generationTask, selectedTemplateId]);
+  }, [generationTask, restoreTaskId, selectedTemplateId, setSelectedTemplateId, setUserIdeas, replySendTask,
+    factsInputReady, templateInputReady, hasSavedFacts, hasSavedTemplate, userIdeas]);
 
   useEffect(() => {
     if (!requestedGenerationTask || requestedTaskMatchesContext) return;
@@ -437,6 +455,7 @@ export function AITemplateReplyComposer({
 
   useEffect(() => {
     if (!translationTask) return;
+    if (replySendTask?.status === 'editing' && translationTask.createdAt <= replySendTask.targetAt) return;
     if (translationTask.status === 'queued' || translationTask.status === 'running') {
       setTranslatingChinese(true);
       setError('');
@@ -485,7 +504,7 @@ export function AITemplateReplyComposer({
       targetLanguage: translationResult.targetLang,
     });
     setError('');
-  }, [editedChineseReply, restoringRequestedTranslationTask, settings.emailSignature, suggestion, targetLang, translationTask]);
+  }, [editedChineseReply, restoringRequestedTranslationTask, settings.emailSignature, suggestion, targetLang, translationTask, replySendTask]);
 
   const getAccessToken = async (signal?: AbortSignal) => {
     if (!auth?.accessToken) throw new Error('请先连接 Gmail。');
@@ -956,6 +975,7 @@ export function AITemplateReplyComposer({
       if (isTencent && !mailAccount) throw new Error('腾讯企业邮箱账号不可用。');
       const messageId = isTencent ? createTencentClientMessageId(ownEmail) : '';
       scheduleEmail({
+        replyKey: replySendKey,
         accessToken, raw, threadId: isTencent ? undefined : thread.id,
         recipient, delaySeconds, providerLabel, sourceEmail: ownEmail,
         execute: isTencent && mailAccount ? async (signal) => {
@@ -965,7 +985,7 @@ export function AITemplateReplyComposer({
           const sentCopy = result.sentCopy as { synced?: boolean; warning?: string } | undefined;
           if (sentCopy?.synced === false) setSendWarning(sentCopy.warning || '邮件已发送，但已发送文件夹同步失败，请勿重复发送。');
         } : undefined,
-        onSent: () => { setSendState('sent'); },
+        onSent: () => { setUserIdeas(''); setSendState('sent'); },
         onCancel: () => {
           sendGuardRef.current = false;
           setSendState('idle');
@@ -985,8 +1005,20 @@ export function AITemplateReplyComposer({
     }
   };
 
+  const { requestSend, reviewDialog } = useMobileMailSendReview({
+    from: ownEmail || providerLabel,
+    to: recipientEmail,
+    subject: replyTarget ? buildGmailReplySubject(replyTarget) : thread.subject,
+    html: appendEmailSignature(stripConfiguredEmailSignature(replyContent, settings.emailSignature), getEmailSignatureForContext(settings.emailSignature, settings.emailSignatureScope, 'regular')),
+    attachmentNames: [],
+    identity: JSON.stringify([mailAccountId, thread.id, replyTarget?.messageId, targetLang, editedChineseReply]),
+    blocked: Boolean(sendBlockReason),
+    onSend: sendEmail,
+  });
+
   return (
     <div className="@container/email-composer flex h-full min-h-0 min-w-0 max-w-full flex-col overflow-x-hidden bg-white">
+      {reviewDialog}
       {!embedded ? <div className="flex h-14 shrink-0 items-center gap-3 border-b px-4">
         <span className="flex size-8 items-center justify-center rounded-lg bg-primary/10 text-primary">
           <FileText className="size-4" />
@@ -1234,12 +1266,19 @@ export function AITemplateReplyComposer({
         </div>
       </ScrollArea>
 
-      <div className="flex shrink-0 flex-wrap items-center justify-between gap-3 border-t bg-white px-4 py-3">
+      <div className="mobile-template-footer flex shrink-0 flex-wrap items-center justify-between gap-3 border-t bg-white px-4 py-3">
         <div className="min-w-0 text-xs text-muted-foreground">
           <p className="break-all">收件人：{recipientEmail || '保存草稿前需确认'}</p>
           {sendBlockReason && <p role="status">{sendBlockReason}</p>}
-          {sendState === 'scheduled' && <p>请在右下角查看倒计时，结束前可点击“取消发送”。</p>}
+          {inputWarning && <p role="status" className="text-amber-700">{inputWarning}</p>}
+          {replySendTask?.status === 'error' && <p role="alert" className="text-destructive">{replySendTask.error}；重试前请先核对已发送文件夹，避免重复发送。</p>}
+          {sendState === 'scheduled' && <p>邮件正在等待发送。{replySendTask?.status === 'countdown' && <Button variant="link" size="sm" onClick={() => cancelEmail(replySendTask.id)}>取消发送</Button>}</p>}
           {sendState === 'sent' && <p role="status">邮件已发送。{draftSaved ? '原邮箱草稿仍保留，请勿重复发送。' : ''}</p>}
+          {sendState === 'sent' && <Button variant="link" size="sm" onClick={() => {
+            startNewReply(replySendKey); setSendState('idle'); sendGuardRef.current = false;
+            setReplyContent(''); setEditedChineseReply(''); setUserIdeas('');
+            setSuggestion(null); setSynchronizedDraft(null); setConfirmedForeign(null); setSendWarning('');
+          }}>撰写另一封回复</Button>}
           {sendWarning && <p role="status">{sendWarning}</p>}
         </div>
         <div className="flex flex-wrap justify-end gap-2">
@@ -1254,7 +1293,7 @@ export function AITemplateReplyComposer({
           <Button variant="outline" disabled={sendLocked || !userIdeas.trim() || loading || translatingChinese} onClick={generate}>
             <RefreshCw />重新生成
           </Button>
-          <Button variant="outline" disabled={Boolean(sendBlockReason)} onClick={sendEmail}>
+          <Button variant="outline" disabled={Boolean(sendBlockReason)} onClick={requestSend}>
             {sendState === 'preparing' || sendState === 'scheduled' ? <Loader2 className="animate-spin" data-icon="inline-start" /> : <Send data-icon="inline-start" />}
             {sendState === 'sent' ? '已发送' : sendState === 'scheduled' ? '等待发送' : sendState === 'preparing' ? '准备发送…' : '直接发送'}
           </Button>

@@ -524,7 +524,7 @@ export default function PromptManager({ mode = 'general' }: { mode?: PromptManag
             <Card key={section.type} className="overflow-hidden rounded-xl border-border/55 bg-white/84 shadow-[var(--glass-shadow-soft)] backdrop-blur-xl">
               <button
                 type="button"
-                className="w-full text-left"
+                className="light-control w-full text-left"
                 onClick={() => setExpandedSection(expanded ? null : section.type)}
                 aria-expanded={expanded}
               >

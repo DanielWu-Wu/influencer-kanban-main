@@ -895,7 +895,8 @@ export function OutreachEmailTab({
                                       <button
                                         key={`${option.subject}-${index}`}
                                         type="button"
-                                        className={`rounded-md border p-2 text-left transition-colors ${
+                                        aria-pressed={isSelected}
+                                        className={`light-control rounded-md border p-2 text-left ${
                                           isSelected
                                             ? 'border-primary/50 bg-primary/5'
                                             : 'border-border/70 bg-slate-50 hover:border-primary/40 hover:bg-white'

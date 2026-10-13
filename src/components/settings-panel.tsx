@@ -374,7 +374,7 @@ export function SettingsPanel() {
           <button
             type="button"
             onClick={() => toggleSection('model')}
-            className="w-full text-left"
+            className="light-control w-full text-left"
           >
             <CardHeader className="pb-3">
               <div className="flex items-center justify-between">
@@ -580,7 +580,7 @@ export function SettingsPanel() {
           <button
             type="button"
             onClick={() => toggleSection('brand')}
-            className="w-full text-left"
+            className="light-control w-full text-left"
           >
             <CardHeader className="pb-3">
               <div className="flex items-center justify-between">
@@ -645,7 +645,7 @@ export function SettingsPanel() {
           <button
             type="button"
             onClick={() => toggleSection('followup')}
-            className="w-full text-left"
+            className="light-control w-full text-left"
           >
             <CardHeader className="pb-3">
               <div className="flex items-center justify-between">
@@ -699,7 +699,7 @@ export function SettingsPanel() {
           <button
             type="button"
             onClick={() => toggleSection('about')}
-            className="w-full text-left"
+            className="light-control w-full text-left"
           >
             <CardHeader className="pb-3">
               <div className="flex items-center justify-between">

@@ -11,6 +11,7 @@ import { SettingsProvider } from '@/components/settings-provider';
 import { EmailGenerationTaskProvider } from '@/components/email-generation-task-provider';
 import { MailAccountProvider } from '@/components/mail-account-provider';
 import { EMAIL_GENERATION_TOASTER_ID } from '@/lib/email-generation-tasks';
+import { MobileViewport } from '@/components/mobile-viewport';
 
 export const metadata: Metadata = {
   title: {
@@ -50,6 +51,7 @@ export default function RootLayout({
   return (
     <html lang="zh-CN" suppressHydrationWarning>
       <body className="antialiased">
+        <MobileViewport />
         <AuthProvider>
           <GmailAuthProvider>
             <MailAccountProvider>

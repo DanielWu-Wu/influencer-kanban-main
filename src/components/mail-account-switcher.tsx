@@ -30,7 +30,7 @@ export function MailAccountSwitcher({
           variant="outline"
           className={inMailboxSidebar
             ? 'h-9 w-full min-w-0 justify-start gap-2 rounded-lg border-white/65 bg-white/55 px-2 shadow-sm hover:bg-white/80'
-            : 'h-9 max-w-[280px] gap-2 rounded-lg bg-white/75 px-3 shadow-sm'}
+            : 'h-9 max-w-[180px] sm:max-w-[280px] gap-2 rounded-lg bg-white/75 px-3 shadow-sm'}
           aria-label={activeAccount ? `切换邮箱，当前为${activeAccount.email}` : '选择邮箱'}
           title={activeAccount?.email || '选择邮箱'}
         >
@@ -45,7 +45,7 @@ export function MailAccountSwitcher({
           <ChevronDown className="h-3.5 w-3.5 shrink-0 text-muted-foreground" />
         </Button>
       </DropdownMenuTrigger>
-      <DropdownMenuContent align={inMailboxSidebar ? 'start' : 'end'} className="w-80">
+      <DropdownMenuContent align={inMailboxSidebar ? 'start' : 'end'} className="w-80 max-w-[calc(100vw-1rem)]">
         <DropdownMenuLabel>切换邮箱</DropdownMenuLabel>
         {accounts.map((account) => (
           <DropdownMenuItem

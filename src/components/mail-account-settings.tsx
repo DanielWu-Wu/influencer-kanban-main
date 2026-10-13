@@ -108,7 +108,7 @@ export function MailAccountSettings({
 
   return (
     <Card className="overflow-hidden rounded-xl border-border/55 bg-white/84 shadow-[var(--glass-shadow-soft)] backdrop-blur-xl">
-      <button type="button" onClick={onToggle} className="w-full text-left">
+      <button type="button" onClick={onToggle} className="light-control w-full text-left">
         <CardHeader className="pb-3">
           <div className="flex items-center justify-between">
             <div className="flex items-center gap-3">
