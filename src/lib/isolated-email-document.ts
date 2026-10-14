@@ -27,6 +27,7 @@ body { font: 14px/1.5 Arial, sans-serif; color: #202124; overflow-wrap: anywhere
 img { max-width: 100% !important; height: auto !important; }
 a { color: #2563eb; }
 ${mobile ? `/* Constrain ordinary mail blocks; wide tables/pre keep their original content and local scrolling. */
+body { font-size: 16px; line-height: 1.6; }
 :where(p, div, blockquote, section, article) { box-sizing: border-box !important; min-width: 0 !important; max-width: 100% !important; overflow-wrap: anywhere !important; white-space: normal !important; }
 pre { max-width: 100% !important; overflow-x: auto !important; }
 ` : ''}

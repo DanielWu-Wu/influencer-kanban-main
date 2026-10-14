@@ -8,6 +8,8 @@ export function MobileViewport() {
     const viewport = window.visualViewport;
     const root = document.documentElement;
     let pendingFrame = 0;
+    let layoutWidth = window.innerWidth;
+    let unobscuredHeight = window.innerHeight;
     const update = () => {
       const mobile = window.matchMedia(MOBILE_QUERY).matches;
       const active = document.activeElement;
@@ -15,7 +17,14 @@ export function MobileViewport() {
       // A zoomed viewport alone is not a keyboard. Scale back to layout pixels
       // to distinguish pinch zoom from the extra height lost to an input method.
       const normalScale = viewport && Math.abs(viewport.scale - 1) < 0.01;
-      const keyboard = Boolean(mobile && editing && viewport && window.innerHeight - viewport.height * viewport.scale > 150);
+      // iOS standalone/third-party keyboards can shrink innerHeight as well as
+      // visualViewport. Retain the height before editing, resetting on rotation.
+      if (layoutWidth !== window.innerWidth) {
+        layoutWidth = window.innerWidth;
+        unobscuredHeight = window.innerHeight;
+      }
+      unobscuredHeight = Math.max(unobscuredHeight, window.innerHeight);
+      const keyboard = Boolean(mobile && editing && viewport && unobscuredHeight - viewport.height * viewport.scale > 150);
       const followViewport = viewport && (normalScale || keyboard);
       const height = followViewport ? viewport.height : window.innerHeight;
       root.style.setProperty('--mobile-visible-height', `${height}px`);

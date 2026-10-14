@@ -18,7 +18,7 @@ import {
   Database, Save, CheckCircle2, XCircle,
   ExternalLink, X,
   FileText,
-  CornerUpLeft,
+  CornerUpLeft, Bot,
   Users,
 } from 'lucide-react';
 import { EmailComposer } from './email-composer';
@@ -532,7 +532,7 @@ export function EmailDetail({
   const creatorProfile = creatorProfileState.lookupKey === creatorProfileLookupKey
     ? creatorProfileState.profile
     : null;
-  const { appendLog } = useRecordAssistant();
+  const { appendLog, openAssistant } = useRecordAssistant();
   const {
     tasks: emailGenerationTasks,
     updateTaskAvatarByKey,
@@ -1418,6 +1418,7 @@ export function EmailDetail({
               <PopoverContent align="start" className="flex w-96 max-w-[calc(100vw-1rem)] flex-col gap-3">
                 <div>
                   <p className="text-sm font-medium">邮件线程参与者</p>
+                  {mobile && <p className="mt-1 break-words text-sm">{thread.subject || '(无主题)'}</p>}
                   <p className="text-xs text-muted-foreground">根据{providerLabel}的发件人、收件人和抄送信息汇总。</p>
                 </div>
                 <div className="flex max-h-72 flex-col gap-2 overflow-y-auto">
@@ -1441,11 +1442,11 @@ export function EmailDetail({
             </Popover>
           </div>
         </div>
-        <div className="flex items-center gap-1">
+        {!mobile && <div className="flex items-center gap-1">
           <Button variant="ghost" size="icon" className="h-9 w-9 rounded-lg hover:bg-white/70">
             <MoreHorizontal className="w-4 h-4" />
           </Button>
-        </div>
+        </div>}
       </div>
 
       {/* 飞书红人资料 */}
@@ -1458,7 +1459,13 @@ export function EmailDetail({
             </div>
           ) : creatorProfile ? (
             <div className="mobile-mail-profile flex flex-col gap-2 rounded-xl border border-border/60 bg-white/82 px-3 py-2 shadow-[var(--glass-shadow-soft)]" data-expanded={mobileProfileExpanded}>
-              <div className="mobile-mail-profile-summary flex flex-wrap items-center gap-x-4 gap-y-1 text-sm">
+              {mobile && !mobileProfileExpanded ? <div className="mobile-mail-profile-compact flex min-w-0 items-center gap-2">
+                <YouTubeChannelAvatar avatar={channelAvatar} label={channelAvatar.title || creatorProfile.channelName} size="xs" clickable={false} />
+                <div className="min-w-0 flex-1">
+                  <p className="truncate text-[13px] font-medium">{creatorProfile.channelName}</p>
+                  <p className="truncate text-xs text-muted-foreground">{[creatorProfile.collaborationStatus, creatorProfile.hasReply].filter(Boolean).join(' · ')}</p>
+                </div>
+              </div> : <div className="mobile-mail-profile-summary flex flex-wrap items-center gap-x-4 gap-y-1 text-sm">
                 <div className="mobile-mail-profile-name flex min-w-[180px] items-center gap-2 font-medium">
                   <YouTubeChannelAvatar
                     avatar={channelAvatar}
@@ -1503,7 +1510,7 @@ export function EmailDetail({
                 <Badge variant="outline" className="h-5 rounded-md border-white/65 bg-white/50 px-2 text-[11px]">
                   {creatorProfile.hasReply}
                 </Badge>
-              </div>
+              </div>}
               {mobile && <Button variant="ghost" size="sm" className="mobile-mail-profile-toggle" aria-expanded={mobileProfileExpanded} onClick={() => setMobileProfileExpanded((current) => !current)}>
                 {mobileProfileExpanded ? '收起资料与操作' : '资料与操作'}<ChevronDown className={mobileProfileExpanded ? 'rotate-180' : ''} />
               </Button>}
@@ -1675,6 +1682,13 @@ export function EmailDetail({
               ? normalizeEmail(sender.email) === normalizeEmail(creatorProfile.email)
               : false;
             const senderAvatar = isCreatorSender ? channelAvatar : { status: 'idle' as const };
+            const messageAddresses = <div className="flex flex-col gap-1">
+              <p><span className="text-muted-foreground">发件人：</span>{message.from || '未显示'}</p>
+              <p><span className="text-muted-foreground">收件人：</span>{message.to || '未显示'}</p>
+              {message.cc ? <p><span className="text-muted-foreground">抄送：</span>{message.cc}</p> : null}
+              {message.bcc ? <p><span className="text-muted-foreground">密送：</span>{message.bcc}</p> : null}
+              {message.replyTo ? <p><span className="text-muted-foreground">Reply-To：</span>{message.replyTo}</p> : null}
+            </div>;
 
             return (
               <div key={message.id} className="space-y-3">
@@ -1707,7 +1721,8 @@ export function EmailDetail({
                       {/* 发件人信息 */}
                       <div className="min-w-0">
                         <div className="mb-0.5 flex flex-wrap items-center gap-2">
-                          <span className="font-medium">{sender.name}</span>
+                          <span className="mobile-mail-sender-name font-medium" title={sender.name}>{sender.name}</span>
+                          {mobile && isReplyTarget && <Badge variant="default" className="mobile-reply-anchor-badge">回复依据</Badge>}
                           <span className="mobile-mail-sender-address text-xs text-muted-foreground">&lt;{sender.email}&gt;</span>
                           {isDraft ? (
                             <Badge
@@ -1721,16 +1736,45 @@ export function EmailDetail({
                           ) : null}
                         </div>
                         <div className="flex flex-wrap items-center gap-2 text-xs text-muted-foreground">
-                          <span>{formatDate(message.date)}</span>
+                          <span>{mobile ? new Date(message.date).toLocaleString('zh-CN', { month: 'numeric', day: 'numeric', hour: '2-digit', minute: '2-digit', hour12: false }) : formatDate(message.date)}</span>
+                          {mobile && <span className="mobile-mail-language">{isShowingTranslation ? '中文译文' : `${sourceLanguage || '语言待确认'}原文`}</span>}
                           <span className="mobile-mail-recipient-summary">·</span>
                           <span className="mobile-mail-recipient-summary">{formatGmailRecipientSummary(message)}</span>
                           {/^(fwd?|转发):/i.test(message.subject || '') && <Badge variant="outline">已转发</Badge>}
-                          {isReplyTarget && <Badge variant="default">当前回复依据</Badge>}
+                          {!mobile && isReplyTarget && <Badge variant="default">当前回复依据</Badge>}
                         </div>
                       </div>
                     </div>
 
                     <div className="mobile-mail-message-actions flex flex-shrink-0 items-center gap-2">
+                      {mobile ? <>
+                        <Button variant="ghost" size="icon" aria-label={isShowingTranslation ? '显示原文' : '翻译成中文'} disabled={translatingIds.has(message.id)} onClick={(event) => { event.stopPropagation(); handleTranslate(message); }}>
+                          {translatingIds.has(message.id) ? <Loader2 className="h-4 w-4 animate-spin" /> : <Languages className="h-4 w-4 text-primary" />}
+                        </Button>
+                        <Popover>
+                          <PopoverTrigger asChild><Button variant="ghost" size="icon" className="mobile-message-more" aria-label={`邮件详情与操作：${sender.name}`} onClick={(event) => event.stopPropagation()}><MoreHorizontal className="h-4 w-4" /></Button></PopoverTrigger>
+                          <PopoverContent align="end" className="mobile-message-menu flex w-80 flex-col gap-2 text-xs [overflow-wrap:anywhere]" onClick={(event) => event.stopPropagation()}>
+                            <p className="text-sm font-semibold">邮件详情与操作</p>
+                            <p className="text-muted-foreground">{message.subject || thread.subject}</p>
+                            <p className="text-muted-foreground">{formatDate(message.date)}</p>
+                            <details className="mobile-mail-addresses rounded-lg border bg-muted/25 px-3 py-2">
+                              <summary className="mobile-mail-addresses-toggle">完整收发信息</summary>{messageAddresses}
+                            </details>
+                            <Button variant="ghost" className="justify-start" disabled={replyActionsUnavailable} onClick={() => handleForward(message)}><Forward />转发这封邮件</Button>
+                            <Button variant="ghost" className="justify-start" disabled={replyActionsUnavailable || changingReadStateId !== null} onClick={() => toggleMessageReadState(message)}>
+                              {changingReadStateId === message.id ? <Loader2 className="animate-spin" /> : <Mail />}{message.isRead ? '标记为未读' : '标记为已读'}
+                            </Button>
+                            <Button variant="ghost" className="justify-start" onClick={() => copyToClipboard(displayBody)}><Copy />复制正文</Button>
+                            <Button variant="ghost" className="justify-start" aria-expanded={isExpanded} onClick={() => toggleMessage(message.id)}><ChevronDown />{isExpanded ? '收起正文' : '展开正文'}</Button>
+                            <Button variant="ghost" className="justify-start" disabled={translatingIds.has(message.id)} onClick={() => handleTranslate(message)}><Languages />{isShowingTranslation ? '恢复原文' : '翻译成中文'}</Button>
+                            <Button variant="ghost" className="justify-start" disabled={replyActionsUnavailable || isReplyTarget} aria-pressed={isReplyTarget} onClick={() => selectReplyAnchor(message)}><CornerUpLeft />{isReplyTarget ? '已选为回复依据' : '回复此邮件'}</Button>
+                            {visibleAttachments.length > 0 && <Button variant="ghost" className="justify-start" onClick={() => {
+                              setExpandedMessages((current) => new Set(current).add(message.id));
+                              requestAnimationFrame(() => document.getElementById(`attachments-${message.id}`)?.scrollIntoView({ block: 'nearest' }));
+                            }}><Paperclip />附件（{visibleAttachments.length}）</Button>}
+                          </PopoverContent>
+                        </Popover>
+                      </> : <>
                       <Button
                         variant="ghost"
                         size="icon"
@@ -1796,13 +1840,14 @@ export function EmailDetail({
                         )}
                       </Button>
                       <ChevronDown className={`w-4 h-4 transition-transform ${isExpanded ? 'rotate-180' : ''}`} />
+                      </>}
                     </div>
                   </div>
 
                   {/* 展开的邮件内容 */}
                   {isExpanded && (
                     <div className="mt-4 space-y-4">
-                      <div className="flex items-center justify-between">
+                      {!mobile && <div className="flex items-center justify-between">
                         <div className="flex items-center gap-1.5">
                           <Badge variant="outline" className="text-xs">
                             {isShowingTranslation ? '中文翻译' : '原文'}
@@ -1811,18 +1856,12 @@ export function EmailDetail({
                             {sourceLanguage ? `原文：${sourceLanguage}` : '原文语言：待确认'}
                           </Badge>
                         </div>
-                      </div>
+                      </div>}
 
-                      <details className="mobile-mail-addresses rounded-lg border bg-muted/25 px-3 py-2 text-xs" open={mobile ? undefined : true}>
+                      {!mobile && <details className="mobile-mail-addresses rounded-lg border bg-muted/25 px-3 py-2 text-xs" open>
                         <summary className="mobile-mail-addresses-toggle">完整收发信息</summary>
-                        <div className="flex flex-col gap-1">
-                        <p><span className="text-muted-foreground">发件人：</span>{message.from || '未显示'}</p>
-                        <p><span className="text-muted-foreground">收件人：</span>{message.to || '未显示'}</p>
-                        {message.cc ? <p><span className="text-muted-foreground">抄送：</span>{message.cc}</p> : null}
-                        {message.bcc ? <p><span className="text-muted-foreground">密送：</span>{message.bcc}</p> : null}
-                        {message.replyTo ? <p><span className="text-muted-foreground">Reply-To：</span>{message.replyTo}</p> : null}
-                        </div>
-                      </details>
+                        {messageAddresses}
+                      </details>}
 
                       {visibleAttachments.length > 0 && (
                         <MailAttachmentGallery
@@ -1944,7 +1983,7 @@ export function EmailDetail({
 
 
                       {/* 操作按钮 */}
-                      <div className="mobile-mail-message-footer flex items-center gap-2 pt-2">
+                      {!mobile && <div className="mobile-mail-message-footer flex items-center gap-2 pt-2">
                         <Button
                           size="sm"
                           variant={isReplyTarget ? 'secondary' : 'outline'}
@@ -1989,7 +2028,7 @@ export function EmailDetail({
                             </>
                           )}
                         </Button>
-                      </div>
+                      </div>}
                     </div>
                   )}
                 </div>
@@ -2031,6 +2070,7 @@ export function EmailDetail({
                 <Sparkles data-icon="inline-start" />
                 AI 辅助回复
               </Button>
+              {mobile && <Button variant="outline" size="icon" className="mobile-docked-assistant shrink-0" aria-label="打开 AI 记录助手" title="AI 记录助手" onClick={() => openAssistant?.()}><Bot className="h-4 w-4" /></Button>}
             </div>
           ) : null}
 

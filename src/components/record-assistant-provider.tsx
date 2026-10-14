@@ -64,6 +64,7 @@ import {
 type RecordAssistantContextValue = {
   captureEvent: (event: RecordAssistantEvent) => void;
   appendLog: (log: RecordAssistantLog) => void;
+  openAssistant: () => void;
 };
 
 type FeishuRecord = {
@@ -971,7 +972,8 @@ export function RecordAssistantProvider({ children }: { children: ReactNode }) {
     }
   };
 
-  const contextValue = useMemo(() => ({ captureEvent, appendLog }), [appendLog, captureEvent]);
+  const openAssistant = useCallback(() => setOpen(true), []);
+  const contextValue = useMemo(() => ({ captureEvent, appendLog, openAssistant }), [appendLog, captureEvent, openAssistant]);
   const pendingCount = pending.length;
   const shouldRenderAssistant = pathname !== '/login' && pathname !== '/change-password';
   const floatingHiddenSide = !mobile && !open && !floatingHovered && !floatingDragging

@@ -30,6 +30,9 @@ export const metadata: Metadata = {
   ],
   authors: [{ name: 'Influencer Kanban' }],
   generator: 'Next.js',
+  icons: {
+    apple: [{ url: '/icon.png', sizes: '512x512', type: 'image/png' }],
+  },
   openGraph: {
     title: '红人推广看板',
     description: '跨境电商红人合作管理工作台',

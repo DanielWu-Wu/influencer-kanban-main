@@ -758,6 +758,60 @@
   .mobile-mail-addresses[open] > div { padding-top: 0.25rem; }
   .mobile-isolated-email { padding: 0.5rem; }
 
+  /* Compact mail reading approved in the mobile proposal. */
+  .email-detail-container > .material-toolbar:first-child { padding: 0 0.25rem; }
+  .email-detail-container > .material-toolbar:nth-child(2) { padding: 0.25rem 0.5rem; }
+  .mobile-mail-profile[data-expanded="false"] { padding: 0; border: 0; border-radius: 0; box-shadow: none; background: transparent; gap: 0.25rem; }
+  .mobile-mail-profile-compact { min-height: 44px; }
+  .mobile-mail-profile-compact > div:last-child { line-height: 18px; }
+  .mobile-mail-profile-toggle { margin: 0; }
+  .mobile-mail-message { padding: 0; background: #fff; }
+  .mobile-mail-message-heading { flex-wrap: nowrap; align-items: center; min-height: 56px; padding: 0.25rem 0.5rem; border-bottom: 1px solid var(--border); background: var(--selection-surface); }
+  .mobile-mail-message-heading > div:first-child { align-items: center; gap: 0.5rem; }
+  .mobile-mail-message-heading > div:first-child > div:first-child { width: 28px; height: 28px; }
+  .mobile-mail-message-heading > div:first-child > div:last-child > div { flex-wrap: nowrap; gap: 0.25rem; }
+  .mobile-mail-sender-name { min-width: 0; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; font-size: 14px; }
+  .mobile-reply-anchor-badge { padding: 1px 4px; font-size: 11px; background: color-mix(in oklab, var(--primary) 12%, white); color: var(--primary); }
+  .mobile-mail-message-heading > div:first-child > div:last-child > div:last-child > span:first-child { flex-shrink: 0; }
+  .mobile-mail-language { min-width: 0; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
+  .mobile-mail-message-actions { flex-basis: auto; flex-wrap: nowrap; gap: 0; }
+  .mobile-mail-message-actions button { width: 44px; height: 44px; }
+  .mobile-mail-message[data-expanded="false"] .mobile-mail-message-actions > .mobile-message-more { display: inline-flex; }
+  .mobile-mail-message > .mt-4 { margin-top: 0; padding: 0.5rem; }
+  .mobile-mail-message .mobile-isolated-email { border: 0; border-radius: 0; padding: 0; box-shadow: none; }
+  .mobile-message-menu button { min-height: 44px; white-space: normal; }
+  .mobile-reply-entry { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)) 44px; gap: 6px; padding: 0.5rem; }
+  .mobile-reply-entry button { flex-direction: row; min-height: 44px; height: 44px; gap: 4px; padding-inline: 3px; white-space: nowrap; }
+  .mobile-docked-assistant { width: 44px; color: var(--primary); background: var(--selection-surface); }
+  body:has(.email-detail-container) .mobile-assistant-ball { visibility: hidden; pointer-events: none; }
+
+  /* This edit view follows visible height even if keyboard detection is late. */
+  [data-slot="dialog-content"].mobile-reply-idea-dialog {
+    inset: auto 0; top: var(--mobile-visible-top, 0px); z-index: 110;
+    width: 100%; max-width: none; height: var(--mobile-visible-height, 100dvh); max-height: var(--mobile-visible-height, 100dvh);
+    translate: none; transform: none; animation: none; border: 0; border-radius: 0;
+    transition-property: color, background-color, border-color; overflow: hidden;
+  }
+  .mobile-idea-header { flex-shrink: 0; min-height: 48px; }
+  .mobile-idea-context[open] { max-height: 30%; overflow-y: auto; }
+  .mobile-idea-body { overflow-y: auto; overscroll-behavior: contain; }
+  .mobile-idea-body > textarea { min-height: 44px; }
+  .mobile-idea-warning { max-height: 44px; overflow-y: auto; }
+  .mobile-idea-footer { padding-bottom: max(0.5rem, env(safe-area-inset-bottom, 0px)); }
+  html[data-mobile-keyboard="true"] .mobile-idea-footer { padding-bottom: 0.5rem; }
+  .mobile-reply-idea-entry { min-height: 96px; align-items: flex-start; font-size: 16px; line-height: 1.6; }
+  .mobile-reply-idea-entry > span { min-width: 0; max-width: 100%; white-space: pre-wrap; }
+  .email-detail-container[data-composer-open="true"] > .material-toolbar:first-child { display: none; }
+  .mobile-reply-heading { height: 44px; padding-inline: 0.5rem; }
+  .mobile-reply-heading p:last-child { display: none; }
+  .email-reply-composer > [aria-hidden="false"] > [data-slot="tabs"] { padding: 0; }
+  .mobile-ideas-section > div:first-child { padding: 0.5rem; }
+  .mobile-ideas-section > div:first-child p { display: none; }
+  .mobile-reply-idea-entry { min-height: 64px; padding: 0.5rem 0.75rem; }
+  .mobile-ai-footer { padding: 0.5rem 0.75rem; }
+  .mobile-generation-summary { min-height: 44px; cursor: pointer; align-content: center; font-size: 12px; }
+  .mobile-generation-summary + div { padding-top: 0.5rem; }
+
   /* Visible-viewport full-screen composer; scroll the body while actions stay reachable. */
   [data-slot="dialog-content"].mobile-new-mail-dialog {
     top: var(--mobile-visible-top, 0px); bottom: auto; left: 0; right: 0;
@@ -824,6 +878,9 @@
 /* A landscape phone has very little space above its keyboard. Editing takes
    priority; formatting, reply options and assistant tabs return on dismissal. */
 @media (min-width: 768px) and (max-width: 1023px) and (max-height: 600px) and (pointer: coarse) {
+  html[data-mobile-keyboard="true"] .mobile-reply-idea-dialog .mobile-idea-context,
+  html[data-mobile-keyboard="true"] .mobile-reply-idea-dialog .mobile-idea-label { display: none; }
+  html[data-mobile-keyboard="true"] .mobile-reply-context { display: none; }
   html[data-mobile-keyboard="true"] .mobile-assistant-panel > header { padding: 0.25rem 0.5rem; }
   html[data-mobile-keyboard="true"] .mobile-assistant-panel > header p,
   html[data-mobile-keyboard="true"] .mobile-assistant-panel [data-slot="tabs-list"] { display: none; }

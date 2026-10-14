@@ -13,6 +13,7 @@ import {
 } from '@/lib/gmail-thread-contact';
 import { parseGmailAddresses, type GmailReplyTarget } from '@/lib/gmail-reply-target';
 import { cn } from '@/lib/utils';
+import { useMobileLayout } from '@/lib/use-mobile-layout';
 
 const SOURCE_LABELS: Record<GmailReplyTarget['recipientCandidates'][number]['source'], string> = {
   'reply-to': '邮件 Reply-To',
@@ -36,6 +37,7 @@ export function GmailReplyTargetBar({
   onChooseMessage: () => void;
   compact?: boolean;
 }) {
+  const mobile = useMobileLayout();
   const [recipientOpen, setRecipientOpen] = useState(false);
   const [manualEmail, setManualEmail] = useState('');
   const [manualError, setManualError] = useState('');
@@ -66,7 +68,7 @@ export function GmailReplyTargetBar({
     setRecipientOpen(false);
   };
 
-  return (
+  const controls = (
     <div className={cn(
       'mobile-reply-target flex shrink-0 flex-wrap items-center gap-3 border-b border-border/55 bg-primary/[0.035] px-4 py-2.5',
       compact && 'items-start gap-2 px-3 py-2',
@@ -162,4 +164,12 @@ export function GmailReplyTargetBar({
       </div>
     </div>
   );
+  return mobile ? <details className="mobile-reply-context shrink-0 border-b bg-primary/[0.035]">
+    <summary className="flex min-h-11 cursor-pointer items-center gap-2 px-3 text-xs">
+      <Mail className="size-4 shrink-0 text-primary" />
+      <span className={`min-w-0 flex-1 truncate ${target.recipientConfirmed ? 'text-muted-foreground' : 'text-destructive'}`}>回复给：{target.recipientEmail || '收件人尚未确认'}{target.recipientEmail && !target.recipientConfirmed ? '（待确认）' : ''}</span>
+      <span className="shrink-0 text-primary">详情与更改</span>
+    </summary>
+    <div className="max-h-40 overflow-y-auto">{controls}</div>
+  </details> : controls;
 }

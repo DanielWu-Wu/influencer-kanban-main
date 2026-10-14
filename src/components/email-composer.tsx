@@ -4,6 +4,9 @@ import { sharedMailFetch as fetch } from '@/lib/shared-mail-read';
 import { WorkspaceRequestError } from '@/lib/workspace-request';
 
 import { useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
+import { flushSync } from 'react-dom';
+import { useMobileLayout } from '@/lib/use-mobile-layout';
+import { MobileReplyIdeaDialog } from './mobile-reply-idea-dialog';
 import {
   AlertCircle,
   ArrowRight,
@@ -174,6 +177,8 @@ export function EmailComposer({
   mailAccount,
   embedded = false,
 }: EmailComposerProps) {
+  const mobile = useMobileLayout();
+  const [mobileIdeasOpen, setMobileIdeasOpen] = useState(false);
   const { addSuggestion } = useEmailAISuggestions();
   const { addDraft } = useEmailDrafts();
   const { auth, connect } = useGmailAuth();
@@ -213,9 +218,16 @@ export function EmailComposer({
   const [strategyEditing, setStrategyEditing] = useState(false);
   const [strategyFocusRequest, setStrategyFocusRequest] = useState(0);
   const strategyInputRef = useRef<HTMLTextAreaElement>(null);
+  const openMobileIdeas = () => {
+    // Keep focus inside the original tap event so iOS can open its keyboard.
+    flushSync(() => setMobileIdeasOpen(true));
+    const input = strategyInputRef.current;
+    input?.focus({ preventScroll: true });
+    if (input) input.setSelectionRange(input.value.length, input.value.length);
+  };
 
   useEffect(() => {
-    if (!strategyFocusRequest) return;
+    if (!strategyFocusRequest || mobile) return;
     const input = strategyInputRef.current;
     const section = input?.closest('section');
     const viewport = input?.closest<HTMLElement>('[data-slot="scroll-area-viewport"]');
@@ -225,7 +237,7 @@ export function EmailComposer({
       top: Math.max(0, viewport.scrollTop + section.getBoundingClientRect().top - viewport.getBoundingClientRect().top - 16),
       behavior: 'instant',
     });
-  }, [strategyFocusRequest]);
+  }, [strategyFocusRequest, mobile]);
   const bodyEditVersionRef = useRef(0);
   const [generatedIdeas, setGeneratedIdeas] = useState<string | null>(null);
   const [pendingGeneratedReply, setPendingGeneratedReply] = useState<(GmailAIReplyTaskResult & { ideas: string; taskId: string }) | null>(null);
@@ -1765,7 +1777,7 @@ export function EmailComposer({
     </div>
   );
 
-  const generationSettings = (
+  const generationSettingFields = (
     <div className="mobile-generation-settings flex flex-wrap items-center gap-3">
       <label className="flex items-center gap-2 text-xs font-medium text-gray-600">
         <span className="shrink-0">回复语言</span>
@@ -1813,6 +1825,11 @@ export function EmailComposer({
     </div>
   );
 
+  const generationSettings = mobile ? <details className="mobile-generation-settings">
+    <summary className="mobile-generation-summary">{targetLangName} · {REPLY_TONE_OPTIONS.find((option) => option.value === replyTone)?.label || replyTone} · {targetLangNeedsConfirmation ? '需确认语言' : '设置'}</summary>
+    {generationSettingFields}
+  </details> : generationSettingFields;
+
   const aiBody = (
     <div inert={savingDraft || sending} className="flex w-full min-w-0 max-w-full flex-col gap-3 overflow-x-clip px-4 py-4 [overflow-wrap:anywhere] @2xl/email-composer:px-5">
       {analysisError && (
@@ -1825,7 +1842,7 @@ export function EmailComposer({
       {attachmentError && <p className="text-xs text-destructive">{attachmentError}</p>}
 
       {(
-        <section className="min-w-0 max-w-full overflow-hidden rounded-lg border border-gray-300 bg-white shadow-sm transition focus-within:border-primary focus-within:ring-2 focus-within:ring-primary/15">
+        <section className="mobile-ideas-section min-w-0 max-w-full overflow-hidden rounded-lg border border-gray-300 bg-white shadow-sm transition focus-within:border-primary focus-within:ring-2 focus-within:ring-primary/15">
           <div className="border-b border-gray-100 px-4 py-3">
             <div className="flex items-center justify-between gap-3">
               <div>
@@ -1839,7 +1856,9 @@ export function EmailComposer({
               <Badge variant="outline" className="shrink-0 border-gray-200 font-normal text-gray-500">必填</Badge>
             </div>
           </div>
-          <Textarea
+          {mobile ? <Button variant="ghost" className="mobile-reply-idea-entry h-auto w-full justify-start whitespace-normal rounded-none px-4 py-3 text-left font-normal" aria-label="填写回复想法" disabled={savingDraft || sending} onClick={openMobileIdeas}>
+            <span className={`line-clamp-4 [overflow-wrap:anywhere] ${userIdeas ? 'text-foreground' : 'text-muted-foreground'}`}>{userIdeas || '点击填写预算、底线或需要确认的问题…'}</span>
+          </Button> : <Textarea
             id="ai-reply-strategy"
             ref={strategyInputRef}
             wrap="soft"
@@ -1850,7 +1869,7 @@ export function EmailComposer({
             }}
             placeholder="例如：价格可以接受，但需要确认视频发布时间；请礼貌询问能否在月底前发布..."
             className="field-sizing-fixed min-h-28 min-w-0 max-w-full resize-y overflow-x-hidden break-words rounded-none border-0 bg-white px-4 py-3 shadow-none [overflow-wrap:anywhere] focus-visible:ring-0"
-          />
+          />}
           <details className="border-t border-gray-100 px-3 py-2 text-xs text-gray-600">
             <summary className="cursor-pointer">快捷回复想法</summary>
             <div className="mt-2 flex flex-wrap gap-1.5">
@@ -1873,6 +1892,8 @@ export function EmailComposer({
           </details>
         </section>
       )}
+
+      {mobile && <div className="rounded-lg border bg-white px-3">{generationSettings}</div>}
 
       {(analysisLoading || settingsLoading) && (
         <div className="flex items-center gap-3 rounded-lg border border-gray-200 bg-white p-4">
@@ -2244,6 +2265,10 @@ export function EmailComposer({
     return (
       <div className="@container/email-composer flex h-full min-h-0 min-w-0 max-w-full flex-col overflow-x-hidden bg-white text-gray-900">
         {reviewDialog}
+        <MobileReplyIdeaDialog open={mobile && mobileIdeasOpen} onOpenChange={setMobileIdeasOpen}
+          inputRef={strategyInputRef} value={userIdeas} onChange={(value) => { localDraftDirtyRef.current = true; setUserIdeas(value); }}
+          recipient={recipientEmail} recipientConfirmed={Boolean(replyTarget?.recipientConfirmed)} subject={replyTarget?.subject || thread.subject}
+          warning={systemDraft.error || systemDraft.warning} />
         {!embedded ? header : null}
         {replySendTask?.status === 'error' && <p role="alert" className="border-b px-3 py-2 text-xs text-destructive">{replySendTask.error}；正文仍保留。重试前请先核对已发送文件夹，避免重复发送。</p>}
         {(systemDraft.warning || systemDraft.error) && <div className="border-b px-3 py-1.5 text-xs text-muted-foreground">
@@ -2261,7 +2286,7 @@ export function EmailComposer({
           {generatedIdeas !== null && generatedIdeas !== userIdeas.trim() && suggestion ? <p className="mb-2 text-xs text-amber-700">最新想法尚未用于这版邮件；可保存当前正文，或按最新想法重新生成。</p> : null}
           {!suggestion ? (
             <div className="flex flex-col gap-3 @3xl/email-composer:flex-row @3xl/email-composer:items-center @3xl/email-composer:justify-between">
-              {generationSettings}
+              {!mobile && generationSettings}
               <Button
                 className="shrink-0"
                 onClick={generateReply}
@@ -2279,7 +2304,7 @@ export function EmailComposer({
             </div>
           ) : suggestion ? (
             <div className="flex flex-col gap-3">
-              {generationSettings}
+              {!mobile && generationSettings}
               <div className="flex flex-wrap items-center gap-2">
                 {!recipientEmail && <span className="text-xs text-red-600">保存草稿前需确认收件人</span>}
                 {sendBlockReason && (
@@ -2301,7 +2326,8 @@ export function EmailComposer({
                   onClick={() => {
                     optimizationRunRef.current += 1;
                     setStrategyEditing(true);
-                    setStrategyFocusRequest((current) => current + 1);
+                    if (mobile) openMobileIdeas();
+                    else setStrategyFocusRequest((current) => current + 1);
                     setOptimizedSuggestion(null);
                     setOptimizationError('');
                     setDraftUsedAnalysis(false);
