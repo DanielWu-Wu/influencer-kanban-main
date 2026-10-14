@@ -9,6 +9,17 @@ export const APP_RELEASE_LAST_SEEN_STORAGE_KEY = 'influencer-board-last-seen-rel
 
 export const APP_RELEASES: readonly AppRelease[] = [
   {
+    version: '1.4.1',
+    releasedAt: '2026-10-14',
+    title: '重磅更新：手机网页版上线',
+    highlights: [
+      '手机端支持每日待办、邮件与 AI 回复、合作项目查询。',
+      '优化手机阅读、写信及 AI 助手布局，使用更方便。',
+      '邮件发送前仍需核对内容并确认。',
+      '访问提示：部分国内网络可能无法直接访问，如遇打不开，可尝试开启 VPN。',
+    ],
+  },
+  {
     version: '1.4.0',
     releasedAt: '2026-10-13',
     title: '手机网页与邮件体验优化',

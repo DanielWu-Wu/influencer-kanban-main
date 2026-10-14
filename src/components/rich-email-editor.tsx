@@ -224,7 +224,7 @@ export function RichEmailEditor({
   return (
     <div
       className={cn(
-        'min-w-0 max-w-full overflow-hidden rounded-lg border border-white/65 bg-white/75 shadow-sm backdrop-blur-xl',
+        'rich-email-editor min-w-0 max-w-full overflow-hidden rounded-lg border border-white/65 bg-white/75 shadow-sm backdrop-blur-xl',
         fillHeight && 'flex min-h-0 flex-col',
         className,
       )}
@@ -295,7 +295,7 @@ export function RichEmailEditor({
           <AlertDescription>为保护工作台布局，已简化部分邮件格式</AlertDescription>
         </Alert>
       )}
-      <div className="flex flex-wrap items-center gap-0.5 border-t border-white/60 bg-white/65 px-2 py-1">
+      <div className="rich-email-toolbar flex flex-wrap items-center gap-0.5 border-t border-white/60 bg-white/65 px-2 py-1" role="group" aria-label="邮件格式工具栏">
         <ToolbarButton label="撤销" icon={<Undo2 className="h-4 w-4" />} onAction={() => runCommand('undo')} />
         <ToolbarButton label="重做" icon={<Redo2 className="h-4 w-4" />} onAction={() => runCommand('redo')} />
         <div className="mx-1 h-5 w-px bg-border" />

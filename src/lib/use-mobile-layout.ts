@@ -2,7 +2,8 @@
 
 import { useSyncExternalStore } from 'react';
 
-const MOBILE_QUERY = '(max-width: 767px)';
+// Include short, touch-only landscape viewports without changing mouse desktops.
+export const MOBILE_QUERY = '(max-width: 767px), (max-width: 1023px) and (max-height: 600px) and (pointer: coarse)';
 
 function subscribe(onChange: () => void) {
   const media = window.matchMedia(MOBILE_QUERY);

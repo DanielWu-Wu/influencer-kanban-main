@@ -3,6 +3,7 @@
 import { sharedMailFetch as fetch } from '@/lib/shared-mail-read';
 
 import { useEffect, useMemo, useRef, useState } from 'react';
+import { useMobileLayout } from '@/lib/use-mobile-layout';
 import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
 import { ScrollArea } from '@/components/ui/scroll-area';
@@ -276,6 +277,8 @@ export function EmailDetail({
   openComposerRequest,
   mailAccount,
 }: EmailDetailProps) {
+  const mobile = useMobileLayout();
+  const [mobileProfileExpanded, setMobileProfileExpanded] = useState(false);
   const [expandedMessages, setExpandedMessages] = useState<Set<string>>(() => {
     const newestMessage = sortMessagesNewestFirst(thread.messages)[0];
     return new Set(newestMessage ? [newestMessage.id] : []);
@@ -1402,13 +1405,14 @@ export function EmailDetail({
           >
             <ArrowLeft className="w-4 h-4" />
           </Button>
-          <div className="min-w-0">
+          <div className="mobile-thread-heading min-w-0">
             <h2 className="truncate text-base font-semibold">{thread.subject || '(无主题)'}</h2>
             <Popover>
               <PopoverTrigger asChild>
                 <Button variant="ghost" size="sm" className="h-6 px-1 text-xs text-muted-foreground">
                   <Users data-icon="inline-start" />
-                  {thread.messages.length} 封邮件 · 查看参与者（{threadParticipants.length}）
+                  {mobile ? thread.messages.length : `${thread.messages.length} 封邮件 · 查看参与者（${threadParticipants.length}）`}
+                  <span className="sr-only">查看邮件线程参与者</span>
                 </Button>
               </PopoverTrigger>
               <PopoverContent align="start" className="flex w-96 max-w-[calc(100vw-1rem)] flex-col gap-3">
@@ -1453,9 +1457,9 @@ export function EmailDetail({
               正在匹配飞书红人资料...
             </div>
           ) : creatorProfile ? (
-            <div className="flex flex-col gap-2 rounded-xl border border-border/60 bg-white/82 px-3 py-2 shadow-[var(--glass-shadow-soft)]">
-              <div className="flex flex-wrap items-center gap-x-4 gap-y-1 text-sm">
-                <div className="flex min-w-[180px] items-center gap-2 font-medium">
+            <div className="mobile-mail-profile flex flex-col gap-2 rounded-xl border border-border/60 bg-white/82 px-3 py-2 shadow-[var(--glass-shadow-soft)]" data-expanded={mobileProfileExpanded}>
+              <div className="mobile-mail-profile-summary flex flex-wrap items-center gap-x-4 gap-y-1 text-sm">
+                <div className="mobile-mail-profile-name flex min-w-[180px] items-center gap-2 font-medium">
                   <YouTubeChannelAvatar
                     avatar={channelAvatar}
                     label={channelAvatar.title || creatorProfile.channelName || 'YouTube 频道头像'}
@@ -1481,16 +1485,16 @@ export function EmailDetail({
                     </Button>
                   )}
                 </div>
-                <span className="text-xs text-muted-foreground">
+                <span className="mobile-mail-profile-extra text-xs text-muted-foreground">
                   地区：<span className="text-foreground">{creatorProfile.region}</span>
                 </span>
-                <span className="text-xs text-muted-foreground">
+                <span className="mobile-mail-profile-extra text-xs text-muted-foreground">
                   平台：<span className="text-foreground">{creatorProfile.platform}</span>
                 </span>
-                <span className="text-xs text-muted-foreground">
+                <span className="mobile-mail-profile-extra text-xs text-muted-foreground">
                   粉丝数：<span className="text-foreground">{creatorProfile.followers}</span>
                 </span>
-                <span className="text-xs text-muted-foreground">
+                <span className="mobile-mail-profile-extra text-xs text-muted-foreground">
                   邮箱：<span className="text-foreground">{creatorProfile.email}</span>
                 </span>
                 <Badge variant="secondary" className="h-5 rounded-md bg-white/80 px-2 text-[11px]">
@@ -1500,9 +1504,12 @@ export function EmailDetail({
                   {creatorProfile.hasReply}
                 </Badge>
               </div>
+              {mobile && <Button variant="ghost" size="sm" className="mobile-mail-profile-toggle" aria-expanded={mobileProfileExpanded} onClick={() => setMobileProfileExpanded((current) => !current)}>
+                {mobileProfileExpanded ? '收起资料与操作' : '资料与操作'}<ChevronDown className={mobileProfileExpanded ? 'rotate-180' : ''} />
+              </Button>}
 
               {feishuQuickActions.length > 0 && (
-                <div className="flex flex-wrap items-center gap-2">
+                <div className="mobile-mail-profile-extra flex flex-wrap items-center gap-2">
                   {feishuQuickActions.map((action) => (
                     <Button
                       key={action.id}
@@ -1523,7 +1530,7 @@ export function EmailDetail({
               )}
 
               {pendingProfileAction && (
-                <div className="rounded-lg border border-primary/20 bg-primary/5 px-3 py-2 text-xs shadow-sm">
+                <div className="mobile-mail-profile-extra rounded-lg border border-primary/20 bg-primary/5 px-3 py-2 text-xs shadow-sm">
                   <div className="flex flex-wrap items-start justify-between gap-3">
                     <div className="min-w-0 flex-1">
                       <p className="font-medium">准备写回飞书：{pendingProfileAction.label}</p>
@@ -1565,7 +1572,7 @@ export function EmailDetail({
               )}
 
               {(profileActionMessage || profileActionLogs.length > 0) && (
-                <div className="flex flex-wrap items-center gap-2 text-xs">
+                <div className="mobile-mail-profile-extra flex flex-wrap items-center gap-2 text-xs">
                   {profileActionMessage && (
                     <span className="inline-flex items-center gap-1 rounded-md bg-white/75 px-2 py-1">
                       {profileActionMessage.startsWith('写回失败') ? (
@@ -1603,7 +1610,7 @@ export function EmailDetail({
         data-expanded={composerState === 'expanded'}
       >
         <div className="min-h-0 min-w-0 overflow-hidden">
-          <ScrollArea className="h-full min-h-0">
+          <ScrollArea disableHorizontalScroll={mobile} className="h-full min-h-0">
         {thread.isPartial ? (
           <div className="mx-4 mt-3"><Alert role="status" variant={loadError ? 'destructive' : 'default'}><AlertDescription>
             {loadError ? `来信已显示，但完整会话读取失败：${loadError}。完整读取后可回复。`
@@ -1638,7 +1645,7 @@ export function EmailDetail({
             </div>
           </div>
         ) : (
-        <div className="space-y-4 p-4">
+        <div className="mobile-mail-message-list space-y-4 p-4">
           {thread.loadWarning && (
             <div className="rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-xs text-amber-800">
               {thread.loadWarning}
@@ -1674,16 +1681,17 @@ export function EmailDetail({
                 {/* 邮件卡片：正文使用浏览器原生光标，只有邮件头负责展开/收起。 */}
                 <div
                   className={`
-                    cursor-auto rounded-xl border p-4 shadow-[var(--glass-shadow-soft)] transition-[background-color,border-color,box-shadow] duration-200
+                    mobile-mail-message cursor-auto rounded-xl border p-4 shadow-[var(--glass-shadow-soft)] transition-[background-color,border-color,box-shadow] duration-200
                     ${isReplyTarget
                       ? 'border-primary/60 bg-primary/[0.07] ring-2 ring-primary/10'
                       : isNewest
                         ? 'border-primary/22 bg-primary/[0.045]'
                         : 'border-border/55 bg-white/92'}
                   `}
+                  data-expanded={isExpanded}
                 >
                   <div
-                    className="flex cursor-pointer items-start justify-between gap-4"
+                    className="mobile-mail-message-heading flex cursor-pointer items-start justify-between gap-4"
                     onClick={() => toggleMessage(message.id)}
                   >
                     <div className="flex min-w-0 items-start gap-3">
@@ -1700,7 +1708,7 @@ export function EmailDetail({
                       <div className="min-w-0">
                         <div className="mb-0.5 flex flex-wrap items-center gap-2">
                           <span className="font-medium">{sender.name}</span>
-                          <span className="text-xs text-muted-foreground">&lt;{sender.email}&gt;</span>
+                          <span className="mobile-mail-sender-address text-xs text-muted-foreground">&lt;{sender.email}&gt;</span>
                           {isDraft ? (
                             <Badge
                               variant="outline"
@@ -1714,15 +1722,15 @@ export function EmailDetail({
                         </div>
                         <div className="flex flex-wrap items-center gap-2 text-xs text-muted-foreground">
                           <span>{formatDate(message.date)}</span>
-                          <span>·</span>
-                          <span>{formatGmailRecipientSummary(message)}</span>
+                          <span className="mobile-mail-recipient-summary">·</span>
+                          <span className="mobile-mail-recipient-summary">{formatGmailRecipientSummary(message)}</span>
                           {/^(fwd?|转发):/i.test(message.subject || '') && <Badge variant="outline">已转发</Badge>}
                           {isReplyTarget && <Badge variant="default">当前回复依据</Badge>}
                         </div>
                       </div>
                     </div>
 
-                    <div className="flex flex-shrink-0 items-center gap-2">
+                    <div className="mobile-mail-message-actions flex flex-shrink-0 items-center gap-2">
                       <Button
                         variant="ghost"
                         size="icon"
@@ -1805,13 +1813,16 @@ export function EmailDetail({
                         </div>
                       </div>
 
-                      <div className="flex flex-col gap-1 rounded-lg border bg-muted/25 px-3 py-2 text-xs">
+                      <details className="mobile-mail-addresses rounded-lg border bg-muted/25 px-3 py-2 text-xs" open={mobile ? undefined : true}>
+                        <summary className="mobile-mail-addresses-toggle">完整收发信息</summary>
+                        <div className="flex flex-col gap-1">
                         <p><span className="text-muted-foreground">发件人：</span>{message.from || '未显示'}</p>
                         <p><span className="text-muted-foreground">收件人：</span>{message.to || '未显示'}</p>
                         {message.cc ? <p><span className="text-muted-foreground">抄送：</span>{message.cc}</p> : null}
                         {message.bcc ? <p><span className="text-muted-foreground">密送：</span>{message.bcc}</p> : null}
                         {message.replyTo ? <p><span className="text-muted-foreground">Reply-To：</span>{message.replyTo}</p> : null}
-                      </div>
+                        </div>
+                      </details>
 
                       {visibleAttachments.length > 0 && (
                         <MailAttachmentGallery
@@ -1911,6 +1922,7 @@ export function EmailDetail({
                             </div>
                           ) : null}
                           <IsolatedEmailBody
+                            mobile={mobile}
                             messageIdentity={JSON.stringify([translationAccountScope, mailScope, thread.id, message.id])}
                             html={sanitizedDisplayHtml.html}
                             plainText={displayBody}
@@ -1932,7 +1944,7 @@ export function EmailDetail({
 
 
                       {/* 操作按钮 */}
-                      <div className="flex items-center gap-2 pt-2">
+                      <div className="mobile-mail-message-footer flex items-center gap-2 pt-2">
                         <Button
                           size="sm"
                           variant={isReplyTarget ? 'secondary' : 'outline'}
@@ -2026,7 +2038,7 @@ export function EmailDetail({
             className={composerState === 'expanded' ? 'flex h-full min-h-0 min-w-0 max-w-full flex-col overflow-x-clip' : 'hidden'}
             aria-hidden={composerState !== 'expanded'}
           >
-            <div className="flex h-14 shrink-0 items-center gap-3 border-b border-border/55 px-4">
+            <div className="mobile-reply-heading flex h-14 shrink-0 items-center gap-3 border-b border-border/55 px-4">
               <span className="flex size-8 shrink-0 items-center justify-center rounded-lg bg-primary/10 text-primary">
                 <ActiveReplyModeIcon className="size-4" />
               </span>

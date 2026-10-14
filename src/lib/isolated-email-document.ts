@@ -13,7 +13,7 @@ function escapeAttribute(value: string) {
 
 // The caller must sanitize first. CSP is a second boundary, including CSS URLs
 // which are not reliably handled by regex alone. Never add allow-scripts.
-export function buildIsolatedEmailDocument(html: string, title: string, blockRemoteContent: boolean) {
+export function buildIsolatedEmailDocument(html: string, title: string, blockRemoteContent: boolean, mobile = false) {
   const remote = blockRemoteContent ? '' : ' https: http:';
   const csp = [
     "default-src 'none'", "script-src 'none'", "connect-src 'none'",
@@ -26,5 +26,9 @@ html { overflow: auto; }
 body { font: 14px/1.5 Arial, sans-serif; color: #202124; overflow-wrap: anywhere; }
 img { max-width: 100% !important; height: auto !important; }
 a { color: #2563eb; }
+${mobile ? `/* Constrain ordinary mail blocks; wide tables/pre keep their original content and local scrolling. */
+:where(p, div, blockquote, section, article) { box-sizing: border-box !important; min-width: 0 !important; max-width: 100% !important; overflow-wrap: anywhere !important; white-space: normal !important; }
+pre { max-width: 100% !important; overflow-x: auto !important; }
+` : ''}
 </style></head><body style="margin:0!important;padding:0!important;min-width:0!important;width:100%!important;height:auto!important;min-height:0!important"><main data-isolated-email-root style="display:flow-root!important;position:relative!important;box-sizing:border-box!important;width:100%!important;min-width:0!important;max-width:100%!important;height:auto!important;min-height:0!important;margin:0!important;padding:0!important;overflow:auto!important">${html}</main></body></html>`;
 }

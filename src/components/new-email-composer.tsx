@@ -634,14 +634,14 @@ export function NewEmailComposer({
 
   return (
     <Dialog open={open} onOpenChange={handleOpenChange}>
-      <DialogContent className="glass-panel-strong bottom-4 left-auto right-4 top-auto flex h-[min(820px,calc(100vh-2rem))] w-[min(980px,calc(100vw-2rem))] max-w-[980px] translate-x-0 translate-y-0 flex-col gap-0 overflow-hidden rounded-lg border-white/65 p-0 sm:max-w-[980px] max-sm:inset-0 max-sm:h-dvh max-sm:w-full max-sm:max-w-none max-sm:rounded-none">
+      <DialogContent className="mobile-new-mail-dialog glass-panel-strong bottom-4 left-auto right-4 top-auto flex h-[min(820px,calc(100vh-2rem))] w-[min(980px,calc(100vw-2rem))] max-w-[980px] translate-x-0 translate-y-0 flex-col gap-0 overflow-hidden rounded-lg border-white/65 p-0 sm:max-w-[980px] max-sm:inset-0 max-sm:h-dvh max-sm:w-full max-sm:max-w-none max-sm:rounded-none">
         <DialogHeader className="shrink-0 border-b border-white/60 bg-white/60 px-5 py-3">
             <DialogTitle>{title}</DialogTitle>
-            <DialogDescription>{description} · 来源邮箱：{mailAccount?.email || auth?.email || providerLabel}</DialogDescription>
+            <DialogDescription><span className="mobile-new-mail-description">{description} · </span>来源邮箱：{mailAccount?.email || auth?.email || providerLabel}</DialogDescription>
         </DialogHeader>
 
-        <div className="flex min-h-0 flex-1 flex-col gap-3 px-5 py-4">
-          <div className="grid shrink-0 gap-3 sm:grid-cols-[72px_1fr] sm:items-start">
+        <div className="mobile-new-mail-body flex min-h-0 flex-1 flex-col gap-3 px-5 py-4">
+          <div className="mobile-new-mail-fields grid shrink-0 gap-3 sm:grid-cols-[72px_1fr] sm:items-start">
             <label htmlFor="new-email-to" className="pt-3 text-sm text-muted-foreground">收件人</label>
             <div className="space-y-2">
               <div className="flex items-start gap-2">
@@ -693,7 +693,7 @@ export function NewEmailComposer({
             placeholder="输入邮件正文..."
             minHeight="20rem"
             fillHeight
-            className="min-h-[24rem] flex-1"
+            className="mobile-new-mail-editor min-h-[24rem] flex-1"
             onChange={setContent}
           />
 

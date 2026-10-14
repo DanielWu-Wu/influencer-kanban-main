@@ -2344,7 +2344,7 @@ export function EmailComposer({
 
   return (
     <div className={cn(
-      '@container/email-composer flex min-w-0 max-w-full flex-col gap-4 overflow-x-hidden',
+      'mobile-manual-reply @container/email-composer flex min-w-0 max-w-full flex-col gap-4 overflow-x-hidden',
       embedded && 'h-full min-h-0 overflow-y-auto p-3',
     )}>
       {reviewDialog}

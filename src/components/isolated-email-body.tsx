@@ -10,18 +10,20 @@ type IsolatedEmailBodyProps = {
   plainText: string;
   title: string;
   blockRemoteContent: boolean;
+  mobile?: boolean;
 };
 
 // A keyed child gives each account/message/content its own observers and state.
 // Ordinary parent renders keep the same iframe document and selection.
 export const IsolatedEmailBody = memo(function IsolatedEmailBody(props: IsolatedEmailBodyProps) {
-  return <EmailBodyFrame key={JSON.stringify([props.messageIdentity, props.html, props.blockRemoteContent])} {...props} />;
+  return <EmailBodyFrame key={JSON.stringify([props.messageIdentity, props.html, props.blockRemoteContent, props.mobile])} {...props} />;
 });
 
-function EmailBodyFrame({ html, plainText, title, blockRemoteContent }: IsolatedEmailBodyProps) {
+function EmailBodyFrame({ html, plainText, title, blockRemoteContent, mobile = false }: IsolatedEmailBodyProps) {
   const frameRef = useRef<HTMLIFrameElement>(null);
   const [failed, setFailed] = useState(false);
-  const source = useMemo(() => buildIsolatedEmailDocument(html, title, blockRemoteContent), [html, title, blockRemoteContent]);
+  const [wideContent, setWideContent] = useState(false);
+  const source = useMemo(() => buildIsolatedEmailDocument(html, title, blockRemoteContent, mobile), [html, title, blockRemoteContent, mobile]);
 
   useEffect(() => {
     const frame = frameRef.current;
@@ -48,6 +50,8 @@ function EmailBodyFrame({ html, plainText, title, blockRemoteContent }: Isolated
             // tall mail to shrink again when images/column width change.
             const height = clampEmailBodyHeight(root.getBoundingClientRect().height);
             if (Number(frame.getAttribute('height')) !== height) frame.setAttribute('height', String(height));
+            if (mobile) setWideContent(root.scrollWidth > root.clientWidth + 1
+              || Array.from(root.querySelectorAll('pre')).some((element) => element.scrollWidth > element.clientWidth + 1));
           });
         };
         const resize = new ResizeObserver(measure);
@@ -82,10 +86,11 @@ function EmailBodyFrame({ html, plainText, title, blockRemoteContent }: Isolated
       frame.removeEventListener('load', initialize);
       detachDocument?.();
     };
-  }, [source, failed]);
+  }, [source, failed, mobile]);
 
   return (
-    <div className="min-w-0 max-w-full overflow-hidden rounded-lg border border-border/55 bg-white p-4 shadow-sm [contain:inline-size_paint]">
+    <div className="mobile-isolated-email min-w-0 max-w-full overflow-hidden rounded-lg border border-border/55 bg-white p-4 shadow-sm [contain:inline-size_paint]">
+      {mobile && wideContent && !failed && <p className="mb-2 text-xs text-muted-foreground">宽表格或原始格式可在正文内左右滑动查看。</p>}
       {failed ? (
         <div className="flex flex-col gap-2">
           <Alert><AlertDescription>邮件排版无法安全显示，已改为纯文本原文。</AlertDescription></Alert>

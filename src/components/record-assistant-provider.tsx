@@ -14,6 +14,7 @@ import {
   type ReactNode,
 } from 'react';
 import { usePathname } from 'next/navigation';
+import { useMobileLayout } from '@/lib/use-mobile-layout';
 import {
   AlertCircle,
   Bot,
@@ -526,6 +527,7 @@ export function useRecordAssistant() {
 }
 
 export function RecordAssistantProvider({ children }: { children: ReactNode }) {
+  const mobile = useMobileLayout();
   const pathname = usePathname();
   const { settings, updateSettings } = useSettings();
   const { products } = useProducts();
@@ -972,7 +974,7 @@ export function RecordAssistantProvider({ children }: { children: ReactNode }) {
   const contextValue = useMemo(() => ({ captureEvent, appendLog }), [appendLog, captureEvent]);
   const pendingCount = pending.length;
   const shouldRenderAssistant = pathname !== '/login' && pathname !== '/change-password';
-  const floatingHiddenSide = !open && !floatingHovered && !floatingDragging
+  const floatingHiddenSide = !mobile && !open && !floatingHovered && !floatingDragging
     ? getFloatingHiddenSide(floatingPosition)
     : null;
   const floatingTransform = hiddenSideTransform(floatingHiddenSide);
@@ -980,16 +982,18 @@ export function RecordAssistantProvider({ children }: { children: ReactNode }) {
   const handleFloatingPointerDown = (event: PointerEvent<HTMLButtonElement>) => {
     if (!floatingReady) return;
     const target = event.currentTarget;
+    const bounds = target.getBoundingClientRect();
+    const origin = mobile ? { x: bounds.left, y: bounds.top } : floatingPosition;
     target.setPointerCapture(event.pointerId);
     floatingDragRef.current = {
       pointerId: event.pointerId,
-      offsetX: event.clientX - floatingPosition.x,
-      offsetY: event.clientY - floatingPosition.y,
+      offsetX: event.clientX - origin.x,
+      offsetY: event.clientY - origin.y,
       moved: false,
       startX: event.clientX,
       startY: event.clientY,
-      currentX: floatingPosition.x,
-      currentY: floatingPosition.y,
+      currentX: origin.x,
+      currentY: origin.y,
     };
     setFloatingDragging(true);
   };
@@ -1053,10 +1057,12 @@ export function RecordAssistantProvider({ children }: { children: ReactNode }) {
               type="button"
               aria-label="打开 AI 助手"
               title={floatingDragging ? '拖动 AI 助手' : 'AI 助手'}
-              className="fixed z-[90] grid h-14 w-14 touch-none place-items-center overflow-hidden rounded-full p-0 text-[0px] shadow-apple-hover transition-[transform,box-shadow,opacity] duration-200 hover:shadow-2xl active:cursor-grabbing [&_svg]:m-0"
+              className="mobile-assistant-ball fixed z-[90] grid h-14 w-14 touch-none place-items-center overflow-hidden rounded-full p-0 text-[0px] shadow-apple-hover transition-[transform,box-shadow,opacity] duration-200 hover:shadow-2xl active:cursor-grabbing [&_svg]:m-0"
               style={{
                 left: floatingReady ? floatingPosition.x : undefined,
-                top: floatingReady ? floatingPosition.y : undefined,
+                top: floatingReady ? mobile
+                  ? `clamp(calc(var(--mobile-visible-top, 0px) + 76px), ${floatingPosition.y}px, calc(var(--mobile-visible-top, 0px) + var(--mobile-visible-height, 100dvh) - 68px))`
+                  : floatingPosition.y : undefined,
                 right: floatingReady ? undefined : 20,
                 bottom: floatingReady ? undefined : 96,
                 transform: floatingTransform,
@@ -1083,7 +1089,7 @@ export function RecordAssistantProvider({ children }: { children: ReactNode }) {
           )}
 
           {open && (
-            <section className="glass-panel-strong fixed bottom-24 right-5 z-[90] flex h-[min(720px,calc(100vh-7rem))] w-[min(520px,calc(100vw-2rem))] flex-col overflow-hidden rounded-lg">
+            <section className="mobile-assistant-panel glass-panel-strong fixed bottom-24 right-5 z-[90] flex h-[min(720px,calc(100vh-7rem))] w-[min(520px,calc(100vw-2rem))] flex-col overflow-hidden rounded-lg" aria-label="AI 助手">
               <header className="flex shrink-0 items-start justify-between border-b border-white/55 bg-white/65 px-4 py-3 backdrop-blur-xl">
                 <div>
                   <div className="flex items-center gap-2">
@@ -1093,7 +1099,7 @@ export function RecordAssistantProvider({ children }: { children: ReactNode }) {
                   </div>
                   <p className="mt-1 text-xs text-muted-foreground">先读取和预览，写入飞书前必须由你确认。</p>
                 </div>
-                <Button variant="ghost" size="icon" className="h-9 w-9 rounded-lg hover:bg-white/70" onClick={() => setOpen(false)}>
+                <Button variant="ghost" size="icon" className="h-9 w-9 rounded-lg hover:bg-white/70" aria-label="关闭 AI 助手" onClick={() => setOpen(false)}>
                   <X className="h-4 w-4" />
                 </Button>
               </header>
@@ -1375,7 +1381,7 @@ export function RecordAssistantProvider({ children }: { children: ReactNode }) {
                             <SelectTrigger className="w-full rounded-lg bg-white/75">
                               <SelectValue />
                             </SelectTrigger>
-                            <SelectContent>
+                            <SelectContent className="mobile-assistant-select-content">
                               {RECORD_ASSISTANT_EVENT_OPTIONS.map((option) => (
                                 <SelectItem key={option.value} value={option.value}>
                                   {option.label}
