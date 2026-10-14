@@ -9,6 +9,15 @@ export const APP_RELEASE_LAST_SEEN_STORAGE_KEY = 'influencer-board-last-seen-rel
 
 export const APP_RELEASES: readonly AppRelease[] = [
   {
+    version: '1.4.2',
+    releasedAt: '2026-10-14',
+    title: '邮件生成进度更直观',
+    highlights: [
+      '电脑端可直接查看邮件生成阶段和进度，无需展开任务列表。',
+      '手机端新增简洁进度条，保持顶部布局紧凑。',
+    ],
+  },
+  {
     version: '1.4.1',
     releasedAt: '2026-10-14',
     title: '重磅更新：手机网页版上线',
