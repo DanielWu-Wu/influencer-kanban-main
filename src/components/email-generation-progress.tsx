@@ -9,7 +9,7 @@ import {
   RotateCcw,
   X,
 } from 'lucide-react';
-import { useState, type KeyboardEvent } from 'react';
+import { useEffect, useState, type KeyboardEvent } from 'react';
 import { Avatar, AvatarFallback, AvatarImage } from '@/components/ui/avatar';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
@@ -176,6 +176,7 @@ function TaskRow({
 
 export function EmailGenerationProgress() {
   const [open, setOpen] = useState(false);
+  const [hiddenCompletedId, setHiddenCompletedId] = useState('');
   const { tasks, concurrency, setConcurrency } = useEmailGenerationTasks();
   const visibleTasks = tasks
     .filter((task) => task.status !== 'cancelled')
@@ -189,14 +190,33 @@ export function EmailGenerationProgress() {
   const recentTasks = visibleTasks.filter((task) => (
     task.status === 'completed' || task.status === 'failed' || task.status === 'interrupted'
   ));
+  // The small indicator describes one current task; the badge still counts all
+  // active tasks. Reuse the existing stage estimates, never invent time progress.
+  const summaryTask = activeTasks.find((task) => task.status === 'running')
+    || activeTasks[0] || recentTasks[0];
+  useEffect(() => {
+    if (summaryTask?.status !== 'completed') return;
+    const delay = Math.max(0, (summaryTask.completedAt || summaryTask.createdAt) + 4000 - Date.now());
+    const timer = setTimeout(() => setHiddenCompletedId(summaryTask.id), delay);
+    return () => clearTimeout(timer);
+  }, [summaryTask?.id, summaryTask?.status, summaryTask?.completedAt, summaryTask?.createdAt]);
+  const showSummary = summaryTask && !(summaryTask.status === 'completed' && hiddenCompletedId === summaryTask.id);
+  const summaryProgress = summaryTask ? resolveEmailGenerationTaskProgress(summaryTask) : 0;
+  const summaryStage = summaryTask?.status === 'failed' ? '生成失败，点击查看'
+    : summaryTask?.status === 'interrupted' ? '已中断，点击重试'
+      : summaryTask?.status === 'queued' ? '等待开始'
+        : summaryTask?.status === 'completed' ? '生成完成'
+          : summaryTask?.stage || '正在生成邮件';
+  const summaryLabel = summaryTask?.status === 'completed' ? '100%'
+    : summaryTask?.status === 'queued' ? '排队中' : `约${summaryProgress}%`;
 
   return (
     <Popover open={open} onOpenChange={setOpen}>
       <PopoverTrigger asChild>
         <button
           type="button"
-          className="light-control glass-control relative flex h-9 cursor-pointer items-center gap-2 rounded-lg px-2.5 text-sm font-medium text-foreground motion-reduce:transition-none motion-reduce:active:scale-100"
-          aria-label={`邮件生成进度，${activeCount} 个进行中`}
+          className="mail-generation-trigger light-control glass-control relative flex h-9 cursor-pointer items-center gap-2 rounded-lg px-2.5 text-sm font-medium text-foreground motion-reduce:transition-none motion-reduce:active:scale-100"
+          aria-label={`邮件生成进度，${activeCount} 个进行中${showSummary ? `，当前任务：${summaryStage}，${summaryLabel}` : ''}`}
         >
           <Bot className="h-4 w-4 text-primary" />
           <span className="hidden xl:inline">邮件生成进度</span>
@@ -205,6 +225,10 @@ export function EmailGenerationProgress() {
               {activeCount}
             </Badge>
           ) : null}
+          {showSummary && <span className="mail-generation-inline pointer-events-none" data-status={summaryTask.status} title={`当前任务：${summaryStage} · ${summaryLabel}`} aria-hidden="true">
+            <span className="mail-generation-caption"><span className="min-w-0 truncate">{summaryStage}</span><span className="shrink-0 tabular-nums">{summaryLabel}</span></span>
+            <span className="mail-generation-track"><span className="mail-generation-fill" style={{ width: `${summaryProgress}%` }} /></span>
+          </span>}
         </button>
       </PopoverTrigger>
       <PopoverContent
