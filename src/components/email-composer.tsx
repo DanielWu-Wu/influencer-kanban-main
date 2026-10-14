@@ -2321,7 +2321,7 @@ export function EmailComposer({
               <div className="grid grid-cols-2 gap-2 @xl/email-composer:grid-cols-4">
                 <Button
                   variant="outline"
-                  className="h-10 w-full min-w-0 whitespace-normal px-2 text-xs leading-tight"
+                  className="h-10 w-full min-w-0 whitespace-normal px-2 text-sm leading-tight"
                   disabled={aiLoading || optimizationLoading || translatingEditedReply || translationEditing || sending || savingDraft}
                   onClick={() => {
                     optimizationRunRef.current += 1;
@@ -2340,7 +2340,7 @@ export function EmailComposer({
                 </Button>
                 <Button
                   variant="outline"
-                  className="h-10 w-full min-w-0 whitespace-normal px-2 text-xs leading-tight"
+                  className="h-10 w-full min-w-0 whitespace-normal px-2 text-sm leading-tight"
                   onClick={generateReply}
                   disabled={!userIdeas.trim() || aiLoading || optimizationLoading || Boolean(optimizedSuggestion) || translatingEditedReply || translationEditing || sending || savingDraft}
                 >
@@ -2349,14 +2349,14 @@ export function EmailComposer({
                 </Button>
                 <Button
                   variant="outline"
-                  className="h-10 w-full min-w-0 whitespace-normal px-2 text-xs leading-tight"
+                  className="h-10 w-full min-w-0 whitespace-normal px-2 text-sm leading-tight"
                   onClick={requestSend}
                   disabled={Boolean(sendBlockReason)}
                 >
                   {sending || smtpChecking ? <Loader2 className="animate-spin" data-icon="inline-start" /> : <Send data-icon="inline-start" />}
                   {smtpChecking ? '正在验证发信能力' : '直接发送'}
                 </Button>
-                <Button className="h-10 w-full min-w-0 whitespace-normal px-2 text-xs leading-tight" onClick={saveToGmailDrafts} disabled={Boolean(exportBlockReason)}>
+                <Button className="h-10 w-full min-w-0 whitespace-normal px-2 text-sm leading-tight" onClick={saveToGmailDrafts} disabled={Boolean(exportBlockReason)}>
                   {savingDraft ? <Loader2 className="animate-spin" data-icon="inline-start" /> : <Save data-icon="inline-start" />}
                   保存{providerLabel}草稿
                 </Button>

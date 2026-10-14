@@ -544,7 +544,7 @@ export default function DashboardPage() {
       )}
       <header className="app-topbar sticky top-0 z-50">
         <div className="flex h-15 items-center justify-between px-4 md:px-5">
-          <div className="flex items-center gap-3">
+          <div className="app-topbar-brand flex items-center gap-3">
             <Button variant="ghost" size="icon" className="md:hidden" aria-label="打开手机菜单" onClick={() => setMobileMenuOpen(true)}>
               <Menu className="w-5 h-5" />
             </Button>
@@ -555,7 +555,7 @@ export default function DashboardPage() {
               </div>
               <div className="hidden sm:block">
                 <span className="text-base font-semibold leading-none">{label.appShort}</span>
-                <p className="section-kicker mt-0.5">Influencer Ops</p>
+                <p className="section-kicker mt-0.5">KOL Workflow</p>
               </div>
             </div>
           </div>

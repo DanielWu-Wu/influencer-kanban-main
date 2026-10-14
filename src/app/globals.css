@@ -890,7 +890,8 @@
 .mail-generation-trigger:has(.mail-generation-inline[data-status="interrupted"]) > svg { color: var(--destructive); }
 .mail-generation-inline[data-status="queued"] .mail-generation-track { background: #fef3c7; }
 @media (min-width: 1280px) {
-  .app-topbar > div { padding-bottom: 16px; }
+  .app-topbar > div { padding-bottom: 16px; padding-left: 12px; }
+  .app-topbar-brand { align-self: flex-start; margin-top: 12px; }
   .mail-generation-trigger { width: 163px; justify-content: center; }
   .mail-generation-inline { left: -1px; right: -1px; top: calc(100% + 2px); bottom: auto; }
   .mail-generation-caption { display: flex; justify-content: space-between; gap: 6px; height: 12px; margin-bottom: 2px; font-size: 11px; line-height: 12px; color: var(--muted-foreground); }
